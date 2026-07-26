@@ -29,6 +29,13 @@ home, not the operating-system home.
 ├── .config.yaml.lock
 ├── config.yaml
 ├── ui.json
+├── logs/
+│   ├── .application.jsonl.lock
+│   ├── application.jsonl
+│   ├── application.jsonl.1
+│   ├── application.jsonl.2
+│   ├── application.jsonl.3
+│   └── application.jsonl.4
 ├── skills/
 ├── memory/
 │   ├── .USER.md.lock
@@ -52,6 +59,24 @@ home, not the operating-system home.
 
 Directories and files are created lazily. Their absence is often the normal
 default, not corruption.
+
+## Application invocation logs
+
+`<HOME>/logs/application.jsonl` is the current process/session-owned structured
+diagnostic log. It is outside `WorkspaceRuntime`, Application database state,
+and Thread history. Awesome retains at most the current file plus
+`application.jsonl.1` through `.4`; each file is capped at 5 MiB.
+`<HOME>/logs/.application.jsonl.lock` coordinates writers and is not one of
+those five data files.
+
+Every JSON line uses the same closed schema: `version`, `timestamp`,
+`session_id`, `correlation_id`, `operation`, `outcome`, `duration_ms`, and
+optional `error_code` and bounded `usage`. Prompts, model or Tool bodies,
+queries, URLs, paths, secrets, and arbitrary request/result payloads are never
+logged. Writing is nonblocking and fail-open, so missing records can indicate a
+full queue or local logging failure and do not change the Application result.
+An invocation outcome describes the facade request only; it is not the later
+terminal outcome of asynchronously admitted Agent work.
 
 ## User-owned files
 

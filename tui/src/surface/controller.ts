@@ -114,6 +114,29 @@ export async function connectSurface(
     });
   };
 
+  const ownReconciliation = (reconciliation: Promise<void>): void => {
+    const task = reconciliation.catch(async (error: unknown) => {
+      if (closed && error instanceof RpcClosedError) return;
+      const fault =
+        error instanceof Error
+          ? error
+          : new ProtocolDesynchronized(
+              "Unknown terminal reconciliation failure",
+            );
+      store.dispatch({
+        type: "protocol.fatal",
+        code: "terminal_reconciliation_failed",
+        message: fault.message,
+      });
+      await session.rpc.close(fault);
+    });
+    reconciliationTasks.add(task);
+    void task.then(
+      () => reconciliationTasks.delete(task),
+      () => reconciliationTasks.delete(task),
+    );
+  };
+
   const eventConsumer = (async () => {
     for await (const event of session.rpc.events()) {
       const fault = batcher.accept(event);
@@ -139,14 +162,15 @@ export async function connectSurface(
           const generation =
             operationGenerations.get(event.operation_id) ??
             store.getState().thread_generation;
-          const task = reconcileTerminal(
-            threadId,
-            `operation:${event.operation_id}`,
-            generation,
-            event.operation_id,
-            turnId,
-          ).finally(() => reconciliationTasks.delete(task));
-          reconciliationTasks.add(task);
+          ownReconciliation(
+            reconcileTerminal(
+              threadId,
+              `operation:${event.operation_id}`,
+              generation,
+              event.operation_id,
+              turnId,
+            ),
+          );
         }
       }
     }
@@ -172,7 +196,6 @@ export async function connectSurface(
     if (closePromise) return closePromise;
     closed = true;
     closePromise = (async () => {
-      batcher.close();
       try {
         await session.requestShutdown();
       } catch {

@@ -13,6 +13,7 @@ from awesome_agent.config.resource_lock import (
     ResourceLockUnavailable,
     exclusive_resource_lock,
 )
+from awesome_agent.core.filesystem import open_directory
 
 
 @pytest.mark.parametrize(
@@ -115,3 +116,57 @@ def test_resource_lock_rejects_hardlink_without_touching_external_file(
 
     assert external.read_bytes() == b""
     assert lock_path.stat().st_nlink == 2
+
+
+def test_pinned_resource_lock_cannot_be_redirected_by_directory_replacement(
+    tmp_path: Path,
+) -> None:
+    directory_path = tmp_path / "logs"
+    directory_path.mkdir()
+    detached = tmp_path / "detached-logs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    directory = open_directory(directory_path)
+    replaced = False
+    try:
+        try:
+            directory_path.rename(detached)
+        except OSError:
+            assert os.name == "nt"
+        else:
+            directory_path.symlink_to(outside, target_is_directory=True)
+            replaced = True
+        with exclusive_resource_lock(
+            directory_path / "application.jsonl",
+            directory=directory,
+        ):
+            pass
+    finally:
+        directory.close()
+
+    lock_parent = detached if replaced else directory_path
+    assert (lock_parent / ".application.jsonl.lock").is_file()
+    assert not (outside / ".application.jsonl.lock").exists()
+
+
+@pytest.mark.parametrize("outer_pinned", [False, True])
+def test_resource_lock_rejects_mixed_nested_lock_forms(
+    tmp_path: Path,
+    outer_pinned: bool,
+) -> None:
+    resource = tmp_path / "application.jsonl"
+    directory = open_directory(tmp_path)
+    try:
+        outer_directory = directory if outer_pinned else None
+        inner_directory = None if outer_pinned else directory
+        with (
+            exclusive_resource_lock(resource, directory=outer_directory),
+            pytest.raises(ResourceLockUnavailable, match="cannot be nested"),
+            exclusive_resource_lock(resource, directory=inner_directory),
+        ):
+            pass
+
+        with exclusive_resource_lock(resource, directory=directory):
+            pass
+    finally:
+        directory.close()

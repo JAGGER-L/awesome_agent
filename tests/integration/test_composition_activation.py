@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import os
 import sqlite3
 import threading
@@ -26,6 +27,7 @@ from awesome_agent.application.contracts import (
 )
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import LocalApplication
+from awesome_agent.application.middleware import ApplicationObservation
 from awesome_agent.application.provider_configuration import (
     ProviderConfigurationPublication,
     ProviderConfigurationRecoveryRequired,
@@ -99,6 +101,179 @@ async def _trusted_application(
     )
     backend = cast(composition._LocalApplicationBackend, application._backend)
     return application, backend
+
+
+@pytest.mark.asyncio
+async def test_composed_application_flushes_strict_session_diagnostics(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+
+    initialized = await application.initialize()
+    state = await application.get_state()
+    stopped = await application.shutdown()
+
+    assert initialized.ok is True
+    assert state.ok is True
+    assert state.value is not None
+    assert stopped.ok is True
+    active = backend._paths.logs_dir / "application.jsonl"
+    raw = active.read_text(encoding="utf-8")
+    records = [json.loads(line) for line in raw.splitlines()]
+    assert [record["operation"] for record in records] == [
+        "initialize",
+        "application.getState",
+        "shutdown",
+    ]
+    assert {record["session_id"] for record in records} == {state.value.session_id}
+    assert str(tmp_path) not in raw
+    assert all("error_code" not in record for record in records)
+
+
+@pytest.mark.asyncio
+async def test_runtime_replacement_does_not_close_session_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writers: list[Any] = []
+
+    class TrackingDiagnosticWriter:
+        def __init__(self, _logs_dir: Path) -> None:
+            self.observations: list[ApplicationObservation] = []
+            self.close_calls = 0
+            writers.append(self)
+
+        def try_emit(self, observation: ApplicationObservation) -> None:
+            self.observations.append(observation)
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    monkeypatch.setattr(
+        composition, "ApplicationDiagnosticWriter", TrackingDiagnosticWriter
+    )
+    application, backend = await _trusted_application(tmp_path)
+
+    assert (await application.initialize()).ok is True
+    writer = writers[0]
+    await backend._activate()
+
+    assert writer.close_calls == 0
+    assert (await application.shutdown()).ok is True
+    assert writer.close_calls == 1
+    assert [item.operation.value for item in writer.observations] == [
+        "initialize",
+        "shutdown",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_writer_start_failure_does_not_block_composition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DiagnosticStartFailure(BaseException):
+        pass
+
+    def fail_writer(_logs_dir: Path) -> object:
+        raise DiagnosticStartFailure
+
+    monkeypatch.setattr(composition, "ApplicationDiagnosticWriter", fail_writer)
+    application, _backend = await _trusted_application(tmp_path)
+
+    assert (await application.initialize()).ok is True
+    assert (await application.shutdown()).ok is True
+
+
+@pytest.mark.asyncio
+async def test_composition_failure_closes_the_diagnostic_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    close_calls = 0
+
+    class TrackingDiagnosticWriter:
+        def __init__(self, _logs_dir: Path) -> None:
+            pass
+
+        def try_emit(self, _observation: ApplicationObservation) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            nonlocal close_calls
+            close_calls += 1
+
+    def fail_backend(**_arguments: object) -> object:
+        raise RuntimeError("backend construction failed")
+
+    monkeypatch.setattr(
+        composition, "ApplicationDiagnosticWriter", TrackingDiagnosticWriter
+    )
+    monkeypatch.setattr(composition, "_LocalApplicationBackend", fail_backend)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeError, match="backend construction failed"):
+        await composition.compose_local_application(
+            home=tmp_path / "home",
+            workspace=workspace,
+            event_sink=CollectingEventSink(),
+            environ={},
+        )
+
+    assert close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_facade_construction_failure_closes_stack_and_diagnostic_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resource_close_calls = 0
+    diagnostic_close_calls = 0
+
+    class TrackingDiagnosticWriter:
+        def __init__(self, _logs_dir: Path) -> None:
+            pass
+
+        def try_emit(self, _observation: ApplicationObservation) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            nonlocal diagnostic_close_calls
+            diagnostic_close_calls += 1
+
+    def build_backend(**arguments: object) -> object:
+        resources = cast(Any, arguments["resources"])
+
+        async def close_resource() -> None:
+            nonlocal resource_close_calls
+            resource_close_calls += 1
+
+        resources.push_async_callback(close_resource)
+        return object()
+
+    def fail_facade(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("facade construction failed")
+
+    monkeypatch.setattr(
+        composition, "ApplicationDiagnosticWriter", TrackingDiagnosticWriter
+    )
+    monkeypatch.setattr(composition, "_LocalApplicationBackend", build_backend)
+    monkeypatch.setattr(composition, "LocalApplication", fail_facade)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(RuntimeError, match="facade construction failed"):
+        await composition.compose_local_application(
+            home=tmp_path / "home",
+            workspace=workspace,
+            event_sink=CollectingEventSink(),
+            environ={},
+        )
+
+    assert resource_close_calls == 1
+    assert diagnostic_close_calls == 1
 
 
 @pytest.mark.asyncio

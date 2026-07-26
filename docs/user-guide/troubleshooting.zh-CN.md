@@ -13,6 +13,7 @@ TUI 可用时，收集：
 ```
 
 同时记录 `awesome --version`、主机/架构、Workspace 路径、失败的精确命令或 interaction，以及界面显示的诊断码。Tool 失败时用 Ctrl+O 展开有界细节。分享前请脱敏项目私有路径和输出；绝不要包含 API Key 或 secret 值。
+Core 启动后，可以按大致 `timestamp` 与 `operation` 在 `<AWESOME_HOME>/logs/application.jsonl` 中定位有界本地记录；分享该记录时，请同时提供这一行的 `correlation_id`。
 
 使用这条决策路径：
 
@@ -206,6 +207,19 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 确认配置的命令、参数、allowlist 中的环境变量名、可执行文件可用性和 server schema。`/mcp restart <id>` 会先删除旧 namespace，再重新连接。`connected` 表示存活 client、完整编译的 catalog 和完整 Registry namespace 均已发布。如果发布报告 `error`，请检查 server catalog 是否包含无效 schema，或最终 `mcp.<server>.<tool>` 名称是否超过 128 个字符。如果有效共享 Registry 将超过 128 个工具或 1 MiB，也需要减少启用的工具集或 schema 定义；被拒绝的候选项不会留下过期 namespace，也不会影响其他服务器的 namespace。
 
 MCP 超时或连接丢失后，server 可能已经执行。Awesome 会使 catalog 失效并报告不可重试的不确定结果，而不会在同一 Turn 中重连和重放。
+
+## Application invocation diagnostics
+
+Awesome 把本地结构化 invocation record 写入 `<AWESOME_HOME>/logs/application.jsonl`，较旧
+的轮转文件为 `.1` 至 `.4`。每个文件上限为 5 MiB。可以按大致 timestamp 与 `operation`
+定位相关行，再用该行的 `correlation_id` 标识所报告的诊断；同时检查 `outcome`、duration 与
+可选稳定 `error_code`。不要期待其中出现 request argument、prompt 文本、模型或 Tool 正文、
+query、URL、path 或 secret。
+
+日志写入有意保持非阻塞、fail-open。缺少某一行可能表示有界 queue 已满或本地文件 I/O
+失败，并不表示 Application invocation 失败。反过来，一条成功的 invocation record 可能只
+表示 Agent 工作已被接受。请用终端 Turn event 和 Conversation state 判断之后的异步 Turn
+终态。
 
 ## 报告可复现问题
 

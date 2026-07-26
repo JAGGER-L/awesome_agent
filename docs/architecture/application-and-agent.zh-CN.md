@@ -85,6 +85,24 @@ checkpoint saver、一个进程级 `ApplicationSQLite` worker 和 state lease �
 生命周期 Application `AsyncExitStack` 持有。Database worker 会串行执行面向 Application
 的 repository 调用，而不会占用 event-loop thread。
 
+### Application invocation diagnostics
+
+诊断 sink 属于进程/会话级 Application 生命周期，而不属于 `WorkspaceRuntime`。因此，
+runtime 发布不会让一次 invocation 跨越两个日志 owner，替换 workspace runtime 也不会关闭
+writer。Writer 使用有界 queue，并在 caller 之外执行文件 I/O。Queue 已满或日志写入失败时
+会 fail open：它可能丢失一条诊断记录，但不能延迟、使 Application invocation 失败或改变
+其结果。
+
+`ObservationalMiddleware` 为每个已完成的 facade invocation 记录一个经过 allowlist 的 JSON
+object。字段包括 `version`、`timestamp`、`session_id`、`correlation_id`、`operation`、
+`outcome` 和 `duration_ms`，以及可选的 `error_code` 与有界 `usage`。它不会序列化任意
+argument、result、exception 或 event；尤其不会让 prompt、模型与 Tool 正文、query、URL、
+path、secret 或任意 payload 进入该日志。
+
+Invocation outcome 只描述 middleware 观测到的 facade 调用。有些调用会准入异步 Agent
+工作，并在 Turn 到达终态之前返回。因此，成功的 invocation 不是 Agent Turn 成功记录；
+Turn lifecycle event 与持久 Conversation state 才是该终态的权威来源。
+
 ## 前台串行化
 
 `ForegroundArbiter` 有三类 lease：Operation、exclusive 和 resolving
@@ -249,6 +267,8 @@ Storage、Protocol、providers 或 TUI。Application 是 Python 顶层组装层�
 ## 源代码与测试索引
 
 - Facade 与组装：`application/facade.py`、`application/composition.py`
+- Invocation diagnostics：`application/middleware.py`、
+  `application/diagnostics.py`
 - 准入：`application/foreground.py`、`application/operations.py`
 - Turn 与恢复：`application/turns.py`
 - 图与状态：`agent/graph.py`、`agent/state.py`、`agent/nodes.py`

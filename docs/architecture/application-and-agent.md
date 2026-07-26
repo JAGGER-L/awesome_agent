@@ -102,6 +102,28 @@ owned by a separate process-lifetime Application `AsyncExitStack` across
 runtime generations. The database worker serializes Application-facing
 repository calls without occupying the event-loop thread.
 
+### Application invocation diagnostics
+
+The diagnostic sink is owned by the process/session Application lifecycle, not
+by `WorkspaceRuntime`. Runtime publication therefore cannot split an invocation
+across log owners, and replacing a workspace runtime does not close the writer.
+The writer uses a bounded queue and performs file I/O away from the caller. A
+full queue or logging failure is fail-open: it may lose a diagnostic record but
+cannot delay, fail, or change the Application invocation.
+
+`ObservationalMiddleware` records one allowlisted JSON object for a completed
+facade invocation. Its fields are `version`, `timestamp`, `session_id`,
+`correlation_id`, `operation`, `outcome`, and `duration_ms`, with optional
+`error_code` and bounded `usage`. It does not serialize arbitrary arguments,
+results, exceptions, or events. In particular, prompts, model and Tool bodies,
+queries, URLs, paths, secrets, and arbitrary payloads never enter this log.
+
+The invocation outcome describes only the facade call observed by the
+middleware. Some calls admit asynchronous Agent work and return before the
+Turn reaches a terminal state. A successful invocation is therefore not an
+Agent Turn success record; Turn lifecycle events and durable Conversation state
+remain the authorities for that outcome.
+
 ## Foreground serialization
 
 `ForegroundArbiter` has three lease kinds: Operation, exclusive, and resolving
@@ -293,6 +315,8 @@ the single `StateGraph` owner.
 ## Source and test map
 
 - Facade and composition: `application/facade.py`, `application/composition.py`
+- Invocation diagnostics: `application/middleware.py`,
+  `application/diagnostics.py`
 - Admission: `application/foreground.py`, `application/operations.py`
 - Turns and recovery: `application/turns.py`
 - Graph and state: `agent/graph.py`, `agent/state.py`, `agent/nodes.py`

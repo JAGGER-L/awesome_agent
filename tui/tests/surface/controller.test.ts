@@ -135,6 +135,90 @@ describe("connectSurface", () => {
     await connected.close();
   });
 
+  it("owns a pending terminal reconciliation during normal close", async () => {
+    const connected = await connectSurface(
+      await options({
+        AWESOME_FAKE_CORE_TERMINAL: "1",
+        AWESOME_FAKE_CORE_THREAD_READ_DELAY_MS: "1000",
+      }),
+    );
+    await connected.request("operation.cancel", {
+      operation_id: "operation_terminal",
+    });
+    for (
+      let attempt = 0;
+      attempt < 100 &&
+      !new TextDecoder()
+        .decode(connected.session.stderrTail())
+        .includes("thread-read");
+      attempt += 1
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 2));
+    }
+
+    const firstClose = connected.close();
+    const repeatedClose = connected.close();
+    expect(repeatedClose).toBe(firstClose);
+    await firstClose;
+    await connected.session.exit;
+
+    expect(connected.store.getState()).toMatchObject({ connection: "closed" });
+    expect(connected.store.getState().fatal).toBeUndefined();
+    const stderr = new TextDecoder().decode(connected.session.stderrTail());
+    expect(stderr.match(/thread-read/g)).toHaveLength(1);
+  });
+
+  it("surfaces a terminal reconciliation failure while still open", async () => {
+    const connected = await connectSurface(
+      await options({
+        AWESOME_FAKE_CORE_TERMINAL: "1",
+        AWESOME_FAKE_CORE_REJECT_THREAD_READ: "1",
+      }),
+    );
+    await connected.request("operation.cancel", {
+      operation_id: "operation_terminal",
+    });
+    for (
+      let attempt = 0;
+      attempt < 100 &&
+      connected.store.getState().fatal?.code !==
+        "terminal_reconciliation_failed";
+      attempt += 1
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 2));
+    }
+
+    expect(connected.store.getState()).toMatchObject({
+      connection: "fatal",
+      fatal: { code: "terminal_reconciliation_failed" },
+    });
+    await expect(connected.request("shutdown", {})).rejects.toMatchObject({
+      name: "RpcProtocolError",
+    });
+    await connected.close();
+  });
+
+  it("accepts an ordered Event emitted while shutdown is in flight", async () => {
+    const connected = await connectSurface(
+      await options({ AWESOME_FAKE_CORE_EVENT_DURING_SHUTDOWN: "1" }),
+    );
+
+    await connected.close();
+    await connected.session.exit;
+
+    expect(connected.store.getState()).toMatchObject({
+      connection: "closed",
+      warnings: [
+        {
+          code: "shutdown_notice",
+          message: "Shutdown notice.",
+          count: 1,
+        },
+      ],
+    });
+    expect(connected.store.getState().fatal).toBeUndefined();
+  });
+
   it("drops a delayed reconciliation after an atomic thread replacement", async () => {
     const connected = await connectSurface(
       await options({

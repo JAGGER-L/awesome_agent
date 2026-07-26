@@ -184,6 +184,19 @@ Secret 值在配置边界以 secret-aware type 表示，并从受支持的 event
 数据，提示词也可以要求模型泄露有意提供给它的内容。请避免把 secret 放入工作区或作为
 工具参数传递。
 
+### Application 诊断日志边界
+
+Application invocation log 从封闭的字段 allowlist 构造，而不是先序列化任意 request 或
+result 再尝试脱敏。每条 record 只包含 `version`、`timestamp`、`session_id`、
+`correlation_id`、`operation`、`outcome`、`duration_ms`，以及可选的 `error_code` 与有界
+`usage`。Prompt 文本、模型或 Tool 正文、query 文本、URL、文件系统 path、secret、
+exception 文本和任意 payload 在构造时即被排除。
+
+进程/会话级 writer 是非阻塞、fail-open 的。其有界 queue 和 5 个文件、每个 5 MiB 的轮转
+限制资源使用；诊断 sink 不可用或已满也不能改变被观测的 Application 结果。这些 record 是
+运行元数据，不是产品历史，也不能替代 Turn lifecycle 或 audit record。即使 schema 已排除
+受支持的内容字段，分享前仍应把这些文件视为本地数据并进行检查。
+
 ## 依赖方向
 
 包依赖编码了 authority，但实际 import 契约不是单一的垂直 DAG。Storage 实现多个下层
@@ -267,7 +280,8 @@ secret scanning 和 push protection 是仓库设置，并非源代码本身可�
 - 命令 policy/process：`core/tools/command_policy.py`、
   `core/tools/process.py`、`core/process_lifetime.py`
 - 权限/interaction：`core/tools/permissions.py`、`application/interactions.py`
-- 脱敏：`safety/redaction.py`
+- 脱敏与 invocation diagnostics：`safety/redaction.py`、
+  `application/diagnostics.py`、`application/middleware.py`
 - 依赖测试：`tests/structural/test_dependency_architecture.py`、
   `tests/structural/test_product_architecture.py`
 - 安全敏感测试：`tests/unit/core/`、`tests/unit/extensions/`、

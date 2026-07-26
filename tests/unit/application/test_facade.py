@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_type_hints
 
@@ -18,6 +20,7 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
 )
+from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import (
     ApplicationFacade,
     ApplicationResult,
@@ -28,12 +31,20 @@ from awesome_agent.application.facade import (
     InteractionResult,
     LocalApplication,
     OperationAccepted,
+    ProductError,
     ProductErrorCode,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
     WorkspacePresentation,
+)
+from awesome_agent.application.middleware import (
+    ApplicationCall,
+    ApplicationInvocation,
+    ApplicationObservation,
+    ApplicationOperation,
+    ObservationalMiddleware,
 )
 from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.storage import ApplicationSQLiteUnavailable
@@ -233,3 +244,226 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
         is True
     )
     assert _unwrap(await facade.cancel_operation("operation_1")).cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_facade_routes_only_closed_operation_names_through_middleware() -> None:
+    backend = Backend()
+    invocations: list[ApplicationInvocation] = []
+
+    class Recorder:
+        async def __call__(
+            self,
+            invocation: ApplicationInvocation,
+            next_call: ApplicationCall,
+        ) -> object:
+            invocations.append(invocation)
+            return await next_call(invocation)
+
+    facade = LocalApplication(backend, middleware=(Recorder(),))
+    await facade.initialize()
+    await facade.get_state()
+    await facade.list_threads(ThreadListQuery())
+    with pytest.raises(LookupError):
+        await facade.read_thread(ThreadReadQuery(thread_id="thread_private"))
+    await facade.submit_turn(
+        "thread_private",
+        "private prompt https://private.example",
+        "client_private",
+    )
+    await facade.execute_direct("thread_private", "echo private-secret")
+    await facade.execute_command(CommandIntent(name=CommandName.STATUS))
+    await facade.set_provider_credential(
+        ProviderCredentialSetRequest(
+            provider="deepseek",
+            action="add",
+            api_key=SecretStr("private-credential"),
+        )
+    )
+    await facade.respond_interaction("interaction_private", "trust")
+    await facade.cancel_operation("operation_private")
+    await facade.shutdown()
+
+    assert [item.operation for item in invocations] == list(ApplicationOperation)
+    encoded = "".join(item.model_dump_json() for item in invocations)
+    for forbidden in (
+        "thread_private",
+        "private prompt",
+        "private.example",
+        "private-secret",
+        "private-credential",
+        "interaction_private",
+        "operation_private",
+    ):
+        assert forbidden not in encoded
+
+
+@pytest.mark.asyncio
+async def test_facade_observes_mapped_product_error_without_error_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = Backend()
+    private_path = tmp_path / "private" / "application.db"
+    observations: list[ApplicationObservation] = []
+
+    async def fail_state() -> ApplicationState:
+        raise ApplicationSQLiteUnavailable(private_path)
+
+    monkeypatch.setattr(backend, "application_state", fail_state)
+    facade = LocalApplication(
+        backend,
+        middleware=(
+            ObservationalMiddleware(
+                session_id="session_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                correlation_id=lambda: "correlation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                clock=lambda: datetime(2026, 7, 27, tzinfo=UTC),
+                monotonic=iter((1.0, 1.1)).__next__,
+                sink=observations.append,
+            ),
+        ),
+    )
+
+    outcome = await facade.get_state()
+
+    assert outcome.ok is False
+    assert observations[0].outcome == "product_error"
+    assert observations[0].error_code == ProductErrorCode.STATE_UNAVAILABLE
+    assert str(private_path) not in observations[0].model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_observation_precedes_diagnostic_close() -> None:
+    backend = Backend()
+    order: list[str] = []
+
+    def observe(observation: ApplicationObservation) -> None:
+        assert observation.operation is ApplicationOperation.SHUTDOWN
+        order.append("observed")
+
+    async def close_diagnostics() -> None:
+        order.append("diagnostics_closed")
+
+    facade = LocalApplication(
+        backend,
+        middleware=(
+            ObservationalMiddleware(
+                session_id="session_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                correlation_id=lambda: "correlation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                clock=lambda: datetime(2026, 7, 27, tzinfo=UTC),
+                monotonic=iter((1.0, 1.1)).__next__,
+                sink=observe,
+            ),
+        ),
+        diagnostics_close=close_diagnostics,
+    )
+
+    result = await facade.shutdown()
+
+    assert result.ok is True
+    assert order == ["observed", "diagnostics_closed"]
+
+
+@pytest.mark.asyncio
+async def test_internal_diagnostic_close_cancellation_does_not_replace_shutdown() -> (
+    None
+):
+    async def self_cancel_diagnostics() -> None:
+        raise asyncio.CancelledError("diagnostics-only")
+
+    facade = LocalApplication(
+        Backend(),
+        diagnostics_close=self_cancel_diagnostics,
+    )
+
+    result = await facade.shutdown()
+
+    assert result.ok is True
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_wins_when_diagnostic_close_then_fails() -> None:
+    close_started = asyncio.Event()
+    fail_close = asyncio.Event()
+
+    async def close_diagnostics() -> None:
+        close_started.set()
+        await fail_close.wait()
+        raise RuntimeError("diagnostics close failed")
+
+    facade = LocalApplication(Backend(), diagnostics_close=close_diagnostics)
+    shutdown = asyncio.create_task(facade.shutdown())
+    await close_started.wait()
+    shutdown.cancel("cancel-shutdown")
+    fail_close.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await shutdown
+    assert cancelled.value.args == ("cancel-shutdown",)
+
+
+@pytest.mark.asyncio
+async def test_pre_requested_cancellation_wins_over_diagnostic_close_failure() -> None:
+    async def close_diagnostics() -> None:
+        await asyncio.sleep(0)
+        raise RuntimeError("diagnostics close failed")
+
+    def cancel_before_close(observation: ApplicationObservation) -> None:
+        if observation.operation is ApplicationOperation.SHUTDOWN:
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel("pre-requested-shutdown-cancel")
+
+    facade = LocalApplication(
+        Backend(),
+        middleware=(
+            ObservationalMiddleware(
+                session_id="session_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                correlation_id=lambda: "correlation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                monotonic=iter((1.0, 1.1)).__next__,
+                sink=cancel_before_close,
+            ),
+        ),
+        diagnostics_close=close_diagnostics,
+    )
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await facade.shutdown()
+    assert cancelled.value.args == ("pre-requested-shutdown-cancel",)
+
+
+@pytest.mark.asyncio
+async def test_failed_shutdown_keeps_diagnostics_open_for_retry() -> None:
+    class RetryBackend(Backend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def close_application(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise ApplicationFailure(
+                    ProductError(
+                        code=ProductErrorCode.OPERATION_BUSY,
+                        message="Shutdown is temporarily unavailable.",
+                        retryable=True,
+                    )
+                )
+            await super().close_application()
+
+    diagnostics_closes = 0
+
+    async def close_diagnostics() -> None:
+        nonlocal diagnostics_closes
+        diagnostics_closes += 1
+
+    backend = RetryBackend()
+    facade = LocalApplication(backend, diagnostics_close=close_diagnostics)
+
+    first = await facade.shutdown()
+    assert first.ok is False
+    assert diagnostics_closes == 0
+
+    second = await facade.shutdown()
+    assert second.ok is True
+    assert diagnostics_closes == 1

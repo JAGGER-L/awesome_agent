@@ -18,6 +18,9 @@ Also record `awesome --version`, host/architecture, Workspace path, the exact
 command or interaction that failed, and any displayed diagnostic code. For a
 Tool failure, expand its bounded detail with Ctrl+O. Redact project-private
 paths and outputs before sharing them; never include API keys or secret values.
+When Core has started, use the approximate `timestamp` and `operation` to find
+its bounded local record in `<AWESOME_HOME>/logs/application.jsonl`. Include
+that line's `correlation_id` when sharing the record.
 
 Use this decision path:
 
@@ -346,6 +349,22 @@ namespace and does not disturb another server's namespace.
 After an MCP timeout or connection loss, the server may already have acted.
 Awesome invalidates the catalog and reports a non-retryable uncertain outcome
 instead of reconnecting and replaying inside the same Turn.
+
+## Application invocation diagnostics
+
+Awesome writes local structured invocation records to
+`<AWESOME_HOME>/logs/application.jsonl`, with `.1` through `.4` as older rotated
+files. Each file is capped at 5 MiB. Locate a line by its approximate timestamp
+and `operation`, then inspect its `outcome`, duration, and optional stable
+`error_code`. The `correlation_id` identifies that diagnostic line when
+reporting it. Do not expect request arguments, prompt text, model or Tool
+bodies, queries, URLs, paths, or secrets to appear.
+
+Logging is deliberately nonblocking and fail-open. A missing line can mean the
+bounded queue was full or local file I/O failed; it does not mean the
+Application invocation failed. Conversely, a successful invocation record may
+only mean that Agent work was accepted. Use terminal Turn events and
+Conversation state to determine the later asynchronous Turn outcome.
 
 ## Reporting a Reproducible Problem
 

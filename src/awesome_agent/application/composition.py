@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
+from uuid import uuid4
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from pydantic import JsonValue
@@ -51,6 +52,7 @@ from awesome_agent.application.contracts import (
 )
 from awesome_agent.application.conversation_commands import ConversationCommandService
 from awesome_agent.application.diagnostic_commands import DiagnosticCommandService
+from awesome_agent.application.diagnostics import ApplicationDiagnosticWriter
 from awesome_agent.application.direct import DirectCommandService
 from awesome_agent.application.dispatcher import CommandDispatcher
 from awesome_agent.application.errors import ApplicationFailure
@@ -68,6 +70,7 @@ from awesome_agent.application.interactions import (
     tool_approval_choices,
     workspace_trust_choices,
 )
+from awesome_agent.application.middleware import ObservationalMiddleware
 from awesome_agent.application.operations import (
     OperationBusy,
     OperationContinuation,
@@ -290,11 +293,18 @@ async def compose_local_application(
 ) -> LocalApplication:
     paths = AwesomePaths.from_home(home)
     identity = resolve_workspace(workspace)
+    session_id = new_identifier("session")
+    diagnostics: ApplicationDiagnosticWriter | None = None
+    try:
+        diagnostics = ApplicationDiagnosticWriter(paths.logs_dir)
+    except BaseException:
+        diagnostics = None
     stack = AsyncExitStack()
     try:
         backend = _LocalApplicationBackend(
             paths=paths,
             workspace=identity,
+            session_id=session_id,
             event_sink=event_sink,
             resources=stack,
             environ=environ,
@@ -303,10 +313,34 @@ async def compose_local_application(
             mem0_client=mem0_client,
             credential_validator=credential_validator,
         )
+        middleware = (
+            (
+                ObservationalMiddleware(
+                    session_id=session_id,
+                    correlation_id=lambda: f"correlation_{uuid4().hex}",
+                    monotonic=monotonic,
+                    sink=diagnostics.try_emit,
+                ),
+            )
+            if diagnostics is not None
+            else ()
+        )
+        application = LocalApplication(
+            backend,
+            middleware=middleware,
+            diagnostics_close=(
+                diagnostics.aclose if diagnostics is not None else None
+            ),
+        )
     except BaseException:
-        await stack.aclose()
+        try:
+            await stack.aclose()
+        finally:
+            if diagnostics is not None:
+                with suppress(BaseException):
+                    await diagnostics.aclose()
         raise
-    return LocalApplication(backend)
+    return application
 
 
 class _Mem0Session:
@@ -386,6 +420,7 @@ class _LocalApplicationBackend:
         *,
         paths: AwesomePaths,
         workspace: WorkspaceIdentity,
+        session_id: str,
         event_sink: EventSink,
         resources: AsyncExitStack,
         environ: Mapping[str, str] | None,
@@ -404,7 +439,7 @@ class _LocalApplicationBackend:
         self._credential_validator = (
             credential_validator or ProviderCredentialValidator()
         )
-        self._session_id = new_identifier("session")
+        self._session_id = session_id
         self._emitter = EventEmitter(
             session_id=self._session_id,
             workspace_key=workspace.key,

@@ -231,6 +231,23 @@ command can read host data available to the user, and a prompt can ask a model
 to reveal content it was intentionally given. Avoid placing secrets in the
 workspace or passing them as tool arguments.
 
+### Application diagnostic log boundary
+
+Application invocation logs are built from a closed field allowlist, not by
+redacting an arbitrary request or result after serialization. A record contains
+only `version`, `timestamp`, `session_id`, `correlation_id`, `operation`,
+`outcome`, `duration_ms`, and optional `error_code` and bounded `usage`.
+Prompt text, model or Tool bodies, query text, URLs, filesystem paths, secrets,
+exception text, and arbitrary payloads are excluded at construction time.
+
+The process/session-owned writer is nonblocking and fail-open. Its bounded
+queue and five-file, 5 MiB-per-file rotation limit resource use, while an
+unavailable or full diagnostic sink cannot alter the observed Application
+result. These records are operational metadata, not product history and not a
+substitute for Turn lifecycle or audit records. Treat the files as local data
+and inspect them before sharing even though their schema excludes supported
+content-bearing fields.
+
 ## Dependency direction
 
 Package dependencies encode authority, but the actual import contract is not a
@@ -326,7 +343,8 @@ For any new tool, provider, extension, storage format, or process path:
   `core/tools/process.py`, `core/process_lifetime.py`
 - Permissions/interactions: `core/tools/permissions.py`,
   `application/interactions.py`
-- Redaction: `safety/redaction.py`
+- Redaction and invocation diagnostics: `safety/redaction.py`,
+  `application/diagnostics.py`, `application/middleware.py`
 - Dependency tests: `tests/structural/test_dependency_architecture.py`,
   `tests/structural/test_product_architecture.py`
 - Security-sensitive tests: `tests/unit/core/`, `tests/unit/extensions/`,

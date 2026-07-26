@@ -6,8 +6,8 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "5e00ca6fe474bc9893a93225164cd00f4fa4153a0abd08adbe4646445ef40e7f",
-      "chinese_sha256": "7a7df424101789c6bd4eb2e0039258207215fec59bc2c3414d629a39f12c31e6"
+      "english_sha256": "5d25552cd3345359b3974cc2021ee9cd1aa5a5e814ec6a0de6813f0d89cc13dd",
+      "chinese_sha256": "d9d1e1079fea299e1d9f2a072a974221154f58db8b060d7c84a2b8b19ed98f1b"
     },
     {
       "english_source": "README.md",
@@ -30,8 +30,8 @@
     {
       "english_source": "docs/architecture/application-and-agent.md",
       "chinese_source": "docs/architecture/application-and-agent.zh-CN.md",
-      "english_sha256": "e9e97e0e94b61d4355989c99d129798b658b84268735172fa545fe1c4e45d263",
-      "chinese_sha256": "1f1b9ca4e72cc718f4f58f18336ea957317cf728435892d43fe675be62eb614b"
+      "english_sha256": "3ebe287eeb71f7c5ed74e3f3e3e37c7059dbfee98bfbd76839c228afafc8de0f",
+      "chinese_sha256": "fc1a3647f18e169963a7a66b990cbbfabf2d5be55825bcd59724b0797d7ebce6"
     },
     {
       "english_source": "docs/architecture/context-model-and-extensions.md",
@@ -54,8 +54,8 @@
     {
       "english_source": "docs/architecture/security-and-dependencies.md",
       "chinese_source": "docs/architecture/security-and-dependencies.zh-CN.md",
-      "english_sha256": "bd6d8d49082ef222746d4997820b8a3244cd43c71cb5138141dd026bd2f1062d",
-      "chinese_sha256": "5f247825e573e8044406d0d672365455fce6595c79470f3fa25278cf50b63d1f"
+      "english_sha256": "14f5186db8547d50ac291497b678a995a7d44f9391cd55f44cf2331f113ffd4b",
+      "chinese_sha256": "2580884a78d1d327659a0ba86fcda721a007a08bfaa39e2187947653a51cf189"
     },
     {
       "english_source": "docs/architecture/storage-and-recovery.md",
@@ -204,8 +204,8 @@
     {
       "english_source": "docs/reference/files-and-state.md",
       "chinese_source": "docs/reference/files-and-state.zh-CN.md",
-      "english_sha256": "d4adf81d6bfe7ff9381220e7bb4856781c9d84fc41ce58e2344a485bfee0729e",
-      "chinese_sha256": "d0a7e8f7ed24830afd32a2af56f38838374ef6e38a831a51935ef4c1e261e118"
+      "english_sha256": "6ce249c03bd469809c617a5ff14f1fbacb7271d9c003125aa7e6a6892be9a603",
+      "chinese_sha256": "90afe6c3f37c840ac4165a8031669844dbd0d42bb03dfb527052d82b65d67901"
     },
     {
       "english_source": "docs/reference/permission-modes.md",
@@ -264,8 +264,8 @@
     {
       "english_source": "docs/user-guide/troubleshooting.md",
       "chinese_source": "docs/user-guide/troubleshooting.zh-CN.md",
-      "english_sha256": "ff77213e2d3a37963eba9792a9672b96b1df24277a56a17d22219fa4b0cee280",
-      "chinese_sha256": "fc93d4988277020686531a8215e28e0b8f87f57c4b380dc15ed1d6b47cbadad4"
+      "english_sha256": "5cfb893eb8944fe5c9a09d23738beeb515d62b9479b1f5d3c1490c74634e3e29",
+      "chinese_sha256": "c16affe4b2e95828ca159841e834fe335613536db71fbb000c46049c694b6305"
     },
     {
       "english_source": "site/content/index.mdx",

@@ -223,6 +223,17 @@ const handleLine = (line) => {
     const now = "2026-07-11T08:00:00Z";
     const terminal = process.env.AWESOME_FAKE_CORE_TERMINAL === "1";
     if (terminal) process.stderr.write("thread-read\n");
+    if (process.env.AWESOME_FAKE_CORE_REJECT_THREAD_READ === "1") {
+      output({
+        jsonrpc: "2.0",
+        id: request.id,
+        error: {
+          code: -32_001,
+          message: "Synthetic thread.read rejection",
+        },
+      });
+      return;
+    }
     const response = {
       jsonrpc: "2.0",
       id: request.id,
@@ -399,6 +410,26 @@ const handleLine = (line) => {
       }),
     });
   } else if (request.method === "shutdown") {
+    if (process.env.AWESOME_FAKE_CORE_EVENT_DURING_SHUTDOWN === "1") {
+      output({
+        jsonrpc: "2.0",
+        method: "event",
+        params: {
+          version: 1,
+          event_id: "event_shutdown",
+          sequence: 1,
+          session_id: "session_fake",
+          workspace_key: "workspace_fake",
+          event_type: "warning",
+          timestamp: "2026-07-11T08:00:00Z",
+          payload: {
+            kind: "warning",
+            code: "shutdown_notice",
+            message: "Shutdown notice.",
+          },
+        },
+      });
+    }
     output({
       jsonrpc: "2.0",
       id: request.id,

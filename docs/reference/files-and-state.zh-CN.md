@@ -26,6 +26,13 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 ├── .config.yaml.lock
 ├── config.yaml
 ├── ui.json
+├── logs/
+│   ├── .application.jsonl.lock
+│   ├── application.jsonl
+│   ├── application.jsonl.1
+│   ├── application.jsonl.2
+│   ├── application.jsonl.3
+│   └── application.jsonl.4
 ├── skills/
 ├── memory/
 │   ├── .USER.md.lock
@@ -48,6 +55,20 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 ```
 
 目录和文件按需创建。它们不存在通常是正常默认状态，并非损坏。
+
+## Application invocation 日志
+
+`<HOME>/logs/application.jsonl` 是当前的进程/会话级结构化诊断日志。它位于
+`WorkspaceRuntime`、Application database state 和 Thread history 之外。Awesome 最多保留
+当前文件以及 `application.jsonl.1` 至 `.4`；每个文件上限为 5 MiB。
+`<HOME>/logs/.application.jsonl.lock` 用于协调 writer，不属于这 5 个数据文件。
+
+每个 JSON line 使用相同的封闭 schema：`version`、`timestamp`、`session_id`、
+`correlation_id`、`operation`、`outcome`、`duration_ms`，以及可选的 `error_code` 与有界
+`usage`。Prompt、模型或 Tool 正文、query、URL、path、secret 和任意 request/result payload
+绝不会写入日志。写入是非阻塞、fail-open 的，因此记录缺失可能表示 queue 已满或本地日志
+失败，并且不会改变 Application 结果。Invocation outcome 只描述 facade request，不是异步
+准入的 Agent 工作之后到达的终态。
 
 ## 用户拥有的文件
 

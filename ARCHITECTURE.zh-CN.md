@@ -318,6 +318,15 @@ checkpoint saver、进程级 Application SQLite worker、state lease 和其他�
 FIFO worker thread 持有长期 Application database connection；面向 Application 的
 repository 只暴露 async method，SQLite 所有的值不会跨越该边界。
 
+Application invocation diagnostics 同样属于进程/会话，不在 `WorkspaceRuntime` 内。有界、
+非阻塞 writer 将结构化 JSON line 追加到 `<AWESOME_HOME>/logs/application.jsonl`；每个文件
+上限为 5 MiB，并轮转保留 `application.jsonl.1` 至 `.4`。它会 fail open，因此诊断 I/O 不会
+改变 Application 结果。Record 只从显式 allowlist 构造：`version`、`timestamp`、
+`session_id`、`correlation_id`、`operation`、`outcome`、`duration_ms`，以及可选的
+`error_code` 与 `usage`。它绝不包含 prompt、模型或工具正文、query、URL、path、secret 或
+任意 request/result payload。记录的 outcome 只属于被观测的 Application invocation；成功
+启动后台 Agent 工作的请求，并不表示其异步 Turn 后来成功完成。
+
 共享 foreground arbiter 向 Agent Turn、直接命令、改变状态的命令、credential mutation、
 非 Tool interaction resolution 或 shutdown 授予唯一原子 lease。准入发生在 Turn 持久化
 之前。活动 Operation 期间，显式例外是只读 snapshot command；pending interaction 会
@@ -556,6 +565,7 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | 工作区 memory | Memory | `workspaces/<key>/MEMORY.md` | 工作区范围 |
 | 云端事实 | Mem0 Cloud | 外部账户 | 仅启用时 |
 | UI 偏好 | Ink TUI | `ui.json` | 用户控制 |
+| Application invocation diagnostics | Application 进程/会话 | `logs/application.jsonl{,.1,.2,.3,.4}` | 有界本地运行历史 |
 | 工作区文件 | 用户和工具 | workspace | 主要项目状态 |
 
 Token delta、spinner、原始 provider payload、无界 shell output 和 credential 不会作为产品

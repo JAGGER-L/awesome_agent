@@ -37,9 +37,17 @@ class _ReentrantLock(Protocol):
     def release(self) -> None: ...
 
 
+class _PinnedDirectory(Protocol):
+    """The minimal pinned-directory surface needed by resource locks."""
+
+    path: Path
+    descriptor: int
+
+
 class _HeldLocks(threading.local):
     def __init__(self) -> None:
         self.counts: dict[str, int] = {}
+        self.logical_keys: dict[str, str] = {}
 
 
 class _WindowsOverlapped(ctypes.Structure):
@@ -78,13 +86,31 @@ def exclusive_resource_lock(
     resource_path: Path,
     *,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    directory: _PinnedDirectory | None = None,
 ) -> Iterator[None]:
     """Serialize one resource transaction across threads and processes."""
 
     if timeout_seconds <= 0 or not math.isfinite(timeout_seconds):
         raise ValueError("timeout_seconds must be finite and positive")
     lock_path = _lock_path(resource_path)
-    key = os.fspath(lock_path)
+    lock_name: str | None = None
+    if directory is None:
+        key = os.fspath(lock_path)
+    else:
+        if _normalized_path(resource_path.parent) != _normalized_path(directory.path):
+            raise ValueError("The resource must be a child of the pinned directory.")
+        lock_name = lock_path.name
+        pinned_status = os.fstat(directory.descriptor)
+        key = (
+            f"pinned:{int(pinned_status.st_dev)}:{int(pinned_status.st_ino)}:"
+            f"{lock_name}"
+        )
+    logical_key = os.fspath(lock_path)
+    active_key = _HELD_LOCKS.logical_keys.get(logical_key)
+    if active_key is not None and active_key != key:
+        raise ResourceLockUnavailable(
+            "Pinned and path-based forms of one resource lock cannot be nested."
+        )
     deadline = time.monotonic() + timeout_seconds
     thread_lock = _thread_lock(key)
     if not thread_lock.acquire(timeout=_remaining(deadline)):
@@ -102,13 +128,19 @@ def exclusive_resource_lock(
                 held[key] -= 1
             return
 
-        descriptor = _open_lock_file(lock_path)
+        descriptor = _open_lock_file(
+            lock_path,
+            directory=directory,
+            lock_name=lock_name,
+        )
         _acquire_platform_lock(descriptor, deadline)
         held[key] = 1
+        _HELD_LOCKS.logical_keys[logical_key] = key
         try:
             yield
         finally:
             held.pop(key, None)
+            _HELD_LOCKS.logical_keys.pop(logical_key, None)
     finally:
         try:
             if descriptor is not None:
@@ -129,6 +161,10 @@ def _lock_path(resource_path: Path) -> Path:
     return resource.parent / lock_name
 
 
+def _normalized_path(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path.expanduser())))
+
+
 def _thread_lock(key: str) -> _ReentrantLock:
     with _LOCKS_GUARD:
         lock = _THREAD_LOCKS.get(key)
@@ -138,16 +174,37 @@ def _thread_lock(key: str) -> _ReentrantLock:
         return lock
 
 
-def _open_lock_file(lock_path: Path) -> int:
+def _open_lock_file(
+    lock_path: Path,
+    *,
+    directory: _PinnedDirectory | None = None,
+    lock_name: str | None = None,
+) -> int:
     descriptor: int | None = None
     try:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if directory is None:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
         flags = os.O_RDWR | os.O_CREAT
         for flag in ("O_BINARY", "O_CLOEXEC", "O_NOINHERIT", "O_NOFOLLOW"):
             flags |= getattr(os, flag, 0)
-        descriptor = os.open(lock_path, flags, 0o600)
+        if directory is not None and os.name != "nt":
+            if lock_name is None:
+                raise ValueError("A pinned lock requires a child name.")
+            descriptor = os.open(
+                lock_name,
+                flags,
+                0o600,
+                dir_fd=directory.descriptor,
+            )
+            linked = os.stat(
+                lock_name,
+                dir_fd=directory.descriptor,
+                follow_symlinks=False,
+            )
+        else:
+            descriptor = os.open(lock_path, flags, 0o600)
+            linked = os.lstat(lock_path)
         opened = os.fstat(descriptor)
-        linked = os.lstat(lock_path)
         if not _safe_lock_file(linked) or not _same_file(opened, linked):
             raise ResourceLockUnavailable
         if opened.st_size == 0:

@@ -358,6 +358,19 @@ thread owns the long-lived Application database connection; Application-facing
 repositories expose async methods and never pass SQLite-owned values across
 that boundary.
 
+Application invocation diagnostics are also process/session owned and remain
+outside `WorkspaceRuntime`. A bounded, nonblocking writer appends structured
+JSON lines to `<AWESOME_HOME>/logs/application.jsonl`, rotating through
+`application.jsonl.1` to `.4` at 5 MiB per file. It fails open so diagnostic I/O
+cannot change an Application result. Records are constructed from an explicit
+allowlist only: `version`, `timestamp`, `session_id`, `correlation_id`,
+`operation`, `outcome`, `duration_ms`, and optional `error_code` and `usage`.
+They never include prompts, model or tool bodies, queries, URLs, paths, secrets,
+or arbitrary request/result payloads. The recorded outcome belongs to the
+observed Application invocation; a successful request that starts background
+Agent work is not a claim that the asynchronous Turn later completed
+successfully.
+
 A shared foreground arbiter grants one atomic lease to Agent Turns, direct
 commands, state-changing commands, credential mutation, non-Tool interaction
 resolution, or shutdown. Admission happens before Turn persistence. Read-only
@@ -644,6 +657,7 @@ the protocol imports the Application facade rather than individual subsystems.
 | Workspace memory | Memory | `workspaces/<key>/MEMORY.md` | workspace scoped |
 | Cloud facts | Mem0 Cloud | external account | only when enabled |
 | UI preferences | Ink TUI | `ui.json` | user controlled |
+| Application invocation diagnostics | Application process/session | `logs/application.jsonl{,.1,.2,.3,.4}` | bounded local operational history |
 | Workspace files | user and tools | workspace | primary project state |
 
 Token deltas, spinners, raw provider payloads, unbounded shell output, and
