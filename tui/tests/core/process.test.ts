@@ -115,8 +115,12 @@ describe("CoreProcess", () => {
     });
     expect(initialized).toMatchObject({
       ok: true,
-      value: { workspace: { display_path: canonicalCwd, branch: "inherited" } },
+      value: { workspace: { branch: "inherited" } },
     });
+    if (!initialized.ok) throw new Error("Fake Core initialization failed");
+    expect(await realpath(initialized.value.workspace.display_path)).toBe(
+      canonicalCwd,
+    );
     await session.requestShutdown();
     await expect(session.exit).resolves.toMatchObject({
       code: 0,
