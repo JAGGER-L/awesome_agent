@@ -12,6 +12,12 @@ TOOL_NAME_PATTERN = (
 )
 
 
+class ToolArguments(BaseModel):
+    """Closed, strict arguments for Awesome-owned static tools."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+
 class ToolStatus(StrEnum):
     SUCCESS = "success"
     ERROR = "error"

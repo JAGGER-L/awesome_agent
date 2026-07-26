@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-import awesome_agent.context._safe_files as safe_files_module
 import awesome_agent.core.filesystem as core_filesystem_module
+import awesome_agent.core.safe_files as safe_files_module
 from awesome_agent.context import (
     WorkspaceInstructionDiagnostic,
     WorkspaceInstructionDiagnosticCode,

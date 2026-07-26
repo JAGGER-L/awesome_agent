@@ -11,11 +11,10 @@ Awesome 使用两份经过 schema 验证的 YAML 文档、少量进程环境变�
 | Workspace 配置 | `<workspace>/.awesome/config.yaml` | Repository | 仅在 Workspace 获得信任后 | 否 |
 | Thread 状态 | `application.db` | Awesome | 选择 Thread 和每个 Turn 时 | 否 |
 
-两份 YAML 文档都使用 schema 版本 `1`。未知字段、重复 mapping key、无法转换为所声明标量
-类型的值以及超出范围的值，都会使整份文档无效。结构是严格的，但当前启用了 Pydantic
-标量强制转换：例如，加引号的 `"32"` 可能被接受为整数，加引号的 `"false"` 可能被接受为
-布尔值。维护配置时不要依赖这种强制转换；请使用原生 YAML 标量类型。完全严格的标量验证
-是一个已知的运行时加固缺口。
+两份 YAML 文档都使用 schema 版本 `1`。未知字段、重复 mapping key、错误的原生 YAML
+标量类型以及超出范围的值，都会使整份文档无效。验证不会转换加引号的数字或布尔值：
+应使用 `32` 而不是 `"32"`，使用 `false` 而不是 `"false"`。Enum 值仍使用文档规定的字符串，
+list 仍使用 YAML sequence 表示；只有明确允许的字段才能使用 `null`。
 
 ## User 配置
 
@@ -187,15 +186,11 @@ mcp_servers:
 独立取 `min(user value, workspace value)`。这条单调规则是关键设计不变量：来自受信任仓库
 的内容可以降低资源权限，但绝不能扩大本地用户权限。
 
-在用户信任 Workspace 之前，不会打开该文件。信任并不会开启 MCP 声明；每个 Workspace
-服务器仍然需要 `/mcp enable <id>`，修改其声明也会使该审批失效。
-
-> **当前文件系统限制：** Workspace config loader 受信任门控制，但当前只检查
-> `is_file()`，然后按普通方式读取路径。它没有专门的大小上限、no-follow open 或打开后
-> 身份比较。因此，受信任仓库可以让 `.awesome/config.yaml` 穿过 link/reparse 边界，在
-> 检查和读取之间替换它，或提供过大的 YAML 文档。请把 Workspace 信任视为读取该文件的
-> 权限，避免链接配置，并对恶意仓库使用外部沙箱。这个 loader 应单独加固；更强的
-> `AGENTS.md` 和 Workspace Skill 保证不适用于此处。
+在用户信任 Workspace 之前，不会打开该文件。读取上限为 1 MiB，只接受不含 NUL 的严格
+UTF-8 文本；读取器会固定并重新检查 Workspace 与路径身份，并拒绝 link、reparse point、
+hard link 和读取期间的替换。不安全或超限的文件会使 Workspace 配置无效，而不会被跟随或
+截断。信任并不会开启 MCP 声明；每个 Workspace 服务器仍然需要 `/mcp enable <id>`，修改
+其声明也会使该审批失效。
 
 ## 运行时优先级
 
@@ -256,7 +251,7 @@ Provider 时使用 `/doctor`。常见失败包括：
 | 症状 | 原因 | 修正操作 |
 | --- | --- | --- |
 | `duplicate_config_key` | YAML mapping 重复了一个字段。 | 删除重复项；不要依赖 last-key-wins 行为。 |
-| `configuration_invalid` | 未知字段、无效 enum/model/name、错误类型或超范围预算。 | 将文档与上表比较。 |
+| `configuration_invalid` | 未知字段、无效 enum/model/name、非原生标量类型、超范围预算，或不安全/超限的 Workspace 配置。 | 将文档与上表比较，并确保 `.awesome/config.yaml` 是不超过 1 MiB 的普通 UTF-8 文件。 |
 | `provider_not_configured` | 所选 model 明确指定的凭据来源不可用。 | 使用 `/auth`、设置选中的环境变量，或更改 `credentials`。 |
 | `model_not_configured` | 无法无歧义地选择 model。 | 使用 `/model` 或设置 `providers.default_model`。 |
 | Workspace 设置看似被忽略 | Workspace 尚未获得信任，或文件不在 `.awesome/config.yaml`。 | 完成信任交互并重启。 |

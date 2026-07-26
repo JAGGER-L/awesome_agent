@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field, field_validator
 
 from awesome_agent.config.resource_lock import (
     ResourceLockTimeout,
@@ -12,6 +12,7 @@ from awesome_agent.config.resource_lock import (
 from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolExecutionOrigin,
     ToolOutput,
@@ -35,16 +36,22 @@ MEMORY_TOOL_NAMES = (
 _MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS = 23.0
 
 
-class MemoryListArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _MemoryArguments(ToolArguments):
+    scope: MemoryScope = Field(strict=False)
 
-    scope: MemoryScope
+    @field_validator("scope", mode="before")
+    @classmethod
+    def validate_scope_type(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError("memory scope must be a string")
+        return value
 
 
-class MemoryAddArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class MemoryListArguments(_MemoryArguments):
+    pass
 
-    scope: MemoryScope
+
+class MemoryAddArguments(_MemoryArguments):
     content: str = Field(min_length=1, max_length=2_000)
     expected_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -53,10 +60,7 @@ class MemoryReplaceArguments(MemoryAddArguments):
     entry_id: str = Field(pattern=r"^memory_[a-f0-9]{32}$")
 
 
-class MemoryRemoveArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    scope: MemoryScope
+class MemoryRemoveArguments(_MemoryArguments):
     entry_id: str = Field(pattern=r"^memory_[a-f0-9]{32}$")
     expected_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 

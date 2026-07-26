@@ -16,6 +16,7 @@ from awesome_agent.core.filesystem import MutationTargetChanged, lstat_child
 from awesome_agent.core.filesystem import identity as filesystem_identity
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolOutput,
     ToolPresentation,
@@ -33,7 +34,7 @@ from awesome_agent.core.tools.policy import (
 )
 
 
-class DeleteArguments(BaseModel):
+class DeleteArguments(ToolArguments):
     path: str
 
 

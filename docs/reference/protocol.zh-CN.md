@@ -123,17 +123,15 @@ Unicode string 长度。
 | `thread.list` | 可选 1–1,024 的 `cursor`；`limit` 为 1–200，默认 50 | Thread、`has_more`、可选 next cursor |
 | `thread.read` | 1–128 的 `thread_id`；可选 `before_sequence >= 1`；`limit` 为 1–500，默认 100 | Thread view、ChangeSet、反向 pagination marker |
 | `turn.submit` | `thread_id`；1–200,000 的 `content`；匹配 `client_[A-Za-z0-9_-]+` 且最多 128 的 `client_message_id` | Operation、Thread、Turn 和 client-message ID |
-| `direct.execute` | `thread_id`；transport 接受 1–30,000 的 `command`；委托的 `execute` 工具最多接受 8,000 | Operation 和 Thread ID |
+| `direct.execute` | `thread_id`；`command` 为 1–8,000，与委托的 `execute` 工具一致 | Operation 和 Thread ID |
 | `command.execute` | `name`；可选 string array `arguments` | 一个有类型的 `CommandOutcome` |
 | `provider.credential.set` | 见下文 | Provider、status、可选 selected source、diagnostic code |
 | `interaction.respond` | 1–128 的 `interaction_id`；`decision` enum | Accepted flag 和 status |
 | `operation.cancel` | 1–128 的 `operation_id` | Operation ID 以及是否请求了 cancellation |
 | `shutdown` | `{}` | `{ "stopped": true }` |
 
-`direct.execute` 当前会在验证委托的 `execute` 参数之前预留并返回 Operation。因此，8,001–
-30,000 个字符的命令会通过 transport model、收到 `OperationAccepted`，然后在没有启动进程的
-情况下以 `invalid_arguments` 异步结束。30,000/8,000 的分裂边界是已知契约缺口；调用方应
-保持在 8,000 个字符以内。
+`direct.execute` 会在预留 Operation 前执行与委托 `execute` 工具相同的 8,000 字符边界。
+超限命令会作为 invalid params 同步拒绝，且绝不会启动进程。
 
 ### `application.getState`
 

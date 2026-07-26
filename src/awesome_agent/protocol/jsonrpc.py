@@ -107,7 +107,7 @@ class _TurnParams(_ThreadParams):
 
 
 class _DirectParams(_ThreadParams):
-    command: str = Field(min_length=1, max_length=30_000)
+    command: str = Field(min_length=1, max_length=8_000)
 
 
 class _InteractionParams(BaseModel):

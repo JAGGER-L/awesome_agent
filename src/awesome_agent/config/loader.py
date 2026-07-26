@@ -23,7 +23,16 @@ from awesome_agent.config.models import (
     UserConfigDocument,
     WorkspaceConfigDocument,
 )
+from awesome_agent.core.safe_files import (
+    FileChangedError,
+    FileTooLargeError,
+    PinnedPlainDirectory,
+    UnsafePathError,
+    lexical_absolute,
+)
 from awesome_agent.paths import AwesomePaths
+
+WORKSPACE_CONFIG_MAX_BYTES = 1024 * 1024
 
 _SECRET_NAMES = (
     "DEEPSEEK_API_KEY",
@@ -118,8 +127,8 @@ def load_config_sources(
     )
     workspace_document: WorkspaceConfigDocument | None = None
     if workspace_trusted:
-        workspace_document = _read_yaml_document(
-            sources.workspace_config,
+        workspace_document = _read_workspace_yaml_document(
+            workspace,
             WorkspaceConfigDocument,
             source_label="workspace config",
         )
@@ -161,13 +170,70 @@ def _read_yaml_document[DocumentT: BaseModel](
     if not path.is_file():
         return model()
     try:
-        loaded = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise ConfigurationInvalid(
+            "configuration_invalid",
+            f"{source_label} could not be parsed.",
+        ) from error
+    return _parse_yaml_document(text, model, source_label=source_label)
+
+
+def _read_workspace_yaml_document[DocumentT: BaseModel](
+    workspace: Path,
+    model: type[DocumentT],
+    *,
+    source_label: str,
+) -> DocumentT:
+    root = lexical_absolute(workspace)
+    try:
+        with PinnedPlainDirectory(root, root) as pinned:
+            bounded = pinned.read_file(
+                Path(".awesome") / "config.yaml",
+                max_bytes=WORKSPACE_CONFIG_MAX_BYTES,
+            )
+    except FileNotFoundError:
+        return model()
+    except (
+        FileChangedError,
+        FileTooLargeError,
+        NotADirectoryError,
+        OSError,
+        UnsafePathError,
+    ) as error:
+        raise ConfigurationInvalid(
+            "configuration_invalid",
+            f"{source_label} could not be read safely.",
+        ) from error
+    if b"\x00" in bounded.data:
+        raise ConfigurationInvalid(
+            "configuration_invalid",
+            f"{source_label} could not be read safely.",
+        )
+    try:
+        text = bounded.data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise ConfigurationInvalid(
+            "configuration_invalid",
+            f"{source_label} could not be parsed.",
+        ) from error
+    return _parse_yaml_document(text, model, source_label=source_label)
+
+
+def _parse_yaml_document[DocumentT: BaseModel](
+    text: str,
+    model: type[DocumentT],
+    *,
+    source_label: str,
+) -> DocumentT:
+    try:
+        loaded = yaml.load(text, Loader=_UniqueKeyLoader)
     except _DuplicateConfigKey as error:
         raise ConfigurationInvalid(
             "duplicate_config_key",
             f"{source_label} contains a duplicate key: {error}.",
         ) from error
-    except (OSError, UnicodeError, yaml.YAMLError) as error:
+    except yaml.YAMLError as error:
         raise ConfigurationInvalid(
             "configuration_invalid",
             f"{source_label} could not be parsed.",

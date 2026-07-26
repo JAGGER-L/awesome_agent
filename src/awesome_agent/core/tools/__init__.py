@@ -2,6 +2,7 @@ from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
     ToolActivityDraft,
     ToolActivityWriter,
+    ToolArguments,
     ToolError,
     ToolErrorCode,
     ToolExecutionOrigin,
@@ -47,6 +48,7 @@ __all__ = [
     "ToolActivityWriter",
     "ToolApprovalDecision",
     "ToolApprovalRequest",
+    "ToolArguments",
     "ToolCapability",
     "ToolError",
     "ToolErrorCode",

@@ -247,6 +247,33 @@ async def test_closed_method_table_dispatches_typed_params(
 
 
 @pytest.mark.asyncio
+async def test_direct_execute_transport_matches_the_execute_tool_limit() -> None:
+    accepted_facade = Facade()
+    accepted = await JsonRpcDispatcher(accepted_facade).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "accepted",
+            "method": "direct.execute",
+            "params": {"thread_id": "thread_1", "command": "x" * 8_000},
+        }
+    )
+    rejected_facade = Facade()
+    rejected = await JsonRpcDispatcher(rejected_facade).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "rejected",
+            "method": "direct.execute",
+            "params": {"thread_id": "thread_1", "command": "x" * 8_001},
+        }
+    )
+
+    assert accepted is not None and accepted["result"]["ok"] is True
+    assert accepted_facade.calls[0][0] == "direct"
+    assert rejected is not None and rejected["error"]["code"] == -32602
+    assert rejected_facade.calls == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_id",
     [

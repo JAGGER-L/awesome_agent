@@ -31,18 +31,10 @@ Awesome 目前提供：
 
 以下内容是当前版本已经存在的行为或契约缺口，不是未来功能，也不表示这些限制值得保留：
 
-- 受信任工作区中的 `.awesome/config.yaml` 读取受 trust gate 保护，但不像
-  `AGENTS.md` 和 Workspace Skills 那样具备大小限制、no-follow 或身份固定。
-  参见[配置](reference/configuration.zh-CN.md#workspace-配置)。
-- 大多数内置工具和 Skill 支持工具的参数模型会忽略未知字段并转换可兼容标量；配置与
-  Skill frontmatter 也存在已记录的转换/语法差异。参见
-  [工具契约](reference/built-in-tools.zh-CN.md#通用请求与结果契约)、
-  [配置](reference/configuration.zh-CN.md)和
-  [Skills](extensions/skills.zh-CN.md#创建-skill)。
+- Skill frontmatter 仍会使用 `str()` 规范化多个标量值，并且配置允许被禁用名称包含 `_`，
+  而可发现 Skill 的名称不允许。参见 [Skills](extensions/skills.zh-CN.md#创建-skill)。
 - Skill 模式 `auto` 与 `off` 当前具有相同的可观察行为；尚不存在自动选择器。参见
   [Skill 选择](extensions/skills.zh-CN.md#选择和加载-skills)。
-- `direct.execute` 先接受 30,000 字符的传输字段，再委托给 8,000 字符的工具字段。
-  参见[方法目录](reference/protocol.zh-CN.md#method-catalog)。
 - `/auth mem0` 会保存本地格式有效的输入，而不远程验证 Mem0 凭据；失败会在第一次
   云操作时出现。参见 [Memory 配置](extensions/memory.zh-CN.md#配置)。
 

@@ -143,19 +143,16 @@ Lengths are Unicode string lengths after JSON decoding.
 | `thread.list` | optional `cursor` 1–1,024; `limit` 1–200, default 50 | Threads, `has_more`, optional next cursor |
 | `thread.read` | `thread_id` 1–128; optional `before_sequence >= 1`; `limit` 1–500, default 100 | Thread view, ChangeSets, reverse-pagination marker |
 | `turn.submit` | `thread_id`; `content` 1–200,000; `client_message_id` matching `client_[A-Za-z0-9_-]+`, max 128 | Operation, Thread, Turn, and client-message IDs |
-| `direct.execute` | `thread_id`; transport accepts `command` 1–30,000; the delegated `execute` tool accepts at most 8,000 | Operation and Thread IDs |
+| `direct.execute` | `thread_id`; `command` 1–8,000, matching the delegated `execute` tool | Operation and Thread IDs |
 | `command.execute` | `name`; optional `arguments` string array | One typed `CommandOutcome` |
 | `provider.credential.set` | see below | Provider, status, optional selected source, diagnostic code |
 | `interaction.respond` | `interaction_id` 1–128; `decision` enum | Accepted flag and status |
 | `operation.cancel` | `operation_id` 1–128 | Operation ID and whether cancellation was requested |
 | `shutdown` | `{}` | `{ "stopped": true }` |
 
-`direct.execute` currently reserves and returns an Operation before the
-delegated `execute` arguments are validated. A command of 8,001–30,000
-characters therefore passes the transport model, receives `OperationAccepted`,
-then ends asynchronously with `invalid_arguments` without starting a process.
-The split 30,000/8,000 bound is a known contract gap; callers should stay at or
-below 8,000 characters.
+`direct.execute` validates the same 8,000-character command boundary as the
+delegated `execute` tool before reserving an Operation. Oversized commands are
+rejected synchronously as invalid params and never start a process.
 
 ### `application.getState`
 

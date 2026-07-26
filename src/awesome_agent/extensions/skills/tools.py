@@ -4,18 +4,18 @@ from typing import cast
 
 from pydantic import BaseModel, Field
 
-from awesome_agent.core.tools import ToolOutput, ToolSpec
+from awesome_agent.core.tools import ToolArguments, ToolOutput, ToolSpec
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.permissions import ToolCapability
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.extensions.skills.loader import SkillLoader
 
 
-class LoadSkillArguments(BaseModel):
+class LoadSkillArguments(ToolArguments):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
 
 
-class ReadSkillResourceArguments(BaseModel):
+class ReadSkillResourceArguments(ToolArguments):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
     relative_path: str = Field(min_length=1, max_length=2_000)
 

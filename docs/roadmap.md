@@ -36,20 +36,11 @@ boundaries. The rest of this page discusses possible additions.
 These are implemented behaviors or contract gaps in the current release, not
 future features and not guarantees that the limitation is desirable:
 
-- The trusted-workspace `.awesome/config.yaml` reader is trust-gated but not
-  size-bounded, no-follow, or identity-pinned like `AGENTS.md` and Workspace
-  Skills. See [configuration](reference/configuration.md#workspace-configuration).
-- Most built-in and Skill-support tool argument models ignore unknown fields
-  and coerce compatible scalars; configuration and Skill frontmatter also have
-  documented coercion/grammar mismatches. See the
-  [tool contract](reference/built-in-tools.md#common-request-and-result-contract),
-  [configuration](reference/configuration.md), and
-  [Skills](extensions/skills.md#create-a-skill).
+- Skill frontmatter still normalizes several scalar values with `str()`, and
+  configured disabled names permit `_` while discoverable Skill names do not.
+  See [Skills](extensions/skills.md#create-a-skill).
 - Skill modes `auto` and `off` currently have the same observable behavior; no
   automatic selector exists. See [Skill selection](extensions/skills.md#select-and-load-skills).
-- `direct.execute` accepts a 30,000-character transport field before delegating
-  to an 8,000-character tool field. See the
-  [method table](reference/protocol.md#method-catalog).
 - `/auth mem0` stores locally valid input without remotely verifying the Mem0
   credential; failure appears on the first cloud operation. See
   [Memory configuration](extensions/memory.md#configuration).

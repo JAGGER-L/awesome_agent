@@ -15,7 +15,8 @@ Awesome is designed to resist or fail safely for:
 
 - accidental activation of project-controlled instructions before trust;
 - replacement, alias, link, and reparse attacks on identity-pinned workspace
-  roots, filesystem tools, `AGENTS.md`, and Workspace Skills;
+  roots, filesystem tools, `.awesome/config.yaml`, `AGENTS.md`, and Workspace
+  Skills;
 - common structured-filesystem path escapes and sensitive-file requests;
 - known catastrophic shell commands and wrappers;
 - stale approvals crossing Threads, Turns, Operations, or permission modes;
@@ -36,8 +37,6 @@ The current design does not claim to resist:
   dependency distribution channel;
 - rollback of every external shell, MCP, network, or service side effect;
 - power-loss atomicity across SQLite, blob directories, and workspace files.
-- adversarial size/link/replacement behavior in the current trusted-workspace
-  `.awesome/config.yaml` reader.
 
 If the required threat model includes untrusted code execution, use an external
 OS/container sandbox and do not treat Awesome's Full access mode as equivalent.
@@ -85,13 +84,12 @@ and the path/entity leases are live-session guards, not part of the durable
 trust record. Neither form of binding grants authority to arbitrary content
 later reached through a link.
 
-The trust gate prevents pre-consent access; it does not make every later reader
-equally hardened. The current `.awesome/config.yaml` loader uses a normal
-`is_file()` plus unbounded text read, so it can follow a link/reparse point,
-observe a replacement between check and read, or consume an oversized YAML
-document. Unlike `AGENTS.md` and Workspace Skills, it has no no-follow open or
-post-open identity check. Treat trusted workspace configuration as privileged
-input and record this as a runtime hardening gap.
+After trust, `.awesome/config.yaml` uses the same Core no-follow reader boundary
+as workspace instructions and Skills. It accepts one plain UTF-8 file up to
+1 MiB, rejects NUL, links/reparse points, hard links, and non-regular nodes, and
+pins and rechecks the opened directory and file identities. A replacement or
+oversized document fails configuration activation instead of redirecting or
+truncating project-controlled input.
 
 ## Workspace instructions
 

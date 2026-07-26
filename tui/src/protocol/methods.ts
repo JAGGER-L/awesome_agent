@@ -114,7 +114,7 @@ export const methodSchemas = {
   "direct.execute": {
     params: z.strictObject({
       thread_id: identifierSchema,
-      command: boundedText(1, 30_000),
+      command: boundedText(1, 8_000),
     }),
     value: operationAcceptedSchema,
     result: applicationResultSchema(operationAcceptedSchema),

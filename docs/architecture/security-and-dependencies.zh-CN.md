@@ -11,8 +11,8 @@ circuit breaker 会降低特定风险；它们都不会把 host 执行变成隔�
 Awesome 的设计目标是抵御以下情况，或在其中安全失败：
 
 - 在信任建立前意外激活项目控制的指令；
-- 针对固定身份的工作区根、文件系统工具、`AGENTS.md` 和 Workspace Skills 发起替换、
-  alias、链接与 reparse 攻击；
+- 针对固定身份的工作区根、文件系统工具、`.awesome/config.yaml`、`AGENTS.md` 和
+  Workspace Skills 发起替换、alias、链接与 reparse 攻击；
 - 常见的结构化文件系统路径逃逸和敏感文件请求；
 - 已知的灾难性 shell 命令及 wrapper；
 - 过期审批跨越 Thread、Turn、Operation 或 permission mode；
@@ -30,8 +30,7 @@ Awesome 的设计目标是抵御以下情况，或在其中安全失败：
 - 已成功获批的 host 进程进行数据外传；
 - 操作系统、终端、提供商、MCP server 或依赖分发渠道被攻破；
 - 回滚每一个外部 shell、MCP、网络或服务副作用；
-- SQLite、blob 目录与工作区文件之间的断电原子性；
-- 当前受信工作区 `.awesome/config.yaml` reader 中恶意的大小/链接/替换行为。
+- SQLite、blob 目录与工作区文件之间的断电原子性。
 
 如果所需威胁模型包含不受信代码执行，请使用外部 OS/container sandbox，不要把 Awesome
 的 Full access mode 当作等价方案。
@@ -71,11 +70,10 @@ Awesome 实现前三层，目前不提供第四层。把这些层区分开，可
 持久信任以规范工作区路径为 key。Physical identity 与 path/entity lease 是活动会话
 guard，不属于持久化 trust record。两种绑定都不会把权限授予之后通过链接到达的任意内容。
 
-Trust gate 能防止用户同意前的访问，但不会让所有后续 reader 具有相同的加固水平。当前
-`.awesome/config.yaml` loader 使用普通 `is_file()` 加无界文本读取，因此可能跟随 link/
-reparse point、观察检查与读取间的替换，或消费超大 YAML 文档。与 `AGENTS.md` 和
-Workspace Skills 不同，它没有 no-follow open 或 open 后身份校验。应把受信工作区配置
-视为特权输入，并把这一点记录为运行时加固缺口。
+建立信任后，`.awesome/config.yaml` 使用与 Workspace instructions 和 Skills 相同的 Core
+no-follow reader 边界。它只接受一个不超过 1 MiB 的普通 UTF-8 文件，拒绝 NUL、link/
+reparse point、hard link 和非普通节点，并固定、重新检查已打开目录与文件的身份。替换或
+超限文档会使配置激活失败，而不是重定向或截断由项目控制的输入。
 
 ## 工作区指令
 

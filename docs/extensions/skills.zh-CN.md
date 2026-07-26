@@ -86,7 +86,8 @@ Read `references/checklist.md` only when the change exposes an HTTP endpoint.
 
 选择存储在当前 Thread 上，并应用于后续 Turn。具名选择会将该 Skill 正文中最多 5,000 个
 估算 token 作为强制 system context 加载。Skill 正文和资源也可以通过有界的 `load_skill`
-和 `read_skill_resource` 工具按需读取。
+和 `read_skill_resource` 工具按需读取。它们的参数 object 严格且封闭：未知字段和用非字符串
+标量替代字符串的输入会作为 `invalid_arguments` 被拒绝。
 
 在当前 release 中，`auto` 和 `off` 的可观察执行行为相同：两者都不会主动注入具名 Skill，
 两个读取工具也都仍在 registry 中，并且不存在为模型自动选择 Skill 的 catalog selector。

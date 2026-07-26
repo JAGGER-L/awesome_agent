@@ -169,6 +169,18 @@ describe("strict wire boundaries", () => {
     ).toBe(true);
   });
 
+  it("matches the direct execute transport and tool command limit", () => {
+    const schema = methodSchemas["direct.execute"].params;
+    expect(
+      schema.safeParse({ thread_id: "thread_1", command: "x".repeat(8_000) })
+        .success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({ thread_id: "thread_1", command: "x".repeat(8_001) })
+        .success,
+    ).toBe(false);
+  });
+
   it("rejects unknown result branches", () => {
     const schema = applicationResultSchema(z.string());
     expect(

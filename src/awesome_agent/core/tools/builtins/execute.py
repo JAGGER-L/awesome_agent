@@ -17,6 +17,7 @@ from awesome_agent.core.tools.context import (
     ToolHandler,
 )
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolOutput,
     ToolPresentation,
@@ -29,7 +30,7 @@ from awesome_agent.safety.redaction import redact_text
 _EXECUTE_CLEANUP_BUDGET_SECONDS = 10.0
 
 
-class ExecuteArguments(BaseModel):
+class ExecuteArguments(ToolArguments):
     command: str = Field(min_length=1, max_length=8_000)
     cwd: str = "."
     timeout_seconds: float = Field(default=60.0, gt=0, le=600.0)

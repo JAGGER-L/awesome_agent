@@ -13,12 +13,11 @@ These sources serve different trust boundaries; they are not interchangeable.
 | Thread state | `application.db` | Awesome | Thread selection and each Turn | No |
 
 Both YAML documents use schema version `1`. Unknown fields, duplicate mapping
-keys, values that cannot be converted to the declared scalar type, and
-out-of-range values invalidate the whole document. Structure is strict, but
-Pydantic scalar coercion is currently enabled: for example, a quoted `"32"` can
-be accepted as an integer and a quoted `"false"` as a boolean. Do not rely on
-that coercion in maintained configuration; use native YAML scalar types. Fully
-strict scalar validation is a known runtime hardening gap.
+keys, values with the wrong native YAML scalar type, and out-of-range values
+invalidate the whole document. Validation does not coerce quoted numbers or
+booleans: use `32`, not `"32"`, and `false`, not `"false"`. Enum values remain
+their documented strings, YAML sequences remain the representation for lists,
+and `null` is accepted only for fields that explicitly permit it.
 
 ## User configuration
 
@@ -207,19 +206,13 @@ field independently. That monotonic rule is the key design invariant: content
 from a trusted repository may reduce resource authority, but never enlarge the
 local user's authority.
 
-The file is not opened until the user trusts the workspace. Trust does not turn
-MCP declarations on; each workspace server still requires `/mcp enable <id>`,
-and changing its declaration invalidates that approval.
-
-> **Current filesystem limitation:** the workspace-config loader is trust-gated
-> but currently checks `is_file()` and then reads the path normally. It has no
-> dedicated size bound, no no-follow open, and no post-open identity comparison.
-> A trusted repository can therefore point `.awesome/config.yaml` through a
-> link/reparse boundary, replace it between check and read, or supply an
-> excessively large YAML document. Treat workspace trust as authority to read
-> this file, avoid linked configuration, and use an external sandbox for a
-> hostile repository. This loader should be hardened independently; the
-> stronger `AGENTS.md` and Workspace Skill guarantees do not apply here.
+The file is not opened until the user trusts the workspace. Its read is capped
+at 1 MiB, requires strict UTF-8 text without NUL, pins and rechecks the workspace
+and path identities, and rejects links, reparse points, hard links, and
+replacement during the read. An unsafe or oversized file invalidates workspace
+configuration rather than being followed or truncated. Trust does not turn MCP
+declarations on; each workspace server still requires `/mcp enable <id>`, and
+changing its declaration invalidates that approval.
 
 ## Runtime precedence
 
@@ -291,7 +284,7 @@ appropriate. Common failures are:
 | Symptom | Cause | Corrective action |
 | --- | --- | --- |
 | `duplicate_config_key` | A YAML mapping repeats a field. | Remove the duplicate; do not rely on last-key-wins behavior. |
-| `configuration_invalid` | Unknown field, invalid enum/model/name, bad type, or out-of-range budget. | Compare the document with the tables above. |
+| `configuration_invalid` | Unknown field, invalid enum/model/name, non-native scalar type, out-of-range budget, or unsafe/oversized workspace config. | Compare the document with the tables above and keep `.awesome/config.yaml` a plain UTF-8 file no larger than 1 MiB. |
 | `provider_not_configured` | The selected model's explicitly selected credential source is unavailable. | Use `/auth`, set the selected environment variable, or change `credentials`. |
 | `model_not_configured` | No model can be selected unambiguously. | Use `/model` or set `providers.default_model`. |
 | workspace settings appear ignored | Workspace has not been trusted, or the file is not at `.awesome/config.yaml`. | Complete the trust interaction and restart. |

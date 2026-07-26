@@ -96,7 +96,9 @@ large background material in resources so it is loaded only when needed.
 The selection is stored on the current Thread and applies to future Turns. A
 named selection loads up to 5,000 estimated tokens from that Skill body as
 mandatory system context. Skill bodies and resources can also be read lazily
-through the bounded `load_skill` and `read_skill_resource` tools.
+through the bounded `load_skill` and `read_skill_resource` tools. Their argument
+objects are strict and closed: unknown fields and non-string scalar substitutes
+are rejected as `invalid_arguments`.
 
 In the current release, `auto` and `off` have the same observable execution
 behavior: neither eagerly injects a named Skill, both read tools remain in the

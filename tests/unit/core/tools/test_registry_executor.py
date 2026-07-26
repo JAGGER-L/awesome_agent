@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from awesome_agent.core.events import (
     CollectingEventSink,
@@ -52,7 +52,7 @@ async def handler(arguments: BaseModel, context: object) -> ToolOutput:
 
 
 class EchoArguments(BaseModel):
-    model_config = ConfigDict(strict=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     text: str
 
@@ -717,12 +717,23 @@ async def test_executor_emits_success_events(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_executor_normalizes_invalid_arguments(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"text": 1},
+        {"text": "ok", "unexpected": True},
+    ],
+)
+async def test_executor_normalizes_invalid_arguments(
+    tmp_path: Path,
+    arguments: dict[str, JsonValue],
+) -> None:
     context, sink, writer = execution_context(tmp_path)
     executor = ToolExecutor(echo_registry())
 
     result = await executor.execute(
-        ToolRequest(call_id="call_1", tool_name="echo", arguments={}),
+        ToolRequest(call_id="call_1", tool_name="echo", arguments=arguments),
         context=context,
     )
 

@@ -10,6 +10,7 @@ from awesome_agent.core.filesystem import (
 )
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolOutput,
     ToolPresentation,
@@ -23,7 +24,7 @@ MAX_READ_LINES = 500
 MAX_CONTENT_CHARS = 30_000
 
 
-class ReadFileArguments(BaseModel):
+class ReadFileArguments(ToolArguments):
     path: str
     start_line: int = Field(default=1, ge=1)
     end_line: int | None = Field(default=None, ge=1)

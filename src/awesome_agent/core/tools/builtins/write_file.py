@@ -13,6 +13,7 @@ from awesome_agent.core.filesystem import (
 )
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolOutput,
     ToolPresentation,
@@ -22,7 +23,7 @@ from awesome_agent.core.tools.filesystem import WorkspaceFileTransaction
 from awesome_agent.core.tools.policy import resolve_workspace_path
 
 
-class WriteFileArguments(BaseModel):
+class WriteFileArguments(ToolArguments):
     path: str
     content: str = Field(max_length=1_000_000)
 

@@ -13,6 +13,7 @@ from awesome_agent.core.filesystem import (
 from awesome_agent.core.tools.builtins.read_file import MAX_FILE_BYTES
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolOutput,
     ToolPresentation,
@@ -22,7 +23,7 @@ from awesome_agent.core.tools.filesystem import WorkspaceFileTransaction
 from awesome_agent.core.tools.policy import resolve_workspace_path
 
 
-class EditFileArguments(BaseModel):
+class EditFileArguments(ToolArguments):
     path: str
     old_string: str = Field(min_length=1, max_length=200_000)
     new_string: str = Field(max_length=200_000)

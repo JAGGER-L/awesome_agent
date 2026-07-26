@@ -19,6 +19,7 @@ from awesome_agent.core.tools.builtins.file_enumerator import (
 from awesome_agent.core.tools.builtins.read_file import MAX_FILE_BYTES
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolOutput,
     ToolPresentation,
@@ -27,13 +28,13 @@ from awesome_agent.core.tools.errors import ExpectedToolFailure
 from awesome_agent.core.tools.policy import SafeWorkspacePath, resolve_workspace_path
 
 
-class GlobArguments(BaseModel):
+class GlobArguments(ToolArguments):
     pattern: str = Field(min_length=1, max_length=500)
     path: str = "."
     max_results: int = Field(default=200, ge=1, le=1_000)
 
 
-class GrepArguments(BaseModel):
+class GrepArguments(ToolArguments):
     pattern: str = Field(min_length=1, max_length=1_000)
     path: str = "."
     include: str | None = Field(default=None, max_length=500)

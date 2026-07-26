@@ -21,7 +21,7 @@ ALLOWED_INTERNAL_IMPORTS = {
         "storage",
         "version",
     },
-    "config": {"config", "paths"},
+    "config": {"config", "core", "paths"},
     "context": {"context", "conversation", "core", "memory", "modeling"},
     "conversation": {"config", "conversation"},
     "core": {"core", "safety"},

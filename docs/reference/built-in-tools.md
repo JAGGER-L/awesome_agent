@@ -40,14 +40,12 @@ A request has a unique `call_id`, a registered `tool_name`, and an arguments
 object. Unknown names return `not_found`; schema mismatches return the generic
 `invalid_arguments` error without echoing sensitive arguments or schemas.
 
-The current built-in and Skill-support argument models are typed but not a
-uniform strict/closed JSON contract. Most use Pydantic defaults, which ignore
-unknown object fields and coerce compatible scalars (for example, `"5"` to an
-integer or `"false"` to a boolean). Memory models reject unknown fields but
-still permit scalar coercion. MCP tools instead follow the server's compiled
-JSON Schema. Callers should send only the documented fields with native JSON
-types; making every local tool model `extra="forbid"` and strict is a known
-runtime contract-hardening task.
+Awesome-owned built-in, Local Memory, and Skill-support argument models form a
+strict, closed JSON contract. Unknown object fields and scalar coercion are
+rejected, so callers must send only documented fields with native JSON types;
+for example, `5` is an integer while `"5"` is not. MCP tools remain dynamic and
+follow each server's bounded, compiled JSON Schema rather than this static
+model base.
 
 A result has:
 

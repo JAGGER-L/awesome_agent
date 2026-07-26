@@ -35,11 +35,10 @@ namespaced tool。动态 MCP 行为在 [MCP](../extensions/mcp.zh-CN.md)中单�
 请求包含唯一 `call_id`、已注册的 `tool_name` 和参数 object。未知名称返回 `not_found`；
 schema 不匹配返回通用 `invalid_arguments` 错误，不会回显敏感参数或 schema。
 
-当前内置和 Skill 支持参数 model 虽然有类型，但不是统一的严格/封闭 JSON 契约。大部分使用
-Pydantic 默认值，会忽略未知 object 字段，并强制转换兼容标量（例如把 `"5"` 转为整数，
-或把 `"false"` 转为布尔值）。Memory model 拒绝未知字段，但仍允许标量强制转换。MCP 工具
-则遵循服务器编译后的 JSON Schema。调用方应只用原生 JSON 类型发送记录在案的字段；让每个
-本地工具 model 都采用 `extra="forbid"` 和 strict，是一项已知的运行时契约加固任务。
+Awesome 自有的内置、Local Memory 和 Skill 支持参数 model 构成严格、封闭的 JSON 契约。
+未知 object 字段和标量强制转换都会被拒绝，因此调用方必须只使用文档字段和原生 JSON
+类型；例如，`5` 是整数，而 `"5"` 不是。MCP 工具保持动态，并遵循各 server 经过有界编译的
+JSON Schema，而不是这一静态 model 基类。
 
 结果包含：
 

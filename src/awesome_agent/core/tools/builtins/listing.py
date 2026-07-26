@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, JsonValue
 
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolOutput,
     ToolPresentation,
 )
@@ -16,7 +17,7 @@ from awesome_agent.core.tools.policy import (
 )
 
 
-class LsArguments(BaseModel):
+class LsArguments(ToolArguments):
     path: str = "."
     max_entries: int = Field(default=200, ge=1, le=1_000)
 

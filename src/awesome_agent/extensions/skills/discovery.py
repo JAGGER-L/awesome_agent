@@ -15,7 +15,7 @@ from yaml.events import (
     ScalarEvent,
 )
 
-from awesome_agent.context._safe_files import (
+from awesome_agent.core.safe_files import (
     FileChangedError,
     FileTooLargeError,
     PinnedPlainDirectory,

@@ -30,18 +30,35 @@ class CredentialSource(StrEnum):
 
 
 class CredentialSelectionConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    deepseek: CredentialSource | None = None
-    kimi: CredentialSource | None = None
-    mem0: CredentialSource | None = None
+    deepseek: CredentialSource | None = Field(default=None, strict=False)
+    kimi: CredentialSource | None = Field(default=None, strict=False)
+    mem0: CredentialSource | None = Field(default=None, strict=False)
+
+    @field_validator("deepseek", "kimi", "mem0", mode="before")
+    @classmethod
+    def validate_credential_source_type(
+        cls,
+        value: object,
+    ) -> object:
+        if value is not None and not isinstance(value, str):
+            raise ValueError("credential source must be a string or null")
+        return value
 
 
 class ProviderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     default_model: str | None = None
-    kimi_region: KimiRegion = KimiRegion.CN
+    kimi_region: KimiRegion = Field(default=KimiRegion.CN, strict=False)
+
+    @field_validator("kimi_region", mode="before")
+    @classmethod
+    def validate_kimi_region_type(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError("kimi_region must be a string")
+        return value
 
     @field_validator("default_model")
     @classmethod
@@ -52,7 +69,7 @@ class ProviderConfig(BaseModel):
 
 
 class BudgetConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     model_calls: int = Field(default=32, ge=1, le=256)
     tool_calls: int = Field(default=64, ge=1, le=512)
@@ -63,7 +80,7 @@ class BudgetConfig(BaseModel):
 
 
 class ProjectBudgetConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     model_calls: int | None = Field(default=None, ge=1, le=256)
     tool_calls: int | None = Field(default=None, ge=1, le=512)
@@ -78,7 +95,7 @@ class ProjectBudgetConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     local_file_memory: bool = False
     mem0_cloud: bool = False
@@ -93,9 +110,9 @@ class MemoryConfig(BaseModel):
 
 
 class SkillConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    disabled: tuple[str, ...] = ()
+    disabled: tuple[str, ...] = Field(default=(), strict=False)
 
     @field_validator("disabled")
     @classmethod
@@ -108,7 +125,7 @@ class SkillConfig(BaseModel):
 
 
 class SkillSourceConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     name: str
     enabled: bool = True
@@ -122,12 +139,12 @@ class SkillSourceConfig(BaseModel):
 
 
 class McpServerDeclaration(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     id: str
     command: str = Field(min_length=1, max_length=2_000)
-    args: tuple[str, ...] = ()
-    env: tuple[str, ...] = ()
+    args: tuple[str, ...] = Field(default=(), strict=False)
+    env: tuple[str, ...] = Field(default=(), strict=False)
 
     @field_validator("id")
     @classmethod
@@ -151,7 +168,7 @@ class UserMcpServerConfig(McpServerDeclaration):
 
 
 class UserConfigDocument(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     version: Literal[1] = 1
     providers: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -161,7 +178,14 @@ class UserConfigDocument(BaseModel):
     budgets: BudgetConfig = Field(default_factory=BudgetConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
-    mcp_servers: tuple[UserMcpServerConfig, ...] = ()
+    mcp_servers: tuple[UserMcpServerConfig, ...] = Field(default=(), strict=False)
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def validate_version_type(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("version must be an integer")
+        return value
 
     @field_validator("mcp_servers")
     @classmethod
@@ -176,12 +200,19 @@ class UserConfigDocument(BaseModel):
 
 
 class WorkspaceConfigDocument(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     version: Literal[1] = 1
     budgets: ProjectBudgetConfig = Field(default_factory=ProjectBudgetConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
-    mcp_servers: tuple[McpServerDeclaration, ...] = ()
+    mcp_servers: tuple[McpServerDeclaration, ...] = Field(default=(), strict=False)
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def validate_version_type(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("version must be an integer")
+        return value
 
     @field_validator("mcp_servers")
     @classmethod
@@ -196,7 +227,7 @@ class WorkspaceConfigDocument(BaseModel):
 
 
 class SecretStatus(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     deepseek_api_key: bool = False
     moonshot_api_key: bool = False
@@ -204,7 +235,7 @@ class SecretStatus(BaseModel):
 
 
 class StartupOverrides(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     model: str | None = None
     thinking_enabled: bool | None = None
@@ -212,7 +243,7 @@ class StartupOverrides(BaseModel):
 
 
 class ThreadConfigState(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     model: str | None = None
     thinking_enabled: bool | None = None
@@ -220,20 +251,24 @@ class ThreadConfigState(BaseModel):
 
 
 class ApplicationConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     providers: ProviderConfig
     budgets: BudgetConfig
     memory: MemoryConfig
-    user_skills: tuple[SkillSourceConfig, ...] = ()
-    workspace_skills: tuple[SkillSourceConfig, ...] = ()
-    user_mcp_servers: tuple[UserMcpServerConfig, ...] = ()
-    workspace_mcp_servers: tuple[McpServerDeclaration, ...] = ()
+    user_skills: tuple[SkillSourceConfig, ...] = Field(default=(), strict=False)
+    workspace_skills: tuple[SkillSourceConfig, ...] = Field(default=(), strict=False)
+    user_mcp_servers: tuple[UserMcpServerConfig, ...] = Field(
+        default=(), strict=False
+    )
+    workspace_mcp_servers: tuple[McpServerDeclaration, ...] = Field(
+        default=(), strict=False
+    )
     secret_status: SecretStatus
 
 
 class TurnConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     provider: Literal["deepseek", "kimi"]
     model: str

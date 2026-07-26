@@ -6,7 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from awesome_agent.context._safe_files import FileFingerprint, FileIdentity
+from awesome_agent.core.safe_files import FileFingerprint, FileIdentity
 
 
 class SkillSource(StrEnum):
