@@ -124,6 +124,7 @@ from awesome_agent.conversation import (
     Thread,
     ThreadNotFound,
     ToolActivity,
+    ToolActivityOrigin,
     Turn,
     TurnBusy,
     TurnNotFound,
@@ -133,8 +134,11 @@ from awesome_agent.conversation import (
 from awesome_agent.core.changes import (
     ChangeAnalyzer,
     ChangeJournal,
+    ChangeLifecycle,
     ChangeOperations,
+    merge_file_changes,
 )
+from awesome_agent.core.changes.errors import ChangeLifecycleError
 from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.events import (
     EventEmitter,
@@ -232,6 +236,7 @@ from awesome_agent.storage.checkpoints import (
     sqlite_checkpoint_saver,
 )
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+from awesome_agent.storage.health import sqlite_database_health
 from awesome_agent.storage.pagination import (
     InvalidThreadCursor,
     decode_thread_cursor,
@@ -2160,6 +2165,11 @@ class _LocalApplicationBackend:
             usage_reader=self._command_usage,
             credential_statuses=lambda: self._sources.provider_credentials,
             provider_doctor=self._provider_configuration.doctor,
+            configuration_ready=lambda: self._initialized,
+            sqlite_ready=lambda: sqlite_database_health(self._paths.application_db),
+            checkpoints_ready=lambda: sqlite_database_health(
+                self._paths.checkpoint_db
+            ),
             workspace_instruction_diagnostic=lambda: (
                 self._workspace_instruction_snapshot.diagnostic
                 if self._workspace_instruction_snapshot is not None
@@ -2461,8 +2471,38 @@ class _LocalApplicationBackend:
                 for item in self._conversation.latest_context_manifest(thread_id)
             ),
             context_budget_tokens=config.budgets.total_context_tokens,
-            changed_file_count=0,
+            changed_file_count=self._latest_agent_change_file_count(thread_id),
         )
+
+    def _latest_agent_change_file_count(self, thread_id: str) -> int:
+        if self._change_store is None:
+            return 0
+        activities = self._conversation.read_thread(thread_id).tool_activities
+        seen: set[str] = set()
+        for activity in reversed(activities):
+            identifier = activity.change_set_id
+            if (
+                activity.origin is not ToolActivityOrigin.AGENT
+                or identifier is None
+                or identifier in seen
+            ):
+                continue
+            seen.add(identifier)
+            change_set = self._change_store.get(identifier)
+            if (
+                change_set is None
+                or change_set.workspace_key != self._workspace.key
+                or change_set.turn_id != activity.turn_id
+                or change_set.lifecycle is ChangeLifecycle.OPEN
+            ):
+                continue
+            if change_set.lifecycle is ChangeLifecycle.UNDONE:
+                return 0
+            try:
+                return len(merge_file_changes(change_set.files))
+            except ChangeLifecycleError:
+                continue
+        return 0
 
     def _mem0_identity(self) -> Mem0Identity | None:
         user_id = self._application_config.memory.mem0_user_id

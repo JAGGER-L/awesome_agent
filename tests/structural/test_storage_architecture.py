@@ -17,6 +17,7 @@ STORAGE_MODULES = {
     "compatibility.py",
     "conversations.py",
     "database.py",
+    "health.py",
     "mcp.py",
     "pagination.py",
     "state_lease.py",

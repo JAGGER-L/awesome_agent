@@ -14,6 +14,7 @@ from awesome_agent.storage.database import (
     application_connection,
     initialize_application_database,
 )
+from awesome_agent.storage.health import sqlite_database_health
 from awesome_agent.storage.mcp import SQLiteMcpEnablementStore, mcp_config_hash
 from awesome_agent.storage.state_lease import (
     StateLease,
@@ -45,4 +46,5 @@ __all__ = [
     "mcp_config_hash",
     "reset_local_state",
     "sqlite_checkpoint_saver",
+    "sqlite_database_health",
 ]

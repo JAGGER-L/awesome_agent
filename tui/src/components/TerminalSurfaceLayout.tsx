@@ -5,6 +5,7 @@ import { TerminalFrameMetricsProvider } from "./cursor/terminal-frame-metrics.js
 
 export interface TerminalSurfaceLayoutProps {
   readonly welcome?: ReactNode;
+  readonly welcomeNotice?: ReactNode;
   readonly transcript: ReactNode;
   readonly activeTurn: ReactNode;
   readonly pendingInputs?: ReactNode;
@@ -28,6 +29,7 @@ export function TerminalSurfaceLayout(props: TerminalSurfaceLayoutProps) {
     >
       <Box ref={frameRef} flexDirection="column">
         {props.welcome}
+        {props.welcomeNotice}
         {props.transcript}
         {props.activeTurn}
         {props.pendingInputs}

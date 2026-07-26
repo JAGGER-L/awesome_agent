@@ -192,8 +192,8 @@
     {
       "english_source": "docs/reference/commands.md",
       "chinese_source": "docs/reference/commands.zh-CN.md",
-      "english_sha256": "433c560a73e2a29ff177d9e0b7848e15465fb5b38a31d8a2ad7fdc587e825b9d",
-      "chinese_sha256": "1a1a7f71fbe06b4a2d9ad6c644d6692b7284b791f56c7321f08a8a87a0981b04"
+      "english_sha256": "41a1131d0103bcfca54be264d7bdd65acde9ce467b5879a674953a03313cb86e",
+      "chinese_sha256": "5011be530bacde02039fdfb188f4524ff18b998b1ba88f922fd9626cd8089322"
     },
     {
       "english_source": "docs/reference/configuration.md",

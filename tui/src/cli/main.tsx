@@ -735,6 +735,9 @@ function RunningCliApplication({
             }}
             interactionResponder={interactions}
             providerSetupRequired={startup.readiness === "diagnostics_ready"}
+            {...(preferenceWarning
+              ? { startupWarning: preferenceWarning }
+              : {})}
             resetCurrentFrame={resetCurrentFrame}
             exiting={exiting}
             welcome={{
@@ -766,7 +769,6 @@ function RunningCliApplication({
             }}
           />
         )}
-        {preferenceWarning ? null : null}
       </AppErrorBoundary>
     </ThemeProvider>
   );

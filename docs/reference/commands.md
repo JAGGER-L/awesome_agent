@@ -54,6 +54,15 @@ Memory is enabled or called.
 selected credential, then offers only the curated models in the
 [configuration reference](configuration.md).
 
+The `Changes` row in `/status` is the unique path count from the newest sealed
+Agent ChangeSet associated with the selected Thread. It excludes direct shell
+operations and is zero when that ChangeSet has been undone; it is not a Git
+working-tree dirty count. `/doctor` reports `Unverified` when runtime readiness
+cannot be established instead of assuming that configuration, Application
+SQLite, or checkpoint services are healthy. The two database checks open their
+files read-only and run a bounded SQLite `quick_check`; they do not repair or
+rewrite state.
+
 ## Memory subcommands
 
 | Syntax | Result |

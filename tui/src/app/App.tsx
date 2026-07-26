@@ -99,6 +99,7 @@ export function App({
   width,
   blockingSelection = false,
   welcome,
+  startupWarning,
   localCommands,
   cancellation = { status: "idle" },
   lifecycle,
@@ -113,6 +114,7 @@ export function App({
   width?: number;
   blockingSelection?: boolean;
   welcome?: Omit<WelcomeProps, "width">;
+  startupWarning?: string;
   localCommands?: LocalCommandService;
   cancellation?: CancellationSnapshot;
   lifecycle?: AppLifecycle;
@@ -950,6 +952,15 @@ export function App({
       <TerminalSurfaceLayout
         welcome={
           liveWelcome ? <Welcome {...liveWelcome} width={columns} /> : null
+        }
+        welcomeNotice={
+          startupWarning ? (
+            <Text
+              {...(liveWelcome ? { color: liveWelcome.theme.warning } : {})}
+            >
+              ⚠ {startupWarning}
+            </Text>
+          ) : null
         }
         transcript={
           <Transcript

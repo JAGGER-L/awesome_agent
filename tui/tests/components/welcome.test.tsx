@@ -215,4 +215,25 @@ describe("Welcome", () => {
     expect(view.frames.join("\n")).toContain(FULL_LOGO_ROWS[0]);
     expect(view.lastFrame()).toContain("Message");
   });
+
+  it("renders one startup warning immediately after Welcome", () => {
+    const { width: _width, ...welcome } = { ...baseProps, width: 60 };
+    const warning = "Unable to read ui.json.";
+    const frame =
+      render(
+        <App
+          store={createSurfaceStore()}
+          reportFatal={() => undefined}
+          width={60}
+          welcome={welcome}
+          startupWarning={warning}
+        />,
+      ).lastFrame() ?? "";
+
+    expect(frame.match(new RegExp(warning, "g"))).toHaveLength(1);
+    expect(frame.indexOf(warning)).toBeGreaterThan(
+      frame.indexOf(FULL_LOGO_ROWS[0]),
+    );
+    expect(frame.indexOf(warning)).toBeLessThan(frame.indexOf("Message"));
+  });
 });

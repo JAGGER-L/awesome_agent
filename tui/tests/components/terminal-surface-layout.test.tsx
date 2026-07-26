@@ -10,6 +10,7 @@ describe("TerminalSurfaceLayout", () => {
       render(
         <TerminalSurfaceLayout
           welcome={<Text>Welcome</Text>}
+          welcomeNotice={<Text>Welcome warning</Text>}
           transcript={<Text>Transcript</Text>}
           activeTurn={<Text>Active Turn</Text>}
           notices={<Text>Notices</Text>}
@@ -20,6 +21,7 @@ describe("TerminalSurfaceLayout", () => {
       ).lastFrame() ?? "";
     const values = [
       "Welcome",
+      "Welcome warning",
       "Transcript",
       "Active Turn",
       "Notices",
