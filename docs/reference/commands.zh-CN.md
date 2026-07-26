@@ -49,8 +49,9 @@ Provider 拒绝的 key 不会保存。Mem0 不同：`/auth mem0` 只执行本地
 `/status` 的 `Changes` 行表示与当前 Thread 关联的最新已封存 Agent ChangeSet 中的唯一
 路径数。它不包含 direct shell operation；该 ChangeSet 被撤销后显示为零；它不是 Git
 工作树 dirty 数。若无法确认 runtime readiness，`/doctor` 会报告 `Unverified`，而不会
-假定配置、Application SQLite 或 checkpoint 服务健康。两个数据库检查会以只读方式打开
-文件并运行有界的 SQLite `quick_check`，不会修复或重写状态。
+假定配置、Application SQLite 或 checkpoint 服务健康。Application SQLite 会通过进程级
+owning connection 运行有界只读 `quick_check`，checkpoint readiness 则通过 checkpoint
+saver 检查；两者都不会修复或重写状态。
 
 ## Memory 子命令
 

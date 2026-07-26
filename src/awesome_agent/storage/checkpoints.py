@@ -83,6 +83,13 @@ class LangGraphCheckpointStore:
     async def delete(self, turn_id: str) -> None:
         await self._saver.adelete_thread(turn_id)
 
+    async def health(self) -> bool:
+        try:
+            await self._saver.aget_tuple(_config("__awesome_health__"))
+        except Exception:
+            return False
+        return True
+
 
 def _config(turn_id: str) -> RunnableConfig:
     return {"configurable": {"thread_id": turn_id, "checkpoint_ns": ""}}

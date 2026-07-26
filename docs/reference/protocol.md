@@ -244,12 +244,14 @@ authority.
 Cancel is best-effort and identity-specific. A true result means cancellation
 was delivered while the matching Operation was still cancellable, and its
 terminal outcome is `operation.cancelled`. False also covers an unknown ID, an
-Operation already cancelling, or an Operation whose completed/failed outcome
-has crossed its commit point. Cancellation after that commit point cannot
-rewrite the durable outcome; the original completed/failed terminal event is
-published instead. Handler/process/MCP cleanup and terminal publication are
-bounded, after which the original pre-commit cancellation continues to
-propagate.
+Operation already cancelling, or an Operation in `committing` or a terminal
+phase. Cancellation after the commit boundary cannot rewrite the durable
+outcome. An already-admitted durable write waits for a known COMMIT or ROLLBACK
+before the first caller cancellation is re-raised; shutdown waits for the same
+boundary. The original completed/failed terminal event is published instead.
+Local activity, transcript, ChangeSet, and checkpoint finalization retains the
+Operation lease until its result is known. Process/MCP cleanup and best-effort
+terminal publication remain bounded.
 
 Shutdown is urgent. A valid request first cancels other background requests,
 prevents new foreground leases, cancels/waits for active operations and

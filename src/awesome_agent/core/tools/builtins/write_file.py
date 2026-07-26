@@ -50,7 +50,7 @@ def create_write_file_handler(journal: ChangeJournal) -> ToolHandler:
                 existed = before is not None
                 mode = before.snapshot.mode if before is not None else None
                 content = options.content.encode("utf-8")
-                change = journal.apply_file_mutation(
+                change = await journal.apply_file_mutation(
                     change_set_id=context.change_set_id,
                     kind=(
                         FileChangeKind.UPDATED if existed else FileChangeKind.CREATED

@@ -53,8 +53,8 @@ class ConversationCommandService:
     def current_thread_id(self) -> str | None:
         return self._current_thread_id
 
-    def select_recovery_thread(self, thread_id: str) -> None:
-        thread = self._conversation.read_thread(thread_id).thread
+    async def select_recovery_thread(self, thread_id: str) -> None:
+        thread = (await self._conversation.read_thread(thread_id)).thread
         if thread.workspace_key != self._workspace_key:
             raise ThreadNotFound(thread_id)
         self._select(thread)
@@ -64,7 +64,7 @@ class ConversationCommandService:
             return error("invalid_arguments", "Usage: /new")
         if self._has_active_operation():
             return self._operation_busy()
-        thread = self._conversation.create_thread(
+        thread = await self._conversation.create_thread(
             self._workspace_key,
             None,
             current_model=self._default_model(),
@@ -72,14 +72,14 @@ class ConversationCommandService:
         return await self._transition(thread, reason="new")
 
     async def rename(self, intent: CommandIntent) -> CommandOutcome:
-        thread = self._selected_thread()
+        thread = await self._selected_thread()
         if thread is None:
             return error("thread_not_found", "Select a Thread first.")
         title = " ".join(intent.arguments)
         if not title.strip():
             return error("invalid_arguments", "Title required · /rename <title>")
         try:
-            renamed = self._conversation.rename_thread(thread.id, title)
+            renamed = await self._conversation.rename_thread(thread.id, title)
         except ValueError as exc:
             return error("invalid_arguments", str(exc))
         return result(ThreadRenamedPayload(thread=renamed))
@@ -90,7 +90,7 @@ class ConversationCommandService:
         if len(intent.arguments) > 1:
             return error("invalid_arguments", "Usage: /resume [thread_id]")
         if not intent.arguments:
-            page = self._conversation.list_thread_page(
+            page = await self._conversation.list_thread_page(
                 self._workspace_key, cursor=None, limit=200
             )
             if not page.threads:
@@ -108,7 +108,7 @@ class ConversationCommandService:
                     ),
                 )
             )
-        matches = self._matches(intent.arguments[0])
+        matches = await self._matches(intent.arguments[0])
         if not matches:
             return error("thread_not_found", "Thread was not found.")
         if len(matches) > 1:
@@ -125,7 +125,7 @@ class ConversationCommandService:
         return await self._transition(thread, reason="resume")
 
     async def thinking(self, intent: CommandIntent) -> CommandOutcome:
-        thread = self._selected_thread()
+        thread = await self._selected_thread()
         if thread is None:
             return error("thread_not_found", "Select a Thread first.")
         if not intent.arguments:
@@ -147,21 +147,21 @@ class ConversationCommandService:
             )
         if len(intent.arguments) != 1 or intent.arguments[0] not in {"on", "off"}:
             return error("invalid_arguments", "Usage: /thinking [on|off]")
-        updated = self._conversation.set_thinking(
+        updated = await self._conversation.set_thinking(
             thread.id, intent.arguments[0] == "on"
         )
         return result(ThinkingCommandPayload(enabled=updated.thinking_enabled))
 
-    def _matches(self, requested: str) -> list[Thread]:
+    async def _matches(self, requested: str) -> list[Thread]:
         try:
-            exact = self._conversation.read_thread(requested).thread
+            exact = (await self._conversation.read_thread(requested)).thread
         except ThreadNotFound:
             exact = None
         if exact is not None and exact.workspace_key == self._workspace_key:
             return [exact]
         if re.fullmatch(r"thread_[a-f0-9]{8,32}", requested):
             return list(
-                self._conversation.match_thread_prefix(
+                await self._conversation.match_thread_prefix(
                     self._workspace_key, prefix=requested, limit=200
                 )
             )
@@ -199,7 +199,7 @@ class ConversationCommandService:
             "Stop the current task before starting or resuming a conversation.",
         )
 
-    def _selected_thread(self) -> Thread | None:
+    async def _selected_thread(self) -> Thread | None:
         if self._current_thread_id is None:
             return None
-        return self._conversation.read_thread(self._current_thread_id).thread
+        return (await self._conversation.read_thread(self._current_thread_id)).thread

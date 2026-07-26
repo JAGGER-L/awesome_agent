@@ -54,7 +54,7 @@ def create_edit_file_handler(journal: ChangeJournal) -> ToolHandler:
                     safe.relative.as_posix(),
                 )
                 mode = opened.snapshot.mode
-                change = journal.apply_file_mutation(
+                change = await journal.apply_file_mutation(
                     change_set_id=context.change_set_id,
                     kind=FileChangeKind.UPDATED,
                     intended_after=NodeSnapshot(FileNodeType.FILE, content, mode),

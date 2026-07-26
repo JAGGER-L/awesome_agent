@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,35 +15,47 @@ from awesome_agent.core.changes import (
 )
 from awesome_agent.core.changes.errors import ChangeBlobCorrupt
 from awesome_agent.core.changes.ports import PendingMutation
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.database import (
     APPLICATION_SCHEMA_VERSION,
     ApplicationSchemaMismatch,
-    application_connection,
-    initialize_application_database,
 )
 
 
-def test_current_schema_contains_change_and_pending_tables(tmp_path: Path) -> None:
-    database = tmp_path / "application.db"
-    initialize_application_database(database)
-    with application_connection(database) as connection:
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
+
+
+async def test_current_schema_contains_change_and_pending_tables(
+    application_database: ApplicationSQLite,
+) -> None:
+    def inspect(connection: sqlite3.Connection) -> tuple[set[str], int]:
         names = {
-            row[0]
+            str(row[0])
             for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        return names, version
+
+    names, version = await application_database.read(inspect)
     assert APPLICATION_SCHEMA_VERSION == version == 7
     assert {"change_sets", "pending_mutations"} <= names
 
 
-def test_schema_one_is_rejected_without_a_compatibility_migration(
+async def test_schema_one_is_rejected_without_a_compatibility_migration(
     tmp_path: Path,
 ) -> None:
-    database = tmp_path / "application.db"
-    with sqlite3.connect(database) as connection:
+    path = tmp_path / "application.db"
+    with sqlite3.connect(path) as connection:
         connection.execute(
             "CREATE TABLE trusted_workspaces ("
             "workspace_key TEXT PRIMARY KEY, canonical_path TEXT NOT NULL, "
@@ -54,8 +67,12 @@ def test_schema_one_is_rejected_without_a_compatibility_migration(
         )
         connection.execute("PRAGMA user_version = 1")
 
-    with pytest.raises(ApplicationSchemaMismatch) as raised:
-        initialize_application_database(database)
+    database = ApplicationSQLite(path)
+    try:
+        with pytest.raises(ApplicationSchemaMismatch) as raised:
+            await database.initialize()
+    finally:
+        await database.aclose()
 
     assert raised.value.found == 1
     assert raised.value.expected == APPLICATION_SCHEMA_VERSION
@@ -76,8 +93,9 @@ def test_blob_store_is_content_addressed_and_detects_corruption(
         store.get(first)
 
 
-def test_change_set_and_pending_mutation_survive_reopen(tmp_path: Path) -> None:
-    database = tmp_path / "application.db"
+async def test_change_set_and_pending_mutation_survive_reopen(
+    application_database: ApplicationSQLite,
+) -> None:
     created_at = datetime.now(UTC)
     change_set = ChangeSet(
         id="change_1",
@@ -104,22 +122,21 @@ def test_change_set_and_pending_mutation_survive_reopen(tmp_path: Path) -> None:
         created_at=created_at,
     )
 
-    first = SQLiteChangeSetStore(database)
-    first.save(change_set)
-    first.save_pending(pending)
+    first = SQLiteChangeSetStore(application_database)
+    await first.save(change_set)
+    await first.save_pending(pending)
 
-    reopened = SQLiteChangeSetStore(database)
-    assert reopened.get(change_set.id) == change_set
-    assert reopened.latest("ws_1") == change_set
-    assert reopened.list_pending() == [pending]
-    reopened.delete_pending(pending.id)
-    assert reopened.list_pending() == []
+    reopened = SQLiteChangeSetStore(application_database)
+    assert await reopened.get(change_set.id) == change_set
+    assert await reopened.latest("ws_1") == change_set
+    assert await reopened.list_pending() == [pending]
+    await reopened.delete_pending(pending.id)
+    assert await reopened.list_pending() == []
 
 
-def test_pending_distinct_node_types_survive_reopen_without_a_schema_change(
-    tmp_path: Path,
+async def test_pending_distinct_node_types_survive_reopen_without_a_schema_change(
+    application_database: ApplicationSQLite,
 ) -> None:
-    database = tmp_path / "application.db"
     created_at = datetime.now(UTC)
     change_set = ChangeSet(
         id="change_type_transition",
@@ -148,20 +165,23 @@ def test_pending_distinct_node_types_survive_reopen_without_a_schema_change(
         intended_after_mode=0o755,
         created_at=created_at,
     )
-    store = SQLiteChangeSetStore(database)
-    store.save(change_set)
-    store.save_pending(pending)
+    store = SQLiteChangeSetStore(application_database)
+    await store.save(change_set)
+    await store.save_pending(pending)
 
-    reopened = SQLiteChangeSetStore(database)
+    reopened = SQLiteChangeSetStore(application_database)
 
     assert APPLICATION_SCHEMA_VERSION == 7
-    assert reopened.list_pending() == [pending]
-    assert reopened.list_pending()[0].before_node_type is FileNodeType.FILE
-    assert reopened.list_pending()[0].intended_after_node_type is FileNodeType.DIRECTORY
+    reopened_pending = await reopened.list_pending()
+    assert reopened_pending == [pending]
+    assert reopened_pending[0].before_node_type is FileNodeType.FILE
+    assert reopened_pending[0].intended_after_node_type is FileNodeType.DIRECTORY
 
 
-def test_list_open_is_scoped_to_the_workspace(tmp_path: Path) -> None:
-    store = SQLiteChangeSetStore(tmp_path / "application.db")
+async def test_list_open_is_scoped_to_the_workspace(
+    application_database: ApplicationSQLite,
+) -> None:
+    store = SQLiteChangeSetStore(application_database)
     created_at = datetime.now(UTC)
     open_change = ChangeSet(
         id="change_open",
@@ -183,13 +203,14 @@ def test_list_open_is_scoped_to_the_workspace(tmp_path: Path) -> None:
         update={"id": "change_foreign", "workspace_key": "ws_2"}
     )
     for change_set in (open_change, applied_change, foreign_change):
-        store.save(change_set)
+        await store.save(change_set)
 
-    assert store.list_open("ws_1") == [open_change]
+    assert await store.list_open("ws_1") == [open_change]
 
 
-def test_file_change_mutation_identity_survives_reopen(tmp_path: Path) -> None:
-    database = tmp_path / "application.db"
+async def test_file_change_mutation_identity_survives_reopen(
+    application_database: ApplicationSQLite,
+) -> None:
     created_at = datetime.now(UTC)
     change_set = ChangeSet(
         id="change_1",
@@ -216,9 +237,9 @@ def test_file_change_mutation_identity_survives_reopen(tmp_path: Path) -> None:
         created_at=created_at,
     )
 
-    SQLiteChangeSetStore(database).save(change_set)
+    await SQLiteChangeSetStore(application_database).save(change_set)
 
-    reopened = SQLiteChangeSetStore(database).get(change_set.id)
+    reopened = await SQLiteChangeSetStore(application_database).get(change_set.id)
     assert reopened == change_set
     assert reopened is not None
     assert reopened.files[0].mutation_id == "operation_1"

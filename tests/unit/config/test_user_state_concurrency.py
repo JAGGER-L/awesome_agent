@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
@@ -26,9 +27,20 @@ from awesome_agent.conversation import ConversationService
 from awesome_agent.memory.local_file import LocalMemoryFile
 from awesome_agent.memory.models import MemoryScope
 from awesome_agent.paths import AwesomePaths
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 _WORKER = Path(__file__).parents[2] / "fixtures" / "user_state_concurrency_worker.py"
+
+
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "home" / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
 
 
 def _wait_for(paths: tuple[Path, ...], *, timeout_seconds: float = 10.0) -> None:
@@ -239,8 +251,9 @@ def test_provider_credential_transaction_is_serialized_across_processes(
     assert document.credentials.mem0 is CredentialSource.AWESOME
 
 
-def _run_provider_configuration_race(
+async def _run_provider_configuration_race(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     *,
     kind: str,
     first_action: str,
@@ -248,10 +261,11 @@ def _run_provider_configuration_race(
 ) -> tuple[dict[str, str], dict[str, str], str]:
     home = tmp_path / "home"
     config = home / "config.yaml"
-    database = home / "application.db"
-    home.mkdir(parents=True)
-    conversation = ConversationService(store=SQLiteConversationRepositories(database))
-    thread = conversation.create_thread("workspace_1")
+    home.mkdir(parents=True, exist_ok=True)
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(application_database)
+    )
+    thread = await conversation.create_thread("workspace_1")
     (home / "thread-id").write_text(thread.id, encoding="utf-8")
     secrets = UserSecretStore(home / ".env")
     secrets.set("DEEPSEEK_API_KEY", SecretStr("deepseek-secret"))
@@ -319,17 +333,21 @@ def _run_provider_configuration_race(
     assert [process.returncode for process in processes] == [0, 0], completed
     first_observed = json.loads(first_result.read_text(encoding="utf-8"))
     second_observed = json.loads(second_result.read_text(encoding="utf-8"))
-    final_thread_model = conversation.read_thread(thread.id).thread.current_model or ""
+    final_thread_model = (
+        await conversation.read_thread(thread.id)
+    ).thread.current_model or ""
     return first_observed, second_observed, final_thread_model
 
 
-def test_provider_model_reload_and_thread_update_share_cross_process_transaction(
+async def test_provider_model_reload_and_thread_update_share_cross_process_transaction(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     first_model = "deepseek/deepseek-v4-pro"
     second_model = "kimi/kimi-k2.6"
-    first, second, final_thread_model = _run_provider_configuration_race(
+    first, second, final_thread_model = await _run_provider_configuration_race(
         tmp_path,
+        application_database,
         kind="provider_model",
         first_action=first_model,
         second_action=second_model,
@@ -352,11 +370,13 @@ def test_provider_model_reload_and_thread_update_share_cross_process_transaction
     assert final_thread_model == second_model
 
 
-def test_provider_source_update_and_reload_share_cross_process_transaction(
+async def test_provider_source_update_and_reload_share_cross_process_transaction(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
-    first, second, _ = _run_provider_configuration_race(
+    first, second, _ = await _run_provider_configuration_race(
         tmp_path,
+        application_database,
         kind="provider_source",
         first_action=CredentialSource.ENVIRONMENT.value,
         second_action=CredentialSource.AWESOME.value,
@@ -405,16 +425,19 @@ def test_provider_source_update_and_reload_share_cross_process_transaction(
         "thinking-preserves-concurrent-model",
     ),
 )
-def test_thread_field_mutations_do_not_overwrite_concurrent_peer_fields(
+async def test_thread_field_mutations_do_not_overwrite_concurrent_peer_fields(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     actions: tuple[str, str],
     expected_title: str,
     expected_thinking: bool,
 ) -> None:
     home = tmp_path / "home"
     database = home / "application.db"
-    conversation = ConversationService(store=SQLiteConversationRepositories(database))
-    thread = conversation.create_thread(
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(application_database)
+    )
+    thread = await conversation.create_thread(
         "workspace_1",
         "Original title",
         current_model="deepseek/deepseek-v4-flash",
@@ -428,7 +451,7 @@ def test_thread_field_mutations_do_not_overwrite_concurrent_peer_fields(
         actions=actions,
     )
 
-    final = conversation.read_thread(thread.id).thread
+    final = (await conversation.read_thread(thread.id)).thread
     assert final.current_model == "kimi/kimi-k2.6"
     assert final.title == expected_title
     assert final.thinking_enabled is expected_thinking
@@ -459,15 +482,15 @@ def test_thread_field_mutations_do_not_overwrite_concurrent_peer_fields(
         ),
     ),
 )
-def test_provider_model_journal_recovers_after_process_kill(
+async def test_provider_model_journal_recovers_after_process_kill(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     phase: str,
     expected_model: str,
     expected_journal_phase: ProviderModelTransactionPhase,
 ) -> None:
     home = tmp_path / "home"
     config = home / "config.yaml"
-    database = home / "application.db"
     writer = UserConfigWriter(config)
     writer.update(
         lambda current: current.model_copy(
@@ -478,8 +501,10 @@ def test_provider_model_journal_recovers_after_process_kill(
             }
         )
     )
-    conversation = ConversationService(store=SQLiteConversationRepositories(database))
-    thread = conversation.create_thread(
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(application_database)
+    )
+    thread = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
@@ -551,7 +576,9 @@ def test_provider_model_journal_recovers_after_process_kill(
     }
     assert journal.read() is None
     assert writer.read().providers.default_model == expected_model
-    assert conversation.read_thread(thread.id).thread.current_model == expected_model
+    assert (
+        await conversation.read_thread(thread.id)
+    ).thread.current_model == expected_model
 
 
 @pytest.mark.parametrize(

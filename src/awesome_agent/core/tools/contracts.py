@@ -73,7 +73,7 @@ class ToolActivityDraft(BaseModel):
 
 
 class ToolActivityWriter(Protocol):
-    def finalize(self, activity: ToolActivityDraft) -> None: ...
+    async def finalize(self, activity: ToolActivityDraft) -> None: ...
 
 
 class ToolSpec(BaseModel):

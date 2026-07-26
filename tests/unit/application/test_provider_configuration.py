@@ -4,9 +4,10 @@ import asyncio
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 import pytest
 from dotenv import dotenv_values
@@ -31,6 +32,7 @@ from awesome_agent.application.provider_configuration import (
     ProviderConfigurationRecoveryRequired,
     ProviderConfigurationService,
     reconcile_provider_credential_transaction,
+    reconcile_provider_model_transaction,
 )
 from awesome_agent.config import (
     ApplicationConfig,
@@ -50,12 +52,136 @@ from awesome_agent.config import (
 from awesome_agent.config.credential_transaction import (
     ProviderCredentialTransactionJournal,
 )
-from awesome_agent.config.model_transaction import ProviderModelTransactionJournal
+from awesome_agent.config.model_transaction import (
+    ProviderModelTransactionJournal,
+    ProviderModelTransactionPhase,
+    ProviderModelTransactionRecord,
+)
 from awesome_agent.config.resource_lock import exclusive_resource_lock
-from awesome_agent.conversation import ConversationService, ThreadNotFound
+from awesome_agent.conversation import ConversationService, ThreadNotFound, ThreadView
 from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
 from awesome_agent.paths import AwesomePaths
+from awesome_agent.storage import ApplicationSQLite, ApplicationSQLiteUnavailable
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+
+_ACTIVE_DATABASE: ApplicationSQLite | None = None
+
+
+@pytest.fixture(autouse=True)
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    global _ACTIVE_DATABASE
+    assert _ACTIVE_DATABASE is None
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    _ACTIVE_DATABASE = database
+    try:
+        yield database
+    finally:
+        _ACTIVE_DATABASE = None
+        await database.aclose()
+
+
+def _database() -> ApplicationSQLite:
+    assert _ACTIVE_DATABASE is not None
+    return _ACTIVE_DATABASE
+
+
+class _ModelTransactionProxy:
+    def __init__(
+        self,
+        delegate: provider_configuration.ConversationModelTransaction,
+        *,
+        before_set: Callable[[str, str | None], None] | None = None,
+        after_set: Callable[[str, str | None], None] | None = None,
+    ) -> None:
+        self._delegate = delegate
+        self._before_set = before_set
+        self._after_set = after_set
+
+    def read_thread(self, thread_id: str) -> ThreadView:
+        return self._delegate.read_thread(thread_id)
+
+    def set_model(
+        self,
+        thread_id: str,
+        model: str | None,
+        *,
+        updated_at: datetime,
+    ) -> object:
+        if self._before_set is not None:
+            self._before_set(thread_id, model)
+        updated = self._delegate.set_model(
+            thread_id,
+            model,
+            updated_at=updated_at,
+        )
+        if self._after_set is not None:
+            self._after_set(thread_id, model)
+        return updated
+
+
+class _TransactionBoundaryConnection:
+    def __init__(
+        self,
+        delegate: sqlite3.Connection,
+        *,
+        statement: Literal["COMMIT", "ROLLBACK"],
+        error: Exception,
+        fail_after_statement: bool,
+    ) -> None:
+        self._delegate = delegate
+        self._statement = statement
+        self._error = error
+        self._fail_after_statement = fail_after_statement
+        self._failed = False
+        self._write_transaction_active = False
+
+    def execute(
+        self,
+        sql: str,
+        parameters: Any = (),
+    ) -> sqlite3.Cursor:
+        statement = sql.strip().upper()
+        if statement == "BEGIN IMMEDIATE":
+            self._write_transaction_active = True
+        should_fail = (
+            self._write_transaction_active
+            and not self._failed
+            and statement == self._statement
+        )
+        if should_fail:
+            self._failed = True
+            if not self._fail_after_statement:
+                raise self._error
+        cursor = self._delegate.execute(sql, parameters)
+        if statement in {"COMMIT", "ROLLBACK"}:
+            self._write_transaction_active = False
+        if should_fail:
+            raise self._error
+        return cursor
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+
+def _fail_next_transaction_boundary(
+    *,
+    statement: Literal["COMMIT", "ROLLBACK"],
+    error: Exception,
+    fail_after_statement: bool,
+) -> None:
+    database = cast(Any, _database())
+    connection = database._connection
+    assert isinstance(connection, sqlite3.Connection)
+    database._connection = cast(
+        sqlite3.Connection,
+        _TransactionBoundaryConnection(
+            connection,
+            statement=statement,
+            error=error,
+            fail_after_statement=fail_after_statement,
+        ),
+    )
 
 
 class FakeValidator:
@@ -86,6 +212,7 @@ def _service(
     validator: FakeValidator,
     environ: Mapping[str, str] | None = None,
     runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> tuple[
     ProviderConfigurationService,
     ConversationService,
@@ -95,9 +222,8 @@ def _service(
     workspace = tmp_path / "workspace"
     paths = AwesomePaths.from_home(home)
     environment = dict(environ or {})
-    conversation = ConversationService(
-        store=SQLiteConversationRepositories(tmp_path / "application.db")
-    )
+    repositories = SQLiteConversationRepositories(_database())
+    conversation = ConversationService(store=repositories, clock=clock)
 
     def sources() -> LoadedConfigSources:
         return load_config_sources(
@@ -124,6 +250,7 @@ def _service(
 
     service = ProviderConfigurationService(
         conversation=conversation,
+        model_transactions=repositories.run_write_transaction,
         config_writer=UserConfigWriter(paths.config_file),
         secret_store=UserSecretStore(paths.env_file),
         validator=validator,
@@ -137,6 +264,7 @@ def _service(
             paths.provider_credential_transaction_file,
             paths.provider_credential_backup_file,
         ),
+        clock=clock,
     )
     return service, conversation, sources
 
@@ -234,10 +362,10 @@ def _service_with_secret_store(
         publication.require_active()
         return None
 
+    repositories = SQLiteConversationRepositories(_database())
     return ProviderConfigurationService(
-        conversation=ConversationService(
-            store=SQLiteConversationRepositories(tmp_path / "application.db")
-        ),
+        conversation=ConversationService(store=repositories),
+        model_transactions=repositories.run_write_transaction,
         config_writer=UserConfigWriter(paths.config_file),
         secret_store=secret_store,
         validator=FakeValidator(CredentialValidationStatus.VALID),
@@ -262,7 +390,7 @@ async def test_model_selects_provider_before_model_and_bridges_missing_auth(
         tmp_path,
         validator=FakeValidator(CredentialValidationStatus.VALID),
     )
-    thread = conversation.create_thread("workspace_1")
+    thread = await conversation.create_thread("workspace_1")
 
     providers = await service.model_command(
         CommandIntent(name=CommandName.MODEL),
@@ -295,7 +423,7 @@ async def test_valid_credential_enables_provider_model_selection(
 ) -> None:
     validator = FakeValidator(CredentialValidationStatus.VALID)
     service, conversation, sources = _service(tmp_path, validator=validator)
-    thread = conversation.create_thread("workspace_1")
+    thread = await conversation.create_thread("workspace_1")
 
     saved = await service.set_credential(
         ProviderCredentialSetRequest(
@@ -493,7 +621,7 @@ async def test_abandoned_credential_worker_fences_late_commit_until_restart(
 
 
 @pytest.mark.asyncio
-async def test_abandoned_model_worker_fences_late_commit_until_restart(
+async def test_cancelled_model_change_waits_for_persist_and_finalize_before_raising(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -504,44 +632,29 @@ async def test_abandoned_model_worker_fences_late_commit_until_restart(
         environ={"DEEPSEEK_API_KEY": "environment-secret"},
         runtime=runtime,
     )
-    thread = conversation.create_thread(
+    thread = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
-    initial_runtime = runtime[0]
-    model_written = threading.Event()
-    release_transaction = threading.Event()
-    transaction_completed = threading.Event()
-    real_set_model = conversation.set_model
+    first_phase_committed = asyncio.Event()
+    release_finalize = asyncio.Event()
+    transaction_calls = 0
+    real_transactions = service._model_transactions
 
-    def block_after_model_write(thread_id: str, model: str | None) -> object:
-        updated = real_set_model(thread_id, model)
-        model_written.set()
-        if not release_transaction.wait(2.0):
-            raise AssertionError("Model transaction release was not signalled.")
-        transaction_completed.set()
-        return updated
-
-    monkeypatch.setattr(conversation, "set_model", block_after_model_write)
-
-    async def short_cleanup(
-        call: Callable[[], object],
-        *,
-        on_completed: Callable[[object], None] | None = None,
-        on_abandoned: Callable[[], None] | None = None,
+    async def block_between_phases(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
     ) -> object:
-        return await run_cancellation_safe_blocking_call(
-            call,
-            on_completed=on_completed,
-            on_abandoned=on_abandoned,
-            cleanup_timeout_seconds=0.02,
-        )
+        nonlocal transaction_calls
+        result = await real_transactions(operation)
+        transaction_calls += 1
+        if transaction_calls == 1:
+            first_phase_committed.set()
+            await release_finalize.wait()
+        return result
 
-    monkeypatch.setattr(
-        provider_configuration,
-        "run_cancellation_safe_blocking_call",
-        short_cleanup,
-    )
+    monkeypatch.setattr(service, "_model_transactions", block_between_phases)
     operation = asyncio.create_task(
         service.model_command(
             CommandIntent(
@@ -551,30 +664,502 @@ async def test_abandoned_model_worker_fences_late_commit_until_restart(
             thread_id=thread.id,
         )
     )
-    try:
-        assert await asyncio.to_thread(model_written.wait, 1.0)
-        operation.cancel("shutdown")
-        with pytest.raises(asyncio.CancelledError):
-            await operation
-    finally:
-        release_transaction.set()
+    await asyncio.wait_for(first_phase_committed.wait(), timeout=1)
+    committed = service._model_transaction_journal.read()
+    assert committed is not None
+    assert committed.phase is ProviderModelTransactionPhase.COMMITTED
+    operation.cancel("shutdown")
+    await asyncio.sleep(0)
+    assert operation.done() is False
+    release_finalize.set()
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await operation
 
-    assert await asyncio.to_thread(transaction_completed.wait, 1.0)
-    deadline = asyncio.get_running_loop().time() + 1.0
-    while service._model_transaction_journal.read() is not None:
-        assert asyncio.get_running_loop().time() < deadline
-        await asyncio.sleep(0.01)
-
-    assert runtime[0] is initial_runtime
+    assert cancelled.value.args == ("shutdown",)
+    assert transaction_calls == 2
+    assert service._model_transaction_journal.read() is None
     assert (
-        conversation.read_thread(thread.id).thread.current_model
-        == "deepseek/deepseek-v4-pro"
+        await conversation.read_thread(thread.id)
+    ).thread.current_model == "deepseek/deepseek-v4-pro"
+    assert runtime[0][1].providers.default_model == "deepseek/deepseek-v4-pro"
+    service.require_consistent()
+
+
+@pytest.mark.asyncio
+async def test_model_commit_outcome_error_with_exact_target_applies_runtime(
+    tmp_path: Path,
+) -> None:
+    runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+    service, conversation, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+        runtime=runtime,
     )
+    thread = await conversation.create_thread(
+        "workspace_1",
+        current_model="deepseek/deepseek-v4-flash",
+    )
+    initial_runtime = runtime[0]
+    _fail_next_transaction_boundary(
+        statement="COMMIT",
+        error=sqlite3.OperationalError("injected uncertain COMMIT outcome"),
+        fail_after_statement=True,
+    )
+
+    outcome = await service.model_command(
+        CommandIntent(
+            name=CommandName.MODEL,
+            arguments=("deepseek", "deepseek/deepseek-v4-pro"),
+        ),
+        thread_id=thread.id,
+    )
+
+    assert isinstance(outcome, CommandResult)
+    assert service._model_transaction_journal.read() is None
+    assert sources().user.providers.default_model == "deepseek/deepseek-v4-pro"
+    assert (
+        await conversation.read_thread(thread.id)
+    ).thread.current_model == "deepseek/deepseek-v4-pro"
+    assert runtime[0] is not initial_runtime
+    assert runtime[0][1].providers.default_model == "deepseek/deepseek-v4-pro"
+    service.require_consistent()
+
+
+@pytest.mark.asyncio
+async def test_model_commit_failure_before_commit_fences_mixed_endpoint(
+    tmp_path: Path,
+) -> None:
+    runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+    service, conversation, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+        runtime=runtime,
+    )
+    thread = await conversation.create_thread(
+        "workspace_1",
+        current_model="deepseek/deepseek-v4-flash",
+    )
+    initial_runtime = runtime[0]
+    primary = sqlite3.OperationalError("injected COMMIT failure")
+    _fail_next_transaction_boundary(
+        statement="COMMIT",
+        error=primary,
+        fail_after_statement=False,
+    )
+
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as captured:
+        await service.model_command(
+            CommandIntent(
+                name=CommandName.MODEL,
+                arguments=("deepseek", "deepseek/deepseek-v4-pro"),
+            ),
+            thread_id=thread.id,
+        )
+
+    failure = captured.value
+    assert failure.primary_error is primary
+    assert failure.recovery_failures[0][0] == "database_commit"
+    committed = service._model_transaction_journal.read()
+    assert committed is not None
+    assert committed.phase is ProviderModelTransactionPhase.COMMITTED
+    assert sources().user.providers.default_model == "deepseek/deepseek-v4-pro"
+    assert (
+        await conversation.read_thread(thread.id)
+    ).thread.current_model == "deepseek/deepseek-v4-flash"
+    assert runtime[0] is initial_runtime
     with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
         service.require_consistent()
-    assert "cancellation_cleanup_abandoned" in {
-        stage for stage, _ in fenced.value.recovery_failures
-    }
+    assert fenced.value is failure
+
+
+@pytest.mark.asyncio
+async def test_model_rollback_outcome_error_preserves_prepared_journal_and_fences(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+    service, conversation, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+        runtime=runtime,
+    )
+    thread = await conversation.create_thread(
+        "workspace_1",
+        current_model="deepseek/deepseek-v4-flash",
+    )
+    initial_runtime = runtime[0]
+    mutation_error = sqlite3.OperationalError("injected Thread update failure")
+    rollback_error = sqlite3.OperationalError("injected ROLLBACK outcome error")
+    raised = False
+
+    def fail_after_target(thread_id: str, model: str | None) -> None:
+        nonlocal raised
+        del thread_id
+        if model == "deepseek/deepseek-v4-pro" and not raised:
+            raised = True
+            raise mutation_error
+
+    real_transactions = service._model_transactions
+
+    async def failing_transactions(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        return await real_transactions(
+            lambda transaction: operation(
+                _ModelTransactionProxy(transaction, after_set=fail_after_target)
+            )
+        )
+
+    monkeypatch.setattr(service, "_model_transactions", failing_transactions)
+    _fail_next_transaction_boundary(
+        statement="ROLLBACK",
+        error=rollback_error,
+        fail_after_statement=True,
+    )
+
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as captured:
+        await service.model_command(
+            CommandIntent(
+                name=CommandName.MODEL,
+                arguments=("deepseek", "deepseek/deepseek-v4-pro"),
+            ),
+            thread_id=thread.id,
+        )
+
+    failure = captured.value
+    assert failure.primary_error is mutation_error
+    assert failure.recovery_failures[0][0] == "database_rollback"
+    database_error = failure.recovery_failures[0][1]
+    assert isinstance(database_error, ApplicationSQLiteUnavailable)
+    fatal_error = database_error.__cause__
+    assert fatal_error is not None
+    assert fatal_error.__cause__ is rollback_error
+    prepared = service._model_transaction_journal.read()
+    assert prepared is not None
+    assert prepared.phase is ProviderModelTransactionPhase.PREPARED
+    assert sources().user.providers.default_model is None
+    with pytest.raises(ApplicationSQLiteUnavailable):
+        await conversation.read_thread(thread.id)
+    await _database().aclose()
+    inspection_database = ApplicationSQLite(tmp_path / "application.db")
+    try:
+        await inspection_database.initialize()
+        inspection_conversation = ConversationService(
+            store=SQLiteConversationRepositories(inspection_database)
+        )
+        assert (
+            await inspection_conversation.read_thread(thread.id)
+        ).thread.current_model == "deepseek/deepseek-v4-flash"
+    finally:
+        await inspection_database.aclose()
+    assert runtime[0] is initial_runtime
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
+        service.require_consistent()
+    assert fenced.value is failure
+
+
+@pytest.mark.asyncio
+async def test_model_commit_error_accepts_peer_reconciled_and_cleared_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+    service, conversation, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+        runtime=runtime,
+    )
+    thread = await conversation.create_thread(
+        "workspace_1",
+        current_model="deepseek/deepseek-v4-flash",
+    )
+    initial_runtime = runtime[0]
+    primary = sqlite3.OperationalError("injected uncertain COMMIT outcome")
+    _fail_next_transaction_boundary(
+        statement="COMMIT",
+        error=primary,
+        fail_after_statement=True,
+    )
+    real_transactions = service._model_transactions
+    first_call = True
+
+    async def reconcile_after_boundary_error(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        nonlocal first_call
+        if not first_call:
+            return await real_transactions(operation)
+        first_call = False
+        try:
+            return await real_transactions(operation)
+        except sqlite3.OperationalError as error:
+            assert error is primary
+            changed = await reconcile_provider_model_transaction(
+                journal=service._model_transaction_journal,
+                config_writer=service._config_writer,
+                model_transactions=real_transactions,
+            )
+            assert changed is True
+            assert service._model_transaction_journal.read() is None
+            service._config_writer.update(
+                lambda current: current.model_copy(
+                    update={
+                        "budgets": current.budgets.model_copy(
+                            update={"model_calls": 17}
+                        )
+                    }
+                )
+            )
+            raise
+
+    monkeypatch.setattr(
+        service,
+        "_model_transactions",
+        reconcile_after_boundary_error,
+    )
+
+    outcome = await service.model_command(
+        CommandIntent(
+            name=CommandName.MODEL,
+            arguments=("deepseek", "deepseek/deepseek-v4-pro"),
+        ),
+        thread_id=thread.id,
+    )
+
+    assert isinstance(outcome, CommandResult)
+    assert service._model_transaction_journal.read() is None
+    assert sources().user.providers.default_model == "deepseek/deepseek-v4-pro"
+    assert (
+        await conversation.read_thread(thread.id)
+    ).thread.current_model == "deepseek/deepseek-v4-pro"
+    assert runtime[0] is not initial_runtime
+    assert runtime[0][1].providers.default_model == "deepseek/deepseek-v4-pro"
+    assert runtime[0][1].budgets.model_calls == 17
+    service.require_consistent()
+
+
+@pytest.mark.asyncio
+async def test_model_finalize_clear_failure_fences_and_preserves_committed_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+    service, conversation, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+        runtime=runtime,
+    )
+    thread = await conversation.create_thread(
+        "workspace_1",
+        current_model="deepseek/deepseek-v4-flash",
+    )
+    initial_runtime = runtime[0]
+    primary = OSError("injected model journal clear failure")
+
+    def fail_clear(record: ProviderModelTransactionRecord) -> None:
+        assert record.phase is ProviderModelTransactionPhase.COMMITTED
+        raise primary
+
+    monkeypatch.setattr(service._model_transaction_journal, "clear", fail_clear)
+
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as captured:
+        await service.model_command(
+            CommandIntent(
+                name=CommandName.MODEL,
+                arguments=("deepseek", "deepseek/deepseek-v4-pro"),
+            ),
+            thread_id=thread.id,
+        )
+
+    failure = captured.value
+    assert failure.primary_error is primary
+    assert failure.recovery_failures == (("journal_finalize", primary),)
+    committed = service._model_transaction_journal.read()
+    assert committed is not None
+    assert committed.phase is ProviderModelTransactionPhase.COMMITTED
+    assert sources().user.providers.default_model == "deepseek/deepseek-v4-pro"
+    assert (
+        await conversation.read_thread(thread.id)
+    ).thread.current_model == "deepseek/deepseek-v4-pro"
+    assert runtime[0] is initial_runtime
+    with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
+        service.require_consistent()
+    assert fenced.value is failure
+
+
+@pytest.mark.asyncio
+async def test_model_finalize_accepts_peer_cleared_matching_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime: list[tuple[LoadedConfigSources, ApplicationConfig]] = []
+    service, conversation, sources = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+        runtime=runtime,
+    )
+    thread = await conversation.create_thread(
+        "workspace_1",
+        current_model="deepseek/deepseek-v4-flash",
+    )
+    transaction_calls = 0
+    real_transactions = service._model_transactions
+
+    async def clear_between_phases(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        nonlocal transaction_calls
+        result = await real_transactions(operation)
+        transaction_calls += 1
+        if transaction_calls == 1:
+            committed = service._model_transaction_journal.read()
+            assert committed is not None
+            assert committed.phase is ProviderModelTransactionPhase.COMMITTED
+            service._model_transaction_journal.clear(committed)
+        return result
+
+    monkeypatch.setattr(service, "_model_transactions", clear_between_phases)
+
+    outcome = await service.model_command(
+        CommandIntent(
+            name=CommandName.MODEL,
+            arguments=("deepseek", "deepseek/deepseek-v4-pro"),
+        ),
+        thread_id=thread.id,
+    )
+
+    assert isinstance(outcome, CommandResult)
+    assert transaction_calls == 2
+    assert service._model_transaction_journal.read() is None
+    assert sources().user.providers.default_model == "deepseek/deepseek-v4-pro"
+    assert (
+        await conversation.read_thread(thread.id)
+    ).thread.current_model == "deepseek/deepseek-v4-pro"
+    assert runtime[0][1].providers.default_model == "deepseek/deepseek-v4-pro"
+    service.require_consistent()
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_accepts_peer_cleared_matching_journal(
+    tmp_path: Path,
+) -> None:
+    service, conversation, _ = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+    )
+    thread = await conversation.create_thread(
+        "workspace_1",
+        current_model="deepseek/deepseek-v4-flash",
+    )
+    target = "deepseek/deepseek-v4-pro"
+    prepared = service._model_transaction_journal.prepare(
+        ProviderModelTransactionRecord(
+            phase=ProviderModelTransactionPhase.PREPARED,
+            thread_id=thread.id,
+            previous_default_model=None,
+            target_default_model=target,
+            previous_thread_model="deepseek/deepseek-v4-flash",
+            target_thread_model=target,
+        )
+    )
+    service._config_writer.update(
+        lambda current: current.model_copy(
+            update={
+                "providers": current.providers.model_copy(
+                    update={"default_model": target}
+                )
+            }
+        )
+    )
+    await conversation.set_model(thread.id, target)
+    committed = service._model_transaction_journal.mark_committed(prepared)
+    transaction_calls = 0
+    real_transactions = service._model_transactions
+
+    async def peer_clears_after_reconcile(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        nonlocal transaction_calls
+        result = await real_transactions(operation)
+        transaction_calls += 1
+        if transaction_calls == 1:
+            service._model_transaction_journal.clear(committed)
+        return result
+
+    changed = await reconcile_provider_model_transaction(
+        journal=service._model_transaction_journal,
+        config_writer=service._config_writer,
+        model_transactions=cast(Any, peer_clears_after_reconcile),
+    )
+
+    assert changed is True
+    assert transaction_calls == 2
+    assert service._model_transaction_journal.read() is None
+    assert service._config_writer.read().providers.default_model == target
+    assert (await conversation.read_thread(thread.id)).thread.current_model == target
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_skips_busy_database_when_model_journal_is_absent(
+    tmp_path: Path,
+) -> None:
+    service, _, _ = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+    )
+    entered = threading.Event()
+    release = threading.Event()
+
+    def occupy_writer(connection: sqlite3.Connection) -> None:
+        del connection
+        entered.set()
+        if not release.wait(2.0):
+            raise AssertionError("Busy Application SQLite writer was not released.")
+
+    writer = asyncio.create_task(_database().write(occupy_writer))
+    assert await asyncio.to_thread(entered.wait, 1.0)
+    transaction_calls = 0
+    real_transactions = service._model_transactions
+
+    async def counting_transactions(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        nonlocal transaction_calls
+        transaction_calls += 1
+        return await real_transactions(operation)
+
+    try:
+        changed = await asyncio.wait_for(
+            reconcile_provider_model_transaction(
+                journal=service._model_transaction_journal,
+                config_writer=service._config_writer,
+                model_transactions=cast(Any, counting_transactions),
+            ),
+            timeout=0.25,
+        )
+    finally:
+        release.set()
+        await writer
+
+    assert changed is False
+    assert transaction_calls == 0
 
 
 @pytest.mark.parametrize(
@@ -1086,9 +1671,9 @@ async def test_runtime_publication_timeout_revokes_stubborn_late_publish(
     assert child_cancelled.is_set()
     with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
         service.require_consistent()
-    assert {
-        stage for stage, _ in fenced.value.recovery_failures
-    } == {"runtime_publish_abandoned"}
+    assert {stage for stage, _ in fenced.value.recovery_failures} == {
+        "runtime_publish_abandoned"
+    }
 
     allow_late_completion.set()
     await asyncio.wait_for(child_finished.wait(), timeout=1)
@@ -1110,7 +1695,7 @@ async def test_cancelled_model_change_keeps_user_default_and_thread_consistent(
         environ={"DEEPSEEK_API_KEY": "environment-secret"},
         runtime=runtime,
     )
-    thread = conversation.create_thread("workspace_1")
+    thread = await conversation.create_thread("workspace_1")
     config_path = AwesomePaths.from_home(tmp_path / "home").config_file
     entered = threading.Event()
     holder = threading.Thread(
@@ -1139,13 +1724,13 @@ async def test_cancelled_model_change_keeps_user_default_and_thread_consistent(
         await asyncio.to_thread(holder.join, 1.0)
 
     assert sources().user.providers.default_model == "deepseek/deepseek-v4-pro"
-    assert conversation.read_thread(thread.id).thread.current_model == (
+    assert (await conversation.read_thread(thread.id)).thread.current_model == (
         "deepseek/deepseek-v4-pro"
     )
     assert runtime[0][1].providers.default_model == "deepseek/deepseek-v4-pro"
 
 
-def _assert_model_state_unchanged(
+async def _assert_model_state_unchanged(
     *,
     tmp_path: Path,
     conversation: ConversationService,
@@ -1155,7 +1740,7 @@ def _assert_model_state_unchanged(
 ) -> None:
     paths = AwesomePaths.from_home(tmp_path / "home")
     assert UserConfigWriter(paths.config_file).read().providers.default_model is None
-    assert conversation.read_thread(thread_id).thread.current_model == (
+    assert (await conversation.read_thread(thread_id)).thread.current_model == (
         "deepseek/deepseek-v4-flash"
     )
     assert runtime[0] is initial_runtime
@@ -1173,18 +1758,31 @@ async def test_model_thread_not_found_after_config_write_rolls_back_every_state(
         environ={"DEEPSEEK_API_KEY": "environment-secret"},
         runtime=runtime,
     )
-    thread = conversation.create_thread(
+    thread = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
     initial_runtime = runtime[0]
     primary = ThreadNotFound(thread.id)
 
-    def fail_model_update(thread_id: str, model: str | None) -> object:
+    def fail_model_update(thread_id: str, model: str | None) -> None:
         del thread_id, model
         raise primary
 
-    monkeypatch.setattr(conversation, "set_model", fail_model_update)
+    real_transactions = service._model_transactions
+
+    async def failing_transactions(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        return await real_transactions(
+            lambda transaction: operation(
+                _ModelTransactionProxy(transaction, before_set=fail_model_update)
+            )
+        )
+
+    monkeypatch.setattr(service, "_model_transactions", failing_transactions)
 
     with pytest.raises(ThreadNotFound) as captured:
         await service.model_command(
@@ -1196,7 +1794,7 @@ async def test_model_thread_not_found_after_config_write_rolls_back_every_state(
         )
 
     assert captured.value is primary
-    _assert_model_state_unchanged(
+    await _assert_model_state_unchanged(
         tmp_path=tmp_path,
         conversation=conversation,
         thread_id=thread.id,
@@ -1217,18 +1815,31 @@ async def test_model_sqlite_failure_after_config_write_rolls_back_every_state(
         environ={"DEEPSEEK_API_KEY": "environment-secret"},
         runtime=runtime,
     )
-    thread = conversation.create_thread(
+    thread = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
     initial_runtime = runtime[0]
     primary = sqlite3.OperationalError("injected SQLite write failure")
 
-    def fail_model_update(thread_id: str, model: str | None) -> object:
+    def fail_model_update(thread_id: str, model: str | None) -> None:
         del thread_id, model
         raise primary
 
-    monkeypatch.setattr(conversation, "set_model", fail_model_update)
+    real_transactions = service._model_transactions
+
+    async def failing_transactions(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        return await real_transactions(
+            lambda transaction: operation(
+                _ModelTransactionProxy(transaction, before_set=fail_model_update)
+            )
+        )
+
+    monkeypatch.setattr(service, "_model_transactions", failing_transactions)
 
     with pytest.raises(sqlite3.OperationalError) as captured:
         await service.model_command(
@@ -1240,7 +1851,7 @@ async def test_model_sqlite_failure_after_config_write_rolls_back_every_state(
         )
 
     assert captured.value is primary
-    _assert_model_state_unchanged(
+    await _assert_model_state_unchanged(
         tmp_path=tmp_path,
         conversation=conversation,
         thread_id=thread.id,
@@ -1261,24 +1872,35 @@ async def test_model_post_commit_exception_restores_thread_and_config(
         environ={"DEEPSEEK_API_KEY": "environment-secret"},
         runtime=runtime,
     )
-    thread = conversation.create_thread(
+    thread = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
     initial_runtime = runtime[0]
     primary = sqlite3.OperationalError("injected post-commit failure")
-    set_model = conversation.set_model
     raised = False
 
-    def commit_then_fail(thread_id: str, model: str | None) -> object:
+    def fail_after_model_write(thread_id: str, model: str | None) -> None:
         nonlocal raised
-        updated = set_model(thread_id, model)
+        del thread_id
         if model == "deepseek/deepseek-v4-pro" and not raised:
             raised = True
             raise primary
-        return updated
 
-    monkeypatch.setattr(conversation, "set_model", commit_then_fail)
+    real_transactions = service._model_transactions
+
+    async def failing_transactions(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        return await real_transactions(
+            lambda transaction: operation(
+                _ModelTransactionProxy(transaction, after_set=fail_after_model_write)
+            )
+        )
+
+    monkeypatch.setattr(service, "_model_transactions", failing_transactions)
 
     with pytest.raises(sqlite3.OperationalError) as captured:
         await service.model_command(
@@ -1290,7 +1912,7 @@ async def test_model_post_commit_exception_restores_thread_and_config(
         )
 
     assert captured.value is primary
-    _assert_model_state_unchanged(
+    await _assert_model_state_unchanged(
         tmp_path=tmp_path,
         conversation=conversation,
         thread_id=thread.id,
@@ -1312,7 +1934,7 @@ async def test_model_snapshot_io_failure_rolls_back_before_thread_update(
         environ={"DEEPSEEK_API_KEY": "environment-secret"},
         runtime=runtime,
     )
-    thread = conversation.create_thread(
+    thread = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
@@ -1323,14 +1945,27 @@ async def test_model_snapshot_io_failure_rolls_back_before_thread_update(
     def fail_load() -> tuple[LoadedConfigSources, ApplicationConfig]:
         raise primary
 
-    def observe_model_update(thread_id: str, model: str | None) -> object:
+    def observe_model_update(thread_id: str, model: str | None) -> None:
         nonlocal model_updates
         del thread_id, model
         model_updates += 1
         raise AssertionError("Thread update must follow a successful reload.")
 
     monkeypatch.setattr(service, "_load_configuration", fail_load)
-    monkeypatch.setattr(conversation, "set_model", observe_model_update)
+    real_transactions = service._model_transactions
+
+    async def observing_transactions(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        return await real_transactions(
+            lambda transaction: operation(
+                _ModelTransactionProxy(transaction, before_set=observe_model_update)
+            )
+        )
+
+    monkeypatch.setattr(service, "_model_transactions", observing_transactions)
 
     with pytest.raises(OSError) as captured:
         await service.model_command(
@@ -1343,7 +1978,7 @@ async def test_model_snapshot_io_failure_rolls_back_before_thread_update(
 
     assert captured.value is primary
     assert model_updates == 0
-    _assert_model_state_unchanged(
+    await _assert_model_state_unchanged(
         tmp_path=tmp_path,
         conversation=conversation,
         thread_id=thread.id,
@@ -1365,7 +2000,7 @@ async def test_model_compensation_failure_requires_restart_and_preserves_primary
         environ={"DEEPSEEK_API_KEY": "environment-secret"},
         runtime=runtime,
     )
-    thread = conversation.create_thread(
+    thread = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
@@ -1373,7 +2008,7 @@ async def test_model_compensation_failure_requires_restart_and_preserves_primary
     primary = sqlite3.OperationalError("injected SQLite write failure")
     rollback = OSError("injected rollback failure")
 
-    def fail_model_update(thread_id: str, model: str | None) -> object:
+    def fail_model_update(thread_id: str, model: str | None) -> None:
         del thread_id, model
         raise primary
 
@@ -1381,7 +2016,20 @@ async def test_model_compensation_failure_requires_restart_and_preserves_primary
         del document
         raise rollback
 
-    monkeypatch.setattr(conversation, "set_model", fail_model_update)
+    real_transactions = service._model_transactions
+
+    async def failing_transactions(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        return await real_transactions(
+            lambda transaction: operation(
+                _ModelTransactionProxy(transaction, before_set=fail_model_update)
+            )
+        )
+
+    monkeypatch.setattr(service, "_model_transactions", failing_transactions)
     monkeypatch.setattr(service._config_writer, "replace", fail_config_restore)
 
     with pytest.raises(ProviderConfigurationRecoveryRequired) as captured:
@@ -1401,7 +2049,7 @@ async def test_model_compensation_failure_requires_restart_and_preserves_primary
     assert str(failure).endswith("Restart Awesome before continuing.")
     assert "Provider configuration recovery requires restart" in caplog.text
     assert runtime[0] is initial_runtime
-    assert conversation.read_thread(thread.id).thread.current_model == (
+    assert (await conversation.read_thread(thread.id)).thread.current_model == (
         "deepseek/deepseek-v4-flash"
     )
     assert service._model_transaction_journal.read() is not None
@@ -1429,7 +2077,7 @@ async def test_cancelled_model_recovery_failure_is_persisted_and_fenced(
         environ={"DEEPSEEK_API_KEY": "environment-secret"},
         runtime=runtime,
     )
-    thread = conversation.create_thread(
+    thread = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
@@ -1437,7 +2085,7 @@ async def test_cancelled_model_recovery_failure_is_persisted_and_fenced(
     primary = sqlite3.OperationalError("injected SQLite write failure")
     rollback = OSError("injected rollback failure")
 
-    def fail_model_update(thread_id: str, model: str | None) -> object:
+    def fail_model_update(thread_id: str, model: str | None) -> None:
         del thread_id, model
         raise primary
 
@@ -1445,7 +2093,20 @@ async def test_cancelled_model_recovery_failure_is_persisted_and_fenced(
         del document
         raise rollback
 
-    monkeypatch.setattr(conversation, "set_model", fail_model_update)
+    real_transactions = service._model_transactions
+
+    async def failing_transactions(
+        operation: Callable[
+            [provider_configuration.ConversationModelTransaction], object
+        ],
+    ) -> object:
+        return await real_transactions(
+            lambda transaction: operation(
+                _ModelTransactionProxy(transaction, before_set=fail_model_update)
+            )
+        )
+
+    monkeypatch.setattr(service, "_model_transactions", failing_transactions)
     monkeypatch.setattr(service._config_writer, "replace", fail_config_restore)
     config_path = AwesomePaths.from_home(tmp_path / "home").config_file
     entered = threading.Event()
@@ -1694,8 +2355,8 @@ async def test_model_selection_updates_current_thread_and_user_default_only(
         "MOONSHOT_API_KEY",
         SecretStr("secret"),
     )
-    current = conversation.create_thread("workspace_1")
-    other = conversation.create_thread(
+    current = await conversation.create_thread("workspace_1")
+    other = await conversation.create_thread(
         "workspace_1",
         current_model="deepseek/deepseek-v4-flash",
     )
@@ -1713,13 +2374,45 @@ async def test_model_selection_updates_current_thread_and_user_default_only(
         model="kimi/kimi-k2.6",
         default_model_updated=True,
     )
-    assert conversation.read_thread(current.id).thread.current_model == (
+    assert (await conversation.read_thread(current.id)).thread.current_model == (
         "kimi/kimi-k2.6"
     )
-    assert conversation.read_thread(other.id).thread.current_model == (
+    assert (await conversation.read_thread(other.id)).thread.current_model == (
         "deepseek/deepseek-v4-flash"
     )
     assert sources().user.providers.default_model == "kimi/kimi-k2.6"
+
+
+@pytest.mark.asyncio
+async def test_model_transaction_uses_the_shared_application_clock(
+    tmp_path: Path,
+) -> None:
+    created_at = datetime(2026, 7, 27, 8, tzinfo=UTC)
+    updated_at = datetime(2026, 7, 27, 9, tzinfo=UTC)
+    timestamps = iter((created_at, updated_at))
+    service, conversation, _ = _service(
+        tmp_path,
+        validator=FakeValidator(CredentialValidationStatus.VALID),
+        clock=lambda: next(timestamps),
+    )
+    UserSecretStore(tmp_path / "home" / ".env").set(
+        "DEEPSEEK_API_KEY",
+        SecretStr("secret"),
+    )
+    thread = await conversation.create_thread("workspace_1")
+
+    result = await service.model_command(
+        CommandIntent(
+            name=CommandName.MODEL,
+            arguments=("deepseek", "deepseek/deepseek-v4-pro"),
+        ),
+        thread_id=thread.id,
+    )
+
+    assert isinstance(result, CommandResult)
+    persisted = (await conversation.read_thread(thread.id)).thread
+    assert persisted.created_at == created_at
+    assert persisted.updated_at == updated_at
 
 
 @pytest.mark.asyncio

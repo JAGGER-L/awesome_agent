@@ -98,11 +98,12 @@ turn.submit(thread_id, content, client_message_id)
   -> release foreground lease
 ```
 
-The cleanup attempts after the primary terminal fact are bounded. Failure does
-not rewrite a completed, cancelled, or failed Turn; startup reconciliation can
-retry leftover checkpoint cleanup.
+Local durable cleanup after the primary terminal fact remains owned until its
+result is known. Failure does not rewrite a completed, cancelled, or failed
+Turn; startup reconciliation can retry leftover checkpoint cleanup. External
+process cleanup and best-effort event publication retain bounded deadlines.
 
-The synchronous durable Turn transition and Operation phase form one commit
+The worker-owned durable Turn transition and Operation phase form one commit
 point. Before it, cancellation wins; after it, cancellation is rejected and
 bounded terminal publication preserves the already committed completed or
 failed outcome. Shutdown observes the same phase and waits rather than issuing
@@ -238,13 +239,15 @@ approval even in Full access.
 
 `operation.cancel` addresses one Operation ID. Cancellation propagates through
 the Operation task into the model stream or Tool Executor. For a Turn,
-Application then records cancellation facts, attempts bounded ChangeSet sealing
-and checkpoint deletion, emits `operation.cancelled`, and releases the lease.
+Application then records cancellation facts and retains foreground ownership
+until local ToolActivity, transcript, ChangeSet sealing, and checkpoint deletion
+reach known results. It then emits `operation.cancelled` and releases the lease.
 Cleanup failure does not replace the cancelled terminal fact and can be retried
 during startup reconciliation. For a shell process, the Process Runner performs
 bounded process-tree and pipe cleanup and then re-raises the original
 `CancelledError`. Direct transcript and ChangeSet finalizers preserve that
-primary cancellation as it crosses the Application boundary.
+primary cancellation as it crosses the Application boundary. Event delivery is
+bounded best-effort and never shortens local durable ownership.
 
 A true cancellation acknowledgement means the matching Operation had not yet
 crossed its commit point; this includes the observable window after
@@ -276,18 +279,23 @@ Turns even if one fails.
 
 ## Shutdown
 
-Shutdown closes foreground admission first. It then cancels an active
-Operation, cancels a separate exclusive owner when necessary, waits until the
-arbiter is idle, and only then closes MCP clients, repositories, databases, and
-process resources under the bootstrap lock.
+Shutdown closes foreground admission first. It cancels an active Operation only
+while that Operation is still running, waits for any committing Operation and a
+separate exclusive owner, and then waits until the arbiter is idle. It retires
+the workspace runtime in reverse resource order, closes the checkpoint saver,
+drains and closes the process-owned Application SQLite worker, and finally
+releases workspace and state leases under the bootstrap lock.
 
 ```text
 shutdown request
   -> foreground.begin_closing()
-  -> cancel and await Operation
+  -> cancel RUNNING Operation / await COMMITTING Operation
   -> cancel exclusive owner if external
   -> wait_idle()
-  -> close MCP and composed resources
+  -> retire runtime (MCP, Mem0, providers)
+  -> close checkpoint saver
+  -> drain and close ApplicationSQLite
+  -> release workspace and state leases
   -> mark Application closed
 ```
 

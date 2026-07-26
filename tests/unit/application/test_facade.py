@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from typing import get_type_hints
 
 import pytest
@@ -27,6 +28,7 @@ from awesome_agent.application.facade import (
     InteractionResult,
     LocalApplication,
     OperationAccepted,
+    ProductErrorCode,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
@@ -34,6 +36,7 @@ from awesome_agent.application.facade import (
     WorkspacePresentation,
 )
 from awesome_agent.config import CredentialSource, SecretStatus
+from awesome_agent.storage import ApplicationSQLiteUnavailable
 
 METHODS = {
     "initialize",
@@ -173,6 +176,27 @@ async def test_facade_initialization_and_shutdown_are_idempotent() -> None:
     assert _unwrap(await facade.shutdown()).stopped is True
 
     assert [name for name, _ in backend.calls] == ["initialize", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_facade_maps_application_sqlite_failure_without_leaking_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = Backend()
+    private_path = tmp_path / "private" / "application.db"
+
+    async def fail_state() -> ApplicationState:
+        raise ApplicationSQLiteUnavailable(private_path)
+
+    monkeypatch.setattr(backend, "application_state", fail_state)
+    outcome = await LocalApplication(backend).get_state()
+
+    assert outcome.ok is False
+    assert outcome.error is not None
+    assert outcome.error.code is ProductErrorCode.STATE_UNAVAILABLE
+    assert outcome.error.retryable is True
+    assert str(private_path) not in outcome.model_dump_json()
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,12 @@
 import os
 import subprocess
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 from types import ModuleType
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import JsonValue
@@ -38,6 +38,7 @@ from awesome_agent.core.tools.permissions import (
 )
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 
 delete_module = __import__(
@@ -54,8 +55,19 @@ write_file_module = __import__(
 )
 
 
-def modifying_fixture(
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
+
+
+async def modifying_fixture(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     *,
     with_change_set: bool = True,
 ) -> tuple[
@@ -69,7 +81,7 @@ def modifying_fixture(
     workspace.mkdir()
     identity = resolve_workspace(workspace)
     journal = ChangeJournal(
-        SQLiteChangeSetStore(tmp_path / "application.db"),
+        SQLiteChangeSetStore(application_database),
         FileChangeBlobStore(tmp_path / "change-journal"),
         identity,
     )
@@ -77,10 +89,12 @@ def modifying_fixture(
     register_modifying_tools(registry, journal)
     change_set_id = None
     if with_change_set:
-        change_set_id = journal.begin(
-            session_id="session_1",
-            turn_id="turn_1",
-            workspace=identity,
+        change_set_id = (
+            await journal.begin(
+                session_id="session_1",
+                turn_id="turn_1",
+                workspace=identity,
+            )
         ).id
     sink = CollectingEventSink()
     context = ToolExecutionContext(
@@ -94,7 +108,7 @@ def modifying_fixture(
             workspace_key=identity.key,
             sink=sink,
         ),
-        activity_writer=Mock(),
+        activity_writer=AsyncMock(),
         monotonic=monotonic,
         change_set_id=change_set_id,
         permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
@@ -179,8 +193,11 @@ def _race_first_journal_mutation(
 @pytest.mark.asyncio
 async def test_write_file_rejects_replacement_of_bound_workspace_root(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
-    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     original = tmp_path / "workspace-original"
     workspace.rename(original)
     workspace.mkdir()
@@ -198,15 +215,18 @@ async def test_write_file_rejects_replacement_of_bound_workspace_root(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.CONFLICT
     assert not (workspace / "replacement.txt").exists()
-    assert journal.seal(context.change_set_id or "").files == []
+    assert (await journal.seal(context.change_set_id or "")).files == []
 
 
 @pytest.mark.asyncio
 async def test_write_file_rejects_target_created_after_missing_validation(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     target = workspace / "target.txt"
     original_resolve = write_file_module.resolve_workspace_path
 
@@ -234,7 +254,7 @@ async def test_write_file_rejects_target_created_after_missing_validation(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.CONFLICT
     assert target.read_text(encoding="utf-8") == "concurrent sentinel"
-    assert journal.seal(context.change_set_id or "").files == []
+    assert (await journal.seal(context.change_set_id or "")).files == []
 
 
 @pytest.mark.asyncio
@@ -259,12 +279,15 @@ async def test_write_file_rejects_target_created_after_missing_validation(
 )
 async def test_write_and_edit_reject_regular_target_generation_replacement(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
     tool_name: str,
     arguments: dict[str, JsonValue],
     module: ModuleType,
 ) -> None:
-    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     target = workspace / "target.txt"
     target.write_text("old generation", encoding="utf-8")
     old_target = workspace / "target.old"
@@ -291,15 +314,18 @@ async def test_write_and_edit_reject_regular_target_generation_replacement(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.CONFLICT
     assert target.read_text(encoding="utf-8") == "new generation sentinel"
-    assert journal.seal(context.change_set_id or "").files == []
+    assert (await journal.seal(context.change_set_id or "")).files == []
 
 
 @pytest.mark.asyncio
 async def test_edit_file_rejects_in_place_change_during_before_snapshot(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     target = workspace / "target.txt"
     target.write_text("old content", encoding="utf-8")
     original_read = os.read
@@ -362,12 +388,17 @@ async def test_edit_file_rejects_in_place_change_during_before_snapshot(
     assert result.error.code is ToolErrorCode.CONFLICT
     assert target.read_text(encoding="utf-8") == "new content"
     assert observed_reads == [b"old content", b"new content"]
-    assert journal.seal(context.change_set_id or "").files == []
+    assert (await journal.seal(context.change_set_id or "")).files == []
 
 
 @pytest.mark.asyncio
-async def test_write_file_approval_describes_the_real_target(tmp_path: Path) -> None:
-    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
+async def test_write_file_approval_describes_the_real_target(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    executor, context, _, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     approvals: list[ToolApprovalRequest] = []
 
     async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
@@ -407,10 +438,13 @@ async def test_write_file_approval_describes_the_real_target(tmp_path: Path) -> 
 )
 async def test_windows_ambiguous_path_is_rejected_before_approval(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
     path: str,
 ) -> None:
-    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, _, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     approvals = 0
 
     async def approve(_request: ToolApprovalRequest) -> ToolApprovalDecision:
@@ -445,8 +479,13 @@ async def test_windows_ambiguous_path_is_rejected_before_approval(
 
 
 @pytest.mark.asyncio
-async def test_write_file_creates_and_overwrites_utf8_content(tmp_path: Path) -> None:
-    executor, context, journal, workspace, sink = modifying_fixture(tmp_path)
+async def test_write_file_creates_and_overwrites_utf8_content(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    executor, context, journal, workspace, sink = await modifying_fixture(
+        tmp_path, application_database
+    )
 
     created = await executor.execute(
         ToolRequest(
@@ -481,13 +520,18 @@ async def test_write_file_creates_and_overwrites_utf8_content(tmp_path: Path) ->
     assert created.status is ToolStatus.SUCCESS
     assert overwritten.status is ToolStatus.SUCCESS
     assert (workspace / "notes.txt").read_text(encoding="utf-8") == "second"
-    change_set = journal.seal(context.change_set_id or "")
+    change_set = await journal.seal(context.change_set_id or "")
     assert len(change_set.files) == 2
 
 
 @pytest.mark.asyncio
-async def test_edit_file_replaces_one_exact_occurrence(tmp_path: Path) -> None:
-    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+async def test_edit_file_replaces_one_exact_occurrence(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    executor, context, journal, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     path = workspace / "app.py"
     path.write_text("before\n", encoding="utf-8")
 
@@ -506,13 +550,18 @@ async def test_edit_file_replaces_one_exact_occurrence(tmp_path: Path) -> None:
 
     assert result.status is ToolStatus.SUCCESS
     assert path.read_text(encoding="utf-8") == "after\n"
-    change_set = journal.seal(context.change_set_id or "")
+    change_set = await journal.seal(context.change_set_id or "")
     assert len(change_set.files) == 1
 
 
 @pytest.mark.asyncio
-async def test_edit_file_rejects_ambiguous_replacement(tmp_path: Path) -> None:
-    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
+async def test_edit_file_rejects_ambiguous_replacement(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    executor, context, _, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     path = workspace / "app.py"
     path.write_text("same same", encoding="utf-8")
 
@@ -556,11 +605,14 @@ async def test_edit_file_rejects_ambiguous_replacement(tmp_path: Path) -> None:
 )
 async def test_mutation_does_not_cross_a_parent_replaced_after_validation(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
     tool_name: str,
     arguments: dict[str, JsonValue],
 ) -> None:
-    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     parent = workspace / "parent"
     parent.mkdir()
     (parent / "target.txt").write_text("before", encoding="utf-8")
@@ -613,10 +665,13 @@ async def test_mutation_does_not_cross_a_parent_replaced_after_validation(
 )
 async def test_mutating_tools_reject_hard_linked_files(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     tool_name: str,
     arguments: dict[str, JsonValue],
 ) -> None:
-    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, _, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
     os.link(outside, workspace / "linked.txt")
@@ -640,9 +695,11 @@ async def test_mutating_tools_reject_hard_linked_files(
 @pytest.mark.asyncio
 async def test_missing_change_set_is_invariant_failure_before_write(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
-    executor, context, _, workspace, _ = modifying_fixture(
+    executor, context, _, workspace, _ = await modifying_fixture(
         tmp_path,
+        application_database,
         with_change_set=False,
     )
 
@@ -663,9 +720,12 @@ async def test_missing_change_set_is_invariant_failure_before_write(
 @pytest.mark.parametrize("target", [".", ".git", ".env"])
 async def test_delete_rejects_root_git_and_sensitive_targets(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     target: str,
 ) -> None:
-    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, _, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     (workspace / ".git").mkdir()
     (workspace / ".env").write_text("SECRET=value", encoding="utf-8")
 
@@ -690,10 +750,13 @@ async def test_delete_rejects_root_git_and_sensitive_targets(
 @pytest.mark.parametrize("target", [r"\outside.txt", "/outside.txt"])
 async def test_delete_rejects_windows_rooted_paths_before_filesystem_access(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
     target: str,
 ) -> None:
-    executor, context, journal, _, _ = modifying_fixture(tmp_path)
+    executor, context, journal, _, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     monkeypatch.setattr(
         "awesome_agent.core.tools.executor.workspace_path_platform",
         lambda: "windows",
@@ -711,15 +774,18 @@ async def test_delete_rejects_windows_rooted_paths_before_filesystem_access(
     assert result.status is ToolStatus.ERROR
     assert result.error is not None
     assert result.error.code is ToolErrorCode.WORKSPACE_ESCAPE
-    assert journal.seal(context.change_set_id or "").files == []
+    assert (await journal.seal(context.change_set_id or "")).files == []
 
 
 @pytest.mark.asyncio
 async def test_delete_capacity_fails_before_removing_any_node(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executor, context, _, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, _, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     target = workspace / "target"
     target.mkdir()
     (target / "one.txt").write_text("one", encoding="utf-8")
@@ -745,9 +811,12 @@ async def test_delete_capacity_fails_before_removing_any_node(
 @pytest.mark.asyncio
 async def test_delete_rejects_regular_target_generation_replacement(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     target = workspace / "target.txt"
     target.write_text("old generation", encoding="utf-8")
     old_target = workspace / "target.old"
@@ -793,14 +862,17 @@ async def test_delete_rejects_regular_target_generation_replacement(
     assert result.error.code is ToolErrorCode.CONFLICT
     assert target.read_text(encoding="utf-8") == "new generation sentinel"
     assert old_target.read_text(encoding="utf-8") == "old generation"
-    assert journal.seal(context.change_set_id or "").files == []
+    assert (await journal.seal(context.change_set_id or "")).files == []
 
 
 @pytest.mark.asyncio
 async def test_delete_rejects_nested_directory_reparse_before_any_mutation(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
-    executor, context, journal, workspace, _ = modifying_fixture(tmp_path)
+    executor, context, journal, workspace, _ = await modifying_fixture(
+        tmp_path, application_database
+    )
     target = workspace / "target"
     target.mkdir()
     local = target / "local.txt"
@@ -844,4 +916,4 @@ async def test_delete_rejects_nested_directory_reparse_before_any_mutation(
     assert result.error.code is ToolErrorCode.PERMISSION_DENIED
     assert local.read_text(encoding="utf-8") == "local"
     assert sentinel.read_text(encoding="utf-8") == "outside"
-    assert journal.seal(context.change_set_id or "").files == []
+    assert (await journal.seal(context.change_set_id or "")).files == []

@@ -59,9 +59,10 @@ Agent ChangeSet associated with the selected Thread. It excludes direct shell
 operations and is zero when that ChangeSet has been undone; it is not a Git
 working-tree dirty count. `/doctor` reports `Unverified` when runtime readiness
 cannot be established instead of assuming that configuration, Application
-SQLite, or checkpoint services are healthy. The two database checks open their
-files read-only and run a bounded SQLite `quick_check`; they do not repair or
-rewrite state.
+SQLite, or checkpoint services are healthy. Application SQLite runs its bounded
+read-only `quick_check` through the process-owned connection, while checkpoint
+readiness is checked through the checkpoint saver. Neither check repairs or
+rewrites state.
 
 ## Memory subcommands
 

@@ -7,7 +7,57 @@ import time
 
 import pytest
 
-from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.cancellation import (
+    finish_cancellation_safe,
+    run_cancellation_safe_blocking_call,
+)
+
+
+@pytest.mark.asyncio
+async def test_owned_action_success_after_cancel_returns_first_cancellation() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def finish() -> str:
+        entered.set()
+        await release.wait()
+        return "persisted"
+
+    operation = asyncio.create_task(finish_cancellation_safe(finish()))
+    await entered.wait()
+    operation.cancel("first cancellation")
+    await asyncio.sleep(0)
+    operation.cancel("second cancellation")
+    release.set()
+
+    result, cancellation = await operation
+
+    assert result == "persisted"
+    assert cancellation is not None
+    assert cancellation.args == ("first cancellation",)
+
+
+@pytest.mark.asyncio
+async def test_owned_action_error_after_cancel_preserves_first_cancellation() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail() -> None:
+        entered.set()
+        await release.wait()
+        raise RuntimeError("late durable failure")
+
+    operation = asyncio.create_task(finish_cancellation_safe(fail()))
+    await entered.wait()
+    operation.cancel("first cancellation")
+    await asyncio.sleep(0)
+    operation.cancel("second cancellation")
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await operation
+
+    assert cancelled.value.args == ("first cancellation",)
 
 
 @pytest.mark.asyncio

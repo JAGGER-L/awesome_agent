@@ -42,6 +42,15 @@ Application SQLite 使用 WAL。多查询读取使用 deferred transaction，使
 页面能观察一致快照，同时不预留唯一 writer。Mutation 使用 `BEGIN IMMEDIATE`，在校验
 和改变产品状态前先取得 writer reservation。
 
+一个进程级 `ApplicationSQLite` 持有有界 FIFO worker thread 和一条长期 connection。面向
+Application 的 repository 暴露 async method；同步 transaction callback 在该 worker 中执行，
+并且只能返回已脱离 SQLite 所有权的 domain value，不能返回 connection、cursor 或 row。
+取消的 read 可以停止等待，已准入的读取仍在后台完成；durable write、initialize、reset、
+suspend 和 close 则会等到明确的 worker 结果，再传播 caller 的第一次 cancellation。这样既
+保持 SQLite 所有权和 transaction 状态明确，也让 event loop 能继续处理紧急控制请求。
+若 SQLite 无法确认 rollback，owner 会关闭并 fail 该 worker，而不会继续复用 transaction
+状态未知的 connection。
+
 一个重要事务是接受首条消息：
 
 ```text
@@ -265,10 +274,10 @@ Coordinator 会对未完成 Turn 分类：
 Change metadata 与 pending intent 位于 Application SQLite；blob 位于
 `state/change-journal`；作用发生在项目文件系统。这三个位置不能共享同一个事务。
 
-Journal 会在发布 blob ID 前写入内容 blob，在 mutation 前持久化 intent，校验结果，
-再记录已提交 change。Undo 和 redo 会在第一次 restore 前持久化所有 intent，并在所有
-restore 成功后提交一次 lifecycle transition。启动校正利用 pending evidence 去完成或
-回滚它能证明的状态。
+Journal 会在发布 blob ID 前写入内容 blob。普通 mutation 随后遵循固定的 durable 顺序：
+提交 pending intent、修改 workspace、提交 ChangeSet 结果，最后提交 pending intent 删除。
+Undo 和 redo 会在第一次 restore 前持久化所有 intent，并在所有 restore 成功后提交一次
+lifecycle transition。启动校正利用 pending evidence 去完成或回滚它能证明的状态。
 
 SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，但数据库、blob
 目录和工作区之间没有共享 directory-fsync 边界。突然断电可能留下保守 pending conflict
@@ -304,6 +313,7 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 ## 源代码与测试索引
 
 - 数据库 schema：`storage/database.py`
+- Application SQLite owner：`storage/application_sqlite.py`
 - Conversation 与 trust：`storage/conversations.py`、`storage/trust.py`
 - Checkpoint：`storage/checkpoints.py`
 - 兼容与重置：`storage/compatibility.py`、`storage/state_recovery.py`
@@ -314,7 +324,8 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
   `application/provider_configuration.py`
 - Provider credential 事务：`config/credential_transaction.py`、
   `config/credentials.py`、`application/provider_configuration.py`
-- 测试：`tests/unit/storage/`、`tests/integration/test_sqlite_checkpoints.py`、
+- 测试：`tests/unit/storage/test_application_sqlite.py`、
+  `tests/unit/storage/`、`tests/integration/test_sqlite_checkpoints.py`、
   `tests/integration/test_agent_recovery.py`、
   `tests/unit/config/test_model_transaction.py`、
   `tests/unit/config/test_credential_transaction.py`、

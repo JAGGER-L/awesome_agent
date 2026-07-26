@@ -28,6 +28,12 @@ class ProviderModelTransactionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: Literal[1] = 1
+    transaction_id: str = Field(
+        default="legacy",
+        min_length=6,
+        max_length=32,
+        pattern=r"^(?:legacy|[0-9a-f]{32})$",
+    )
     phase: ProviderModelTransactionPhase
     thread_id: str = Field(min_length=1, max_length=128)
     previous_default_model: str | None = None

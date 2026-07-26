@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,7 +18,10 @@ from awesome_agent.conversation import (
     TurnStatus,
     UsageSummary,
 )
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+
+pytestmark = pytest.mark.asyncio
 
 
 class DeterministicIds:
@@ -39,12 +43,22 @@ class DeterministicClock:
         return result
 
 
-def _service(path: Path) -> ConversationService:
+def _service(database: ApplicationSQLite) -> ConversationService:
     return ConversationService(
-        store=SQLiteConversationRepositories(path),
+        store=SQLiteConversationRepositories(database),
         id_factory=DeterministicIds(),
         clock=DeterministicClock(),
     )
+
+
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
 
 
 def _turn_config() -> TurnConfig:
@@ -57,14 +71,16 @@ def _turn_config() -> TurnConfig:
     )
 
 
-def test_create_list_and_read_threads_by_workspace(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    first = service.create_thread("workspace_1", "First")
-    second = service.create_thread("workspace_1")
-    service.create_thread("workspace_2", "Other")
+async def test_create_list_and_read_threads_by_workspace(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    first = await service.create_thread("workspace_1", "First")
+    second = await service.create_thread("workspace_1")
+    await service.create_thread("workspace_2", "Other")
 
-    listed = service.list_threads("workspace_1")
-    view = service.read_thread(first.id)
+    listed = await service.list_threads("workspace_1")
+    view = await service.read_thread(first.id)
 
     assert {thread.id for thread in listed} == {first.id, second.id}
     assert second.title == "New conversation"
@@ -75,18 +91,20 @@ def test_create_list_and_read_threads_by_workspace(tmp_path: Path) -> None:
     assert view.turns == ()
 
 
-def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1", "Thread")
+async def test_begin_turn_atomically_appends_user_and_freezes_config(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
     config = _turn_config()
 
-    turn = service.begin_turn(
+    turn = await service.begin_turn(
         thread.id,
         "Inspect repository",
         config,
         client_message_id="client_1",
     )
-    view = service.read_thread(thread.id)
+    view = await service.read_thread(thread.id)
 
     assert turn.checkpoint_key == turn.id
     assert turn.status is TurnStatus.IN_PROGRESS
@@ -102,12 +120,12 @@ def test_begin_turn_atomically_appends_user_and_freezes_config(tmp_path: Path) -
     assert view.turns == (turn,)
 
 
-def test_in_progress_turn_persists_context_snapshot_descriptor(
-    tmp_path: Path,
+async def test_in_progress_turn_persists_context_snapshot_descriptor(
+    application_database: ApplicationSQLite,
 ) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    turn = await service.begin_turn(
         thread.id,
         "Inspect repository",
         _turn_config(),
@@ -126,24 +144,24 @@ def test_in_progress_turn_persists_context_snapshot_descriptor(
         },
     )
 
-    recorded = service.store_context_manifest(turn.id, manifest)
-    repeated = service.store_context_manifest(turn.id, manifest)
+    recorded = await service.store_context_manifest(turn.id, manifest)
+    repeated = await service.store_context_manifest(turn.id, manifest)
 
     assert recorded.context_manifest == manifest
     assert repeated == recorded
-    assert service.read_thread(thread.id).turns[0].context_manifest == manifest
+    assert (await service.read_thread(thread.id)).turns[0].context_manifest == manifest
 
-    service.cancel_turn(turn.id, context_manifest=manifest)
+    await service.cancel_turn(turn.id, context_manifest=manifest)
     with pytest.raises(ConversationConflict):
-        service.store_context_manifest(turn.id, manifest)
+        await service.store_context_manifest(turn.id, manifest)
 
 
-def test_context_manifest_reconciliation_rejects_stale_compare_and_swap(
-    tmp_path: Path,
+async def test_context_manifest_reconciliation_rejects_stale_compare_and_swap(
+    application_database: ApplicationSQLite,
 ) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    turn = await service.begin_turn(
         thread.id,
         "Inspect repository",
         _turn_config(),
@@ -154,96 +172,102 @@ def test_context_manifest_reconciliation_rejects_stale_compare_and_swap(
         {"kind": "product_instructions", "order": 0},
     )
 
-    service.compare_and_swap_context_manifest(
+    await service.compare_and_swap_context_manifest(
         turn.id,
         first,
         expected_context_manifest=(),
     )
 
     with pytest.raises(ConversationConflict):
-        service.compare_and_swap_context_manifest(
+        await service.compare_and_swap_context_manifest(
             turn.id,
             stale,
             expected_context_manifest=(),
         )
 
-    assert service.read_thread(thread.id).turns[0].context_manifest == first
+    assert (await service.read_thread(thread.id)).turns[0].context_manifest == first
 
 
-def test_first_accepted_message_names_an_automatic_thread(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1")
+async def test_first_accepted_message_names_an_automatic_thread(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1")
 
-    service.begin_turn(
+    await service.begin_turn(
         thread.id,
         "  calculate   cube  ",
         _turn_config(),
         client_message_id="client_first",
     )
 
-    view = service.read_thread(thread.id)
+    view = await service.read_thread(thread.id)
     assert view.thread.title == "calculate cube"
     assert view.thread.title_source is ThreadTitleSource.AUTOMATIC
     assert len(view.entries) == 1
     assert len(view.turns) == 1
 
 
-def test_rename_thread_normalizes_and_persists_manual_provenance(
-    tmp_path: Path,
+async def test_rename_thread_normalizes_and_persists_manual_provenance(
+    application_database: ApplicationSQLite,
 ) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1")
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1")
 
-    renamed = service.rename_thread(thread.id, "  Cube   helper  ")
+    renamed = await service.rename_thread(thread.id, "  Cube   helper  ")
 
     assert renamed.title == "Cube helper"
     assert renamed.title_source is ThreadTitleSource.MANUAL
-    assert service.read_thread(thread.id).thread == renamed
+    assert (await service.read_thread(thread.id)).thread == renamed
 
 
-def test_rename_thread_rejects_more_than_100_visible_graphemes(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1")
+async def test_rename_thread_rejects_more_than_100_visible_graphemes(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1")
 
     with pytest.raises(ValueError, match="100 characters or fewer"):
-        service.rename_thread(thread.id, "👩‍💻" * 101)
+        await service.rename_thread(thread.id, "👩‍💻" * 101)
 
 
-def test_one_in_progress_turn_per_thread_but_other_threads_are_independent(
-    tmp_path: Path,
+async def test_one_in_progress_turn_per_thread_but_other_threads_are_independent(
+    application_database: ApplicationSQLite,
 ) -> None:
-    service = _service(tmp_path / "application.db")
-    first = service.create_thread("workspace_1", "First")
-    second = service.create_thread("workspace_1", "Second")
-    service.begin_turn(
+    service = _service(application_database)
+    first = await service.create_thread("workspace_1", "First")
+    second = await service.create_thread("workspace_1", "Second")
+    await service.begin_turn(
         first.id, "first", _turn_config(), client_message_id="client_first"
     )
 
     with pytest.raises(TurnBusy):
-        service.begin_turn(
+        await service.begin_turn(
             first.id,
             "duplicate",
             _turn_config(),
             client_message_id="client_duplicate",
         )
 
-    other = service.begin_turn(
+    other = await service.begin_turn(
         second.id, "second", _turn_config(), client_message_id="client_second"
     )
     assert other.thread_id == second.id
 
 
-def test_completion_appends_assistant_and_is_idempotent(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(
+async def test_completion_appends_assistant_and_is_idempotent(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    turn = await service.begin_turn(
         thread.id, "question", _turn_config(), client_message_id="client_1"
     )
     usage = UsageSummary(input_tokens=10, output_tokens=4, model_calls=1)
 
-    completed = service.complete_turn(turn.id, "answer", usage, "completed")
-    repeated = service.complete_turn(turn.id, "answer", usage, "completed")
-    view = service.read_thread(thread.id)
+    completed = await service.complete_turn(turn.id, "answer", usage, "completed")
+    repeated = await service.complete_turn(turn.id, "answer", usage, "completed")
+    view = await service.read_thread(thread.id)
 
     assert repeated == completed
     assert completed.status is TurnStatus.COMPLETED
@@ -255,41 +279,43 @@ def test_completion_appends_assistant_and_is_idempotent(tmp_path: Path) -> None:
     assert view.entries[1].content == "answer"
 
     with pytest.raises(ConversationConflict):
-        service.complete_turn(turn.id, "different", usage, "completed")
+        await service.complete_turn(turn.id, "different", usage, "completed")
 
 
 @pytest.mark.parametrize(
     ("terminal", "code"),
     [(TurnStatus.FAILED, "model_failed"), (TurnStatus.CANCELLED, None)],
 )
-def test_failure_and_cancellation_are_idempotent_terminal_updates(
-    tmp_path: Path,
+async def test_failure_and_cancellation_are_idempotent_terminal_updates(
+    application_database: ApplicationSQLite,
     terminal: TurnStatus,
     code: str | None,
 ) -> None:
-    service = _service(tmp_path / f"{terminal}.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    turn = await service.begin_turn(
         thread.id, "question", _turn_config(), client_message_id="client_1"
     )
 
     if terminal is TurnStatus.FAILED:
-        result = service.fail_turn(turn.id, code or "model_failed")
-        repeated = service.fail_turn(turn.id, code or "model_failed")
+        result = await service.fail_turn(turn.id, code or "model_failed")
+        repeated = await service.fail_turn(turn.id, code or "model_failed")
     else:
-        result = service.cancel_turn(turn.id)
-        repeated = service.cancel_turn(turn.id)
+        result = await service.cancel_turn(turn.id)
+        repeated = await service.cancel_turn(turn.id)
 
     assert result.status is terminal
     assert repeated == result
     with pytest.raises(InvalidTurnTransition):
-        service.complete_turn(turn.id, "late", UsageSummary(), "completed")
+        await service.complete_turn(turn.id, "late", UsageSummary(), "completed")
 
 
-def test_terminal_turns_persist_facts_and_derive_thread_totals(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    completed = service.begin_turn(
+async def test_terminal_turns_persist_facts_and_derive_thread_totals(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    completed = await service.begin_turn(
         thread.id, "complete", _turn_config(), client_message_id="client_complete"
     )
     complete_usage = UsageSummary(input_tokens=10, output_tokens=4, model_calls=1)
@@ -305,26 +331,26 @@ def test_terminal_turns_persist_facts_and_derive_thread_totals(tmp_path: Path) -
         {"kind": "path", "estimated_tokens": 3},
     )
 
-    service.complete_turn(
+    await service.complete_turn(
         completed.id,
         "done",
         complete_usage,
         "completed",
         complete_manifest,
     )
-    failed = service.begin_turn(
+    failed = await service.begin_turn(
         thread.id, "fail", _turn_config(), client_message_id="client_failed"
     )
-    failed_result = service.fail_turn(
+    failed_result = await service.fail_turn(
         failed.id,
         "model_failed",
         usage=failed_usage,
         context_manifest=failed_manifest,
     )
-    cancelled = service.begin_turn(
+    cancelled = await service.begin_turn(
         thread.id, "cancel", _turn_config(), client_message_id="client_cancelled"
     )
-    cancelled_result = service.cancel_turn(
+    cancelled_result = await service.cancel_turn(
         cancelled.id,
         usage=cancelled_usage,
         context_manifest=cancelled_manifest,
@@ -334,19 +360,19 @@ def test_terminal_turns_persist_facts_and_derive_thread_totals(tmp_path: Path) -
     assert failed_result.context_manifest == failed_manifest
     assert cancelled_result.usage == cancelled_usage
     assert cancelled_result.context_manifest == cancelled_manifest
-    assert service.thread_usage(thread.id) == (
+    assert await service.thread_usage(thread.id) == (
         complete_usage + failed_usage + cancelled_usage
     )
 
 
 @pytest.mark.parametrize("terminal", [TurnStatus.FAILED, TurnStatus.CANCELLED])
-def test_terminal_fact_repetition_is_idempotent_and_conflicts_on_change(
-    tmp_path: Path,
+async def test_terminal_fact_repetition_is_idempotent_and_conflicts_on_change(
+    application_database: ApplicationSQLite,
     terminal: TurnStatus,
 ) -> None:
-    service = _service(tmp_path / f"{terminal}-facts.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    turn = await service.begin_turn(
         thread.id, "question", _turn_config(), client_message_id="client_1"
     )
     usage = UsageSummary(input_tokens=5, model_calls=1)
@@ -355,24 +381,28 @@ def test_terminal_fact_repetition_is_idempotent_and_conflicts_on_change(
     )
 
     if terminal is TurnStatus.FAILED:
-        result = service.fail_turn(
+        result = await service.fail_turn(
             turn.id, "model_failed", usage=usage, context_manifest=manifest
         )
-        repeated = service.fail_turn(
+        repeated = await service.fail_turn(
             turn.id, "model_failed", usage=usage, context_manifest=manifest
         )
         with pytest.raises(ConversationConflict):
-            service.fail_turn(
+            await service.fail_turn(
                 turn.id,
                 "model_failed",
                 usage=UsageSummary(input_tokens=6),
                 context_manifest=manifest,
             )
     else:
-        result = service.cancel_turn(turn.id, usage=usage, context_manifest=manifest)
-        repeated = service.cancel_turn(turn.id, usage=usage, context_manifest=manifest)
+        result = await service.cancel_turn(
+            turn.id, usage=usage, context_manifest=manifest
+        )
+        repeated = await service.cancel_turn(
+            turn.id, usage=usage, context_manifest=manifest
+        )
         with pytest.raises(ConversationConflict):
-            service.cancel_turn(
+            await service.cancel_turn(
                 turn.id,
                 usage=UsageSummary(input_tokens=6),
                 context_manifest=manifest,
@@ -381,34 +411,34 @@ def test_terminal_fact_repetition_is_idempotent_and_conflicts_on_change(
     assert repeated == result
 
 
-def test_latest_context_manifest_skips_newest_empty_terminal_turn(
-    tmp_path: Path,
+async def test_latest_context_manifest_skips_newest_empty_terminal_turn(
+    application_database: ApplicationSQLite,
 ) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    first = service.begin_turn(
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    first = await service.begin_turn(
         thread.id, "first", _turn_config(), client_message_id="client_first"
     )
     manifest: tuple[dict[str, JsonValue], ...] = (
         {"kind": "history", "estimated_tokens": 11},
     )
-    service.complete_turn(first.id, "done", UsageSummary(), "completed", manifest)
-    latest = service.begin_turn(
+    await service.complete_turn(first.id, "done", UsageSummary(), "completed", manifest)
+    latest = await service.begin_turn(
         thread.id, "latest", _turn_config(), client_message_id="client_latest"
     )
-    service.cancel_turn(latest.id)
+    await service.cancel_turn(latest.id)
 
-    assert service.latest_context_manifest(thread.id) == manifest
+    assert await service.latest_context_manifest(thread.id) == manifest
 
 
 @pytest.mark.parametrize("terminal", ("completed", "failed", "cancelled"))
-def test_terminalization_preserves_durable_in_progress_context_snapshot(
-    tmp_path: Path,
+async def test_terminalization_preserves_durable_in_progress_context_snapshot(
+    application_database: ApplicationSQLite,
     terminal: str,
 ) -> None:
-    service = _service(tmp_path / f"preserved-{terminal}.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    turn = await service.begin_turn(
         thread.id,
         "question",
         _turn_config(),
@@ -417,67 +447,73 @@ def test_terminalization_preserves_durable_in_progress_context_snapshot(
     manifest: tuple[dict[str, JsonValue], ...] = (
         {"kind": "current_input", "estimated_tokens": 3},
     )
-    service.store_context_manifest(turn.id, manifest)
+    await service.store_context_manifest(turn.id, manifest)
 
     if terminal == "completed":
-        result = service.complete_turn(
+        result = await service.complete_turn(
             turn.id,
             "answer",
             UsageSummary(),
             "completed",
         )
     elif terminal == "failed":
-        result = service.fail_turn(turn.id, "model_failed")
+        result = await service.fail_turn(turn.id, "model_failed")
     else:
-        result = service.cancel_turn(turn.id)
+        result = await service.cancel_turn(turn.id)
 
     assert result.context_manifest == manifest
 
 
-def test_append_direct_command_uses_next_durable_sequence(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1", "Thread")
-    turn = service.begin_turn(
+async def test_append_direct_command_uses_next_durable_sequence(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
+    turn = await service.begin_turn(
         thread.id, "question", _turn_config(), client_message_id="client_1"
     )
-    service.complete_turn(turn.id, "answer", UsageSummary(), "completed")
+    await service.complete_turn(turn.id, "answer", UsageSummary(), "completed")
 
-    direct = service.append_direct_command(
+    direct = await service.append_direct_command(
         thread.id,
         "$ pytest\nexit=0\n2 passed",
         {"exit_code": 0},
     )
-    view = service.read_thread(thread.id)
+    view = await service.read_thread(thread.id)
 
     assert direct.sequence == 3
     assert direct.kind is ThreadEntryKind.DIRECT_COMMAND
     assert view.entries[-1] == direct
 
 
-def test_empty_user_message_is_rejected_without_durable_rows(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    thread = service.create_thread("workspace_1", "Thread")
+async def test_empty_user_message_is_rejected_without_durable_rows(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    thread = await service.create_thread("workspace_1", "Thread")
 
     with pytest.raises(ValueError, match="empty"):
-        service.begin_turn(
+        await service.begin_turn(
             thread.id, "   ", _turn_config(), client_message_id="client_1"
         )
 
-    view = service.read_thread(thread.id)
+    view = await service.read_thread(thread.id)
     assert view.entries == ()
     assert view.turns == ()
 
 
-def test_service_exposes_bounded_thread_and_entry_pages(tmp_path: Path) -> None:
-    service = _service(tmp_path / "application.db")
-    first = service.create_thread("workspace_1", "First")
-    service.create_thread("workspace_1", "Second")
-    service.begin_turn(
+async def test_service_exposes_bounded_thread_and_entry_pages(
+    application_database: ApplicationSQLite,
+) -> None:
+    service = _service(application_database)
+    first = await service.create_thread("workspace_1", "First")
+    await service.create_thread("workspace_1", "Second")
+    await service.begin_turn(
         first.id, "question", _turn_config(), client_message_id="client_1"
     )
 
-    threads = service.list_thread_page("workspace_1", cursor=None, limit=1)
-    entries = service.read_thread_page(
+    threads = await service.list_thread_page("workspace_1", cursor=None, limit=1)
+    entries = await service.read_thread_page(
         first.id,
         before_sequence=None,
         limit=1,

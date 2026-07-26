@@ -42,7 +42,18 @@ from awesome_agent.modeling import (
     ToolResultMessage,
     TurnCompleted,
 )
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+
+
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
 
 
 class SummaryGateway:
@@ -78,19 +89,19 @@ def _config() -> TurnConfig:
     )
 
 
-def _complete_turns(
+async def _complete_turns(
     conversation: ConversationService,
     thread_id: str,
     count: int,
 ) -> None:
     for index in range(count):
-        turn = conversation.begin_turn(
+        turn = await conversation.begin_turn(
             thread_id,
             f"question {index}",
             _config(),
             client_message_id=f"client_{index}",
         )
-        conversation.complete_turn(
+        await conversation.complete_turn(
             turn.id,
             f"answer {index}",
             UsageSummary(),
@@ -101,6 +112,7 @@ def _complete_turns(
 @pytest.mark.asyncio
 async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_frozen(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
@@ -109,11 +121,11 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
     directory.mkdir()
     (directory / "child.txt").write_text("child", encoding="utf-8")
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    _complete_turns(conversation, thread.id, 8)
-    conversation.append_direct_command(
+    thread = await conversation.create_thread(workspace.key)
+    await _complete_turns(conversation, thread.id, 8)
+    await conversation.append_direct_command(
         thread.id,
         "pytest: passed",
         {"exit_code": 0},
@@ -141,7 +153,7 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
     assert compacted.summary.covered_turn_count == 4
     assert compacted.summary.covered_entry_sequence == 8
 
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread.id,
         "inspect @note.txt @dir",
         _config(),
@@ -192,28 +204,28 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
     assert "after" not in rebuilt_json
     assert "changed process instructions" not in rebuilt_json
 
-    conversation.complete_turn(
+    await conversation.complete_turn(
         turn.id,
         "done",
         UsageSummary(),
         "completed",
         tuple(prepared.manifest),
     )
-    empty_cancelled = conversation.begin_turn(
+    empty_cancelled = await conversation.begin_turn(
         thread.id,
         "cancelled after context",
         _config(),
         client_message_id="client_empty_cancelled",
     )
-    conversation.cancel_turn(empty_cancelled.id)
-    inspected = context_service.inspect(thread.id)
+    await conversation.cancel_turn(empty_cancelled.id)
+    inspected = await context_service.inspect(thread.id)
     serialized = str(inspected)
     assert "before" not in serialized
     assert "child" not in serialized
     assert inspected["summary_covered_turn_count"] == 4
     assert any(
         entry.content == "inspect @note.txt @dir"
-        for entry in conversation.read_thread(thread.id).entries
+        for entry in (await conversation.read_thread(thread.id)).entries
     )
     command = await context_service.context_command(
         CommandIntent(name=CommandName.CONTEXT),
@@ -232,44 +244,45 @@ async def test_multi_turn_summary_direct_command_and_paths_are_bounded_and_froze
 @pytest.mark.asyncio
 async def test_history_preserves_roles_duplicate_content_and_entry_sequence(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
 
-    first = conversation.begin_turn(
+    first = await conversation.begin_turn(
         thread.id,
         "same transcript text",
         _config(),
         client_message_id="client_first",
     )
-    conversation.complete_turn(
+    await conversation.complete_turn(
         first.id,
         "same transcript text",
         UsageSummary(),
         "completed",
     )
-    conversation.append_direct_command(
+    await conversation.append_direct_command(
         thread.id,
         "direct result between turns",
         {"exit_code": 0},
     )
-    second = conversation.begin_turn(
+    second = await conversation.begin_turn(
         thread.id,
         "later question",
         _config(),
         client_message_id="client_second",
     )
-    conversation.complete_turn(
+    await conversation.complete_turn(
         second.id,
         "later answer",
         UsageSummary(),
         "completed",
     )
-    current = conversation.begin_turn(
+    current = await conversation.begin_turn(
         thread.id,
         "current question",
         _config(),
@@ -335,14 +348,15 @@ async def test_history_preserves_roles_duplicate_content_and_entry_sequence(
 @pytest.mark.asyncio
 async def test_mem0_recall_is_frozen_for_repeated_builds_of_one_turn(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    turn = conversation.begin_turn(
+    thread = await conversation.create_thread(workspace.key)
+    turn = await conversation.begin_turn(
         thread.id,
         "remembered preference",
         _config(),
@@ -416,17 +430,19 @@ async def test_mem0_recall_is_frozen_for_repeated_builds_of_one_turn(
     assert any("cloud snapshot 1" in message.content for message in rebuilt.messages)
 
 
-def test_restarted_context_rebuilds_runtime_input_from_persisted_user_entry(
+@pytest.mark.asyncio
+async def test_restarted_context_rebuilds_runtime_input_from_persisted_user_entry(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     (workspace_path / "note.txt").write_text("frozen", encoding="utf-8")
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    turn = conversation.begin_turn(
+    thread = await conversation.create_thread(workspace.key)
+    turn = await conversation.begin_turn(
         thread.id,
         "inspect @note.txt",
         _config(),
@@ -443,23 +459,24 @@ def test_restarted_context_rebuilds_runtime_input_from_persisted_user_entry(
     )
 
     assert restarted.current_input(turn.id) == ""
-    assert restarted.runtime_current_input(turn) == "inspect"
+    assert await restarted.runtime_current_input(turn) == "inspect"
 
 
 @pytest.mark.asyncio
 async def test_restart_compression_uses_frozen_sources_without_external_reads(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     note_path = workspace_path / "note.txt"
     note_path.write_text("frozen file content", encoding="utf-8")
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    _complete_turns(conversation, thread.id, 5)
-    turn = conversation.begin_turn(
+    thread = await conversation.create_thread(workspace.key)
+    await _complete_turns(conversation, thread.id, 5)
+    turn = await conversation.begin_turn(
         thread.id,
         "inspect @note.txt",
         _config(),
@@ -506,7 +523,7 @@ async def test_restart_compression_uses_frozen_sources_without_external_reads(
     state["context_estimated_tokens"] = prepared.estimated_input_tokens
     state["context_effective_limit"] = prepared.effective_input_limit
     note_path.write_text("changed file content", encoding="utf-8")
-    conversation.append_direct_command(
+    await conversation.append_direct_command(
         thread.id,
         "post-turn direct result",
         {"exit_code": 0},
@@ -555,15 +572,16 @@ async def test_restart_compression_uses_frozen_sources_without_external_reads(
 @pytest.mark.asyncio
 async def test_restart_compression_preserves_and_validates_executed_tool_tail(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    _complete_turns(conversation, thread.id, 5)
-    turn = conversation.begin_turn(
+    thread = await conversation.create_thread(workspace.key)
+    await _complete_turns(conversation, thread.id, 5)
+    turn = await conversation.begin_turn(
         thread.id,
         "inspect",
         _config(),
@@ -615,8 +633,8 @@ async def test_restart_compression_preserves_and_validates_executed_tool_tail(
         ).model_dump(mode="json")
     ]
     state["tool_calls"] = 1
-    conversation.store_context_manifest(turn.id, prepared.manifest)
-    frozen_view = conversation.read_thread(thread.id)
+    await conversation.store_context_manifest(turn.id, prepared.manifest)
+    frozen_view = await conversation.read_thread(thread.id)
     frozen_turn = next(item for item in frozen_view.turns if item.id == turn.id)
     assert initial.validate_frozen_snapshot(
         state,
@@ -651,29 +669,29 @@ async def test_restart_compression_preserves_and_validates_executed_tool_tail(
     state["context_manifest"] = list(compressed.prepared.manifest)
     state["context_estimated_tokens"] = compressed.prepared.estimated_input_tokens
     state["context_effective_limit"] = compressed.prepared.effective_input_limit
-    conversation.store_context_manifest(turn.id, compressed.prepared.manifest)
-    persisted_turn = next(
-        item for item in conversation.read_thread(thread.id).turns if item.id == turn.id
-    )
+    await conversation.store_context_manifest(turn.id, compressed.prepared.manifest)
+    persisted_view = await conversation.read_thread(thread.id)
+    persisted_turn = next(item for item in persisted_view.turns if item.id == turn.id)
     assert restarted.validate_frozen_snapshot(
         state,
         turn=persisted_turn,
-        view=conversation.read_thread(thread.id),
+        view=persisted_view,
     )
 
 
 @pytest.mark.asyncio
 async def test_compression_reports_unrecoverable_when_tool_tail_exceeds_limit(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    _complete_turns(conversation, thread.id, 5)
-    turn = conversation.begin_turn(
+    thread = await conversation.create_thread(workspace.key)
+    await _complete_turns(conversation, thread.id, 5)
+    turn = await conversation.begin_turn(
         thread.id,
         "inspect",
         _config(),
@@ -735,7 +753,7 @@ async def test_compression_reports_unrecoverable_when_tool_tail_exceeds_limit(
         for call, observation in zip(calls, observations, strict=True)
     ]
     state["tool_calls"] = len(calls)
-    conversation.store_context_manifest(turn.id, prepared.manifest)
+    await conversation.store_context_manifest(turn.id, prepared.manifest)
 
     compressed = await context_service.compress(state, max_provider_retries=0)
 
@@ -751,14 +769,15 @@ async def test_compression_reports_unrecoverable_when_tool_tail_exceeds_limit(
 async def test_turn_context_capture_is_released_when_operation_task_terminates(
     tmp_path: Path,
     terminal: str,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / terminal
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / f"{terminal}.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    turn = conversation.begin_turn(
+    thread = await conversation.create_thread(workspace.key)
+    turn = await conversation.begin_turn(
         thread.id,
         "captured input",
         _config(),
@@ -826,13 +845,14 @@ class Checkpoints:
 @pytest.mark.asyncio
 async def test_invalid_explicit_path_fails_turn_before_graph_or_model(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     context_service = ApplicationContextService(
         conversation=conversation,
         workspace=workspace,
@@ -848,18 +868,28 @@ async def test_invalid_explicit_path_fails_turn_before_graph_or_model(
         workspace_key=workspace.key,
         sink=CollectingEventSink(),
     )
+
+    async def runtime_context_factory(
+        turn: object,
+        operation: str,
+        projector: object,
+    ) -> AgentRuntimeContext:
+        del turn, operation, projector
+        return cast(AgentRuntimeContext, object())
+
+    async def seal_changes(turn_id: str) -> None:
+        del turn_id
+
     coordinator = TurnCoordinator(
         workspace_key=workspace.key,
         conversation=conversation,
         config_resolver=lambda current: _config(),
         graph=cast(Any, graph),
-        runtime_context_factory=lambda turn, operation, projector: cast(
-            AgentRuntimeContext, object()
-        ),
+        runtime_context_factory=runtime_context_factory,
         operations=OperationController(emitter),
         emitter=emitter,
         checkpoints=Checkpoints(),
-        seal_changes=lambda turn_id: None,
+        seal_changes=seal_changes,
         turn_input_preparer=context_service.prepare_turn,
     )
 
@@ -872,7 +902,7 @@ async def test_invalid_explicit_path_fails_turn_before_graph_or_model(
         await coordinator.wait(accepted.operation_id)
 
     assert graph.called is False
-    view = conversation.read_thread(thread.id)
+    view = await conversation.read_thread(thread.id)
     assert view.entries[0].content == "inspect @missing.txt"
     assert view.turns[0].error_code == "invalid_explicit_path"
 
@@ -880,15 +910,16 @@ async def test_invalid_explicit_path_fails_turn_before_graph_or_model(
 @pytest.mark.asyncio
 async def test_compact_failure_keeps_history_and_summary_unchanged(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    _complete_turns(conversation, thread.id, 5)
-    before = conversation.read_thread(thread.id)
+    thread = await conversation.create_thread(workspace.key)
+    await _complete_turns(conversation, thread.id, 5)
+    before = await conversation.read_thread(thread.id)
     context_service = ApplicationContextService(
         conversation=conversation,
         workspace=workspace,
@@ -905,7 +936,7 @@ async def test_compact_failure_keeps_history_and_summary_unchanged(
         model="deepseek/deepseek-v4-flash",
     )
 
-    after = conversation.read_thread(thread.id)
+    after = await conversation.read_thread(thread.id)
     assert result.error_code == "compression_failed"
     assert after.entries == before.entries
     assert after.summary is None

@@ -1,9 +1,11 @@
 import sys
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import pytest_asyncio
 
 from awesome_agent.agent import new_agent_state
 from awesome_agent.application.command_results import (
@@ -44,7 +46,7 @@ from awesome_agent.extensions.mcp import (
     McpSource,
 )
 from awesome_agent.extensions.skills import SkillLoader, discover_skills
-from awesome_agent.storage import SQLiteMcpEnablementStore
+from awesome_agent.storage import ApplicationSQLite, SQLiteMcpEnablementStore
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 
@@ -58,8 +60,21 @@ def _skill(root: Path, name: str) -> None:
     )
 
 
+@pytest_asyncio.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
+
+
 @pytest.mark.asyncio
-async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
+async def test_trusted_skill_and_mcp_vertical_lifecycle(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
     workspace_path = tmp_path / "workspace"
     skill_root = workspace_path / ".agents" / "skills"
     _skill(skill_root, "workspace-review")
@@ -88,9 +103,8 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     assert (
         McpManager(
             configs=(),
-            workspace_key=workspace.key,
             workspace_trusted=False,
-            enablements=SQLiteMcpEnablementStore(tmp_path / "untrusted.db"),
+            enablements={},
             registry=ToolRegistry(),
         ).configs()
         == ()
@@ -103,18 +117,16 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         workspace_trusted=True,
     )
     loader = SkillLoader(catalog)
-    database = tmp_path / "application.db"
-    repositories = SQLiteConversationRepositories(database)
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    enablements = SQLiteMcpEnablementStore(database)
+    thread = await conversation.create_thread(workspace.key)
+    enablements = SQLiteMcpEnablementStore(application_database)
     registry = ToolRegistry()
     register_read_tools(registry)
     manager = McpManager(
         configs=(fixture_config, broken_config),
-        workspace_key=workspace.key,
         workspace_trusted=True,
-        enablements=enablements,
+        enablements=await enablements.snapshot(workspace.key),
         registry=registry,
     )
 
@@ -134,10 +146,12 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     assert isinstance(selected, CommandResult)
     assert isinstance(selected.payload, SkillCatalogCommandPayload)
     assert selected.payload.active_mode == "workspace-review"
-    assert conversation.read_thread(thread.id).thread.skill_mode == "workspace-review"
+    assert (
+        await conversation.read_thread(thread.id)
+    ).thread.skill_mode == "workspace-review"
 
-    configured_thread = conversation.read_thread(thread.id).thread
-    turn = conversation.begin_turn(
+    configured_thread = (await conversation.read_thread(thread.id)).thread
+    turn = await conversation.begin_turn(
         thread.id,
         "review this change",
         TurnConfig(
@@ -208,7 +222,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
                 workspace_key=workspace.key,
                 sink=sink,
             ),
-            activity_writer=repositories.tool_activities,
+            activity_writer=repositories,
             monotonic=time.monotonic,
             permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
             approval_resolver=approve,
@@ -220,7 +234,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
         EventType.TOOL_STARTED,
         EventType.TOOL_COMPLETED,
     ]
-    assert conversation.read_thread(thread.id).tool_activities[0].tool_name == (
+    assert (await conversation.read_thread(thread.id)).tool_activities[0].tool_name == (
         "mcp.fixture.echo"
     )
     await manager.aclose()
@@ -229,9 +243,8 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     register_read_tools(restarted_registry)
     restarted = McpManager(
         configs=(fixture_config,),
-        workspace_key=workspace.key,
         workspace_trusted=True,
-        enablements=enablements,
+        enablements=await enablements.snapshot(workspace.key),
         registry=restarted_registry,
     )
     restarted_extensions = ApplicationExtensionService(
@@ -271,9 +284,8 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
     register_read_tools(invalidated_registry)
     invalidated = McpManager(
         configs=(changed,),
-        workspace_key=workspace.key,
         workspace_trusted=True,
-        enablements=enablements,
+        enablements=await enablements.snapshot(workspace.key),
         registry=invalidated_registry,
     )
     invalidated_extensions = ApplicationExtensionService(
@@ -294,6 +306,7 @@ async def test_trusted_skill_and_mcp_vertical_lifecycle(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_skills_select_mode_without_submitting_a_hidden_turn(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     skill_root = tmp_path / "skills"
     for name in ("review", "debug", "test", "git-workflow"):
@@ -304,21 +317,22 @@ async def test_skills_select_mode_without_submitting_a_hidden_turn(
         workspace_root=None,
         workspace_trusted=False,
     )
-    database = tmp_path / "application.db"
-    conversation = ConversationService(store=SQLiteConversationRepositories(database))
-    thread = conversation.create_thread("workspace")
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(application_database)
+    )
+    thread = await conversation.create_thread("workspace")
+    enablements = SQLiteMcpEnablementStore(application_database)
     registry = ToolRegistry()
     service = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
         manager=McpManager(
             configs=(),
-            workspace_key="workspace",
             workspace_trusted=True,
-            enablements=SQLiteMcpEnablementStore(database),
+            enablements={},
             registry=registry,
         ),
-        enablements=SQLiteMcpEnablementStore(database),
+        enablements=enablements,
         workspace_key="workspace",
         registry=registry,
         current_thread_id=lambda: thread.id,

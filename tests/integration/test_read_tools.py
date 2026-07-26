@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 from time import monotonic
 from types import ModuleType
-from unittest.mock import Mock
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import JsonValue
@@ -71,7 +71,7 @@ def read_executor(
             workspace_key=identity.key,
             sink=CollectingEventSink(),
         ),
-        activity_writer=Mock(),
+        activity_writer=AsyncMock(),
         monotonic=monotonic,
     )
     return ToolExecutor(registry), context

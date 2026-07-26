@@ -16,9 +16,6 @@ from awesome_agent.application.contracts import StatusSnapshot, thread_display_i
 from awesome_agent.config import BudgetConfig, TurnConfig
 from awesome_agent.conversation import (
     ConversationService,
-    ToolActivity,
-    ToolActivityOrigin,
-    ToolActivityOutcome,
     UsageSummary,
 )
 from awesome_agent.core.changes import (
@@ -30,9 +27,11 @@ from awesome_agent.core.changes import (
     FileNodeType,
 )
 from awesome_agent.core.events import CollectingEventSink
+from awesome_agent.core.tools import ToolActivityDraft, ToolExecutionOrigin
 from awesome_agent.core.workspace import WorkspaceTrustService, resolve_workspace
 from awesome_agent.modeling import ModelIdentitySnapshot
 from awesome_agent.paths import AwesomePaths
+from awesome_agent.storage import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
@@ -114,21 +113,21 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     workspace.mkdir()
     paths = AwesomePaths.from_home(home)
     identity = resolve_workspace(workspace)
-    WorkspaceTrustService(SQLiteWorkspaceTrustStore(paths.application_db)).accept(
-        identity
-    )
-    repositories = SQLiteConversationRepositories(paths.application_db)
+    database = ApplicationSQLite(paths.application_db)
+    await database.initialize()
+    await WorkspaceTrustService(SQLiteWorkspaceTrustStore(database)).accept(identity)
+    repositories = SQLiteConversationRepositories(database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(identity.key, "Feature auth")
+    thread = await conversation.create_thread(identity.key, "Feature auth")
     config = TurnConfig(
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
         budgets=BudgetConfig(),
     )
-    completed = conversation.begin_turn(
+    completed = await conversation.begin_turn(
         thread.id, "completed", config, client_message_id="client_completed"
     )
-    conversation.complete_turn(
+    await conversation.complete_turn(
         completed.id,
         "done",
         UsageSummary(input_tokens=10, output_tokens=4, model_calls=1),
@@ -144,10 +143,10 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
             },
         ),
     )
-    failed = conversation.begin_turn(
+    failed = await conversation.begin_turn(
         thread.id, "failed", config, client_message_id="client_failed"
     )
-    conversation.fail_turn(
+    await conversation.fail_turn(
         failed.id,
         "model_failed",
         usage=UsageSummary(input_tokens=5, tool_calls=1),
@@ -162,10 +161,10 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
             },
         ),
     )
-    cancelled = conversation.begin_turn(
+    cancelled = await conversation.begin_turn(
         thread.id, "cancelled", config, client_message_id="client_cancelled"
     )
-    conversation.cancel_turn(
+    await conversation.cancel_turn(
         cancelled.id,
         usage=UsageSummary(input_tokens=2, active_execution_seconds=0.5),
     )
@@ -213,40 +212,35 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
         created_at=observed_at,
         sealed_at=observed_at,
     )
-    change_store = SQLiteChangeSetStore(paths.application_db)
-    change_store.save(change_set)
-    repositories.tool_activities.append(
-        ToolActivity(
-            id="activity_agent",
+    change_store = SQLiteChangeSetStore(database)
+    await change_store.save(change_set)
+    await repositories.finalize(
+        ToolActivityDraft(
             thread_id=thread.id,
             turn_id=completed.id,
             operation_id="operation_agent",
             call_id="call_agent",
-            sequence=1,
-            origin=ToolActivityOrigin.AGENT,
+            origin=ToolExecutionOrigin.AGENT,
             tool_name="write_file",
-            outcome=ToolActivityOutcome.SUCCESS,
+            outcome="success",
             change_set_id=change_set.id,
             duration_ms=1,
-            created_at=observed_at,
         )
     )
-    repositories.tool_activities.append(
-        ToolActivity(
-            id="activity_direct",
+    await repositories.finalize(
+        ToolActivityDraft(
             thread_id=thread.id,
             turn_id=None,
             operation_id="operation_direct",
             call_id="call_direct",
-            sequence=2,
-            origin=ToolActivityOrigin.DIRECT,
+            origin=ToolExecutionOrigin.DIRECT,
             tool_name="execute",
-            outcome=ToolActivityOutcome.SUCCESS,
+            outcome="success",
             change_set_id=change_set.id,
             duration_ms=1,
-            created_at=observed_at,
         )
     )
+    await database.aclose()
     application = await compose_local_application(
         home=home,
         workspace=workspace,
@@ -305,9 +299,14 @@ async def test_status_command_returns_typed_snapshot_not_application_dump(
     assert context.value.payload.total_tokens == snapshot.context_used_tokens
     assert "secret_status" not in status.value.model_dump(mode="json")
 
-    change_store.save(
-        change_set.model_copy(update={"lifecycle": ChangeLifecycle.UNDONE})
-    )
+    external_database = ApplicationSQLite(paths.application_db)
+    await external_database.initialize()
+    try:
+        await SQLiteChangeSetStore(external_database).save(
+            change_set.model_copy(update={"lifecycle": ChangeLifecycle.UNDONE})
+        )
+    finally:
+        await external_database.aclose()
     undone_status = await application.execute_command(
         CommandIntent(name=CommandName.STATUS)
     )

@@ -422,11 +422,14 @@ async def test_committed_terminal_is_authoritative_over_later_factory_exit(
     sink = CollectingEventSink()
     controller = OperationController(_emitter(sink))
 
+    async def commit_action() -> None:
+        return None
+
     async def factory(operation_id: str) -> str:
         if committed == "completed":
-            controller.commit_completed(operation_id, lambda: None)
+            await controller.commit_completed(operation_id, commit_action)
         else:
-            controller.commit_failed(operation_id, lambda: None)
+            await controller.commit_failed(operation_id, commit_action)
         if factory_exit == "cancel":
             raise asyncio.CancelledError
         if factory_exit == "error":
@@ -446,6 +449,101 @@ async def test_committed_terminal_is_authoritative_over_later_factory_exit(
     assert [event.event_type for event in sink.events] == [
         EventType.OPERATION_STARTED,
         terminal,
+    ]
+    assert controller.active_operation_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("committed", "terminal"),
+    [
+        ("completed", EventType.OPERATION_COMPLETED),
+        ("failed", EventType.OPERATION_FAILED),
+    ],
+)
+async def test_committing_rejects_cancel_and_shutdown_waits_for_durable_action(
+    committed: str,
+    terminal: EventType,
+) -> None:
+    sink = CollectingEventSink()
+    controller = OperationController(_emitter(sink))
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    durable_writes: list[str] = []
+
+    async def durable_action() -> None:
+        entered.set()
+        await release.wait()
+        durable_writes.append(committed)
+
+    async def factory(operation_id: str) -> None:
+        action = (
+            controller.commit_completed
+            if committed == "completed"
+            else controller.commit_failed
+        )
+        await action(operation_id, durable_action)
+
+    running = asyncio.create_task(controller.run(factory))
+    await entered.wait()
+    operation_id = controller.active_operation_id
+    assert operation_id is not None
+
+    assert await controller.cancel(operation_id) is False
+    running.cancel("first cancellation")
+    await asyncio.sleep(0)
+    running.cancel("second cancellation")
+    shutdown = asyncio.create_task(controller.shutdown())
+    await asyncio.sleep(0)
+
+    assert shutdown.done() is False
+    assert durable_writes == []
+
+    release.set()
+    await shutdown
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await running
+
+    assert cancelled.value.args == ("first cancellation",)
+    assert durable_writes == [committed]
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        terminal,
+    ]
+    assert controller.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_durable_failure_after_cancellation_preserves_first_cancellation() -> (
+    None
+):
+    sink = CollectingEventSink()
+    controller = OperationController(_emitter(sink))
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_after_release() -> None:
+        entered.set()
+        await release.wait()
+        raise RuntimeError("durable write failed")
+
+    async def factory(operation_id: str) -> None:
+        await controller.commit_completed(operation_id, fail_after_release)
+
+    running = asyncio.create_task(controller.run(factory))
+    await entered.wait()
+    running.cancel("first cancellation")
+    await asyncio.sleep(0)
+    running.cancel("second cancellation")
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await running
+
+    assert cancelled.value.args == ("first cancellation",)
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        EventType.OPERATION_FAILED,
     ]
     assert controller.active_operation_id is None
 

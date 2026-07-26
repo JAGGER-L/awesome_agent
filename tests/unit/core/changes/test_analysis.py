@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from awesome_agent.core.changes import (
 )
 from awesome_agent.core.changes.errors import ChangeBlobCorrupt
 from awesome_agent.core.workspace import resolve_workspace
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 
 
@@ -59,17 +61,31 @@ def _stored_change(
     )
 
 
-def _fixture(
+@pytest.fixture
+async def analysis_fixture(
     tmp_path: Path,
-) -> tuple[ChangeAnalyzer, ChangeOperations, SQLiteChangeSetStore, FileChangeBlobStore]:
+) -> AsyncIterator[
+    tuple[
+        ChangeAnalyzer,
+        ChangeOperations,
+        SQLiteChangeSetStore,
+        FileChangeBlobStore,
+        Path,
+    ]
+]:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     identity = resolve_workspace(workspace)
-    store = SQLiteChangeSetStore(tmp_path / "application.db")
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    store = SQLiteChangeSetStore(database)
     blobs = FileChangeBlobStore(tmp_path / "change-journal")
     analyzer = ChangeAnalyzer(store, blobs, identity)
     operations = ChangeOperations(store, blobs, identity, analyzer=analyzer)
-    return analyzer, operations, store, blobs
+    try:
+        yield analyzer, operations, store, blobs, workspace
+    finally:
+        await database.aclose()
 
 
 @pytest.mark.parametrize(
@@ -119,17 +135,23 @@ def test_merge_preserves_distinct_before_and_after_node_types(
     assert merged[0].after_node_type is after_type
 
 
-def test_analysis_returns_text_counts_and_the_same_unified_diff(
-    tmp_path: Path,
+async def test_analysis_returns_text_counts_and_the_same_unified_diff(
+    analysis_fixture: tuple[
+        ChangeAnalyzer,
+        ChangeOperations,
+        SQLiteChangeSetStore,
+        FileChangeBlobStore,
+        Path,
+    ],
 ) -> None:
-    analyzer, operations, store, blobs = _fixture(tmp_path)
+    analyzer, operations, store, blobs, workspace = analysis_fixture
     before = b"def area(r):\n    return 0\n"
     after = b"def area(r):\n    return 3.14 * r * r\n"
     change_set = ChangeSet(
         id="change_text",
         session_id="session_1",
         turn_id="turn_1",
-        workspace_key=resolve_workspace(tmp_path / "workspace").key,
+        workspace_key=resolve_workspace(workspace).key,
         lifecycle=ChangeLifecycle.APPLIED,
         reversibility=ChangeReversibility.FULL,
         files=[
@@ -145,9 +167,9 @@ def test_analysis_returns_text_counts_and_the_same_unified_diff(
         created_at=datetime.now(UTC),
         sealed_at=datetime.now(UTC),
     )
-    store.save(change_set)
+    await store.save(change_set)
 
-    analysis = analyzer.analyze(change_set.id)
+    analysis = await analyzer.analyze(change_set.id)
 
     assert analysis == ChangeAnalysis(
         diff=analysis.diff,
@@ -164,16 +186,24 @@ def test_analysis_returns_text_counts_and_the_same_unified_diff(
     assert "+++ b/area.py" in analysis.diff
     assert "-    return 0" in analysis.diff
     assert "+    return 3.14 * r * r" in analysis.diff
-    assert operations.diff(change_set.id) == analysis.diff
+    assert await operations.diff(change_set.id) == analysis.diff
 
 
-def test_analysis_classifies_binary_directory_and_symlink(tmp_path: Path) -> None:
-    analyzer, _, store, blobs = _fixture(tmp_path)
+async def test_analysis_classifies_binary_directory_and_symlink(
+    analysis_fixture: tuple[
+        ChangeAnalyzer,
+        ChangeOperations,
+        SQLiteChangeSetStore,
+        FileChangeBlobStore,
+        Path,
+    ],
+) -> None:
+    analyzer, _, store, blobs, workspace = analysis_fixture
     change_set = ChangeSet(
         id="change_mixed",
         session_id="session_1",
         turn_id="turn_1",
-        workspace_key=resolve_workspace(tmp_path / "workspace").key,
+        workspace_key=resolve_workspace(workspace).key,
         lifecycle=ChangeLifecycle.APPLIED,
         reversibility=ChangeReversibility.FULL,
         files=[
@@ -205,9 +235,9 @@ def test_analysis_classifies_binary_directory_and_symlink(tmp_path: Path) -> Non
         created_at=datetime.now(UTC),
         sealed_at=datetime.now(UTC),
     )
-    store.save(change_set)
+    await store.save(change_set)
 
-    analysis = analyzer.analyze(change_set.id)
+    analysis = await analyzer.analyze(change_set.id)
 
     assert analysis.changes == (
         BinaryFileChange(
@@ -230,34 +260,48 @@ def test_analysis_classifies_binary_directory_and_symlink(tmp_path: Path) -> Non
     assert "Directory change: generated" in analysis.diff
 
 
-def test_analysis_of_execute_only_change_set_is_empty(tmp_path: Path) -> None:
-    analyzer, _, store, _ = _fixture(tmp_path)
+async def test_analysis_of_execute_only_change_set_is_empty(
+    analysis_fixture: tuple[
+        ChangeAnalyzer,
+        ChangeOperations,
+        SQLiteChangeSetStore,
+        FileChangeBlobStore,
+        Path,
+    ],
+) -> None:
+    analyzer, _, store, _, workspace = analysis_fixture
     change_set = ChangeSet(
         id="change_execute",
         session_id="session_1",
         turn_id=None,
-        workspace_key=resolve_workspace(tmp_path / "workspace").key,
+        workspace_key=resolve_workspace(workspace).key,
         lifecycle=ChangeLifecycle.APPLIED,
         reversibility=ChangeReversibility.NONE,
         created_at=datetime.now(UTC),
         sealed_at=datetime.now(UTC),
     )
-    store.save(change_set)
+    await store.save(change_set)
 
-    assert analyzer.analyze(change_set.id) == ChangeAnalysis()
+    assert await analyzer.analyze(change_set.id) == ChangeAnalysis()
 
 
-def test_analysis_rejects_a_blob_that_disagrees_with_the_recorded_hash(
-    tmp_path: Path,
+async def test_analysis_rejects_a_blob_that_disagrees_with_the_recorded_hash(
+    analysis_fixture: tuple[
+        ChangeAnalyzer,
+        ChangeOperations,
+        SQLiteChangeSetStore,
+        FileChangeBlobStore,
+        Path,
+    ],
 ) -> None:
-    analyzer, _, store, blobs = _fixture(tmp_path)
+    analyzer, _, store, blobs, workspace = analysis_fixture
     content = b"actual content\n"
     blob = blobs.put(content)
     change_set = ChangeSet(
         id="change_corrupt",
         session_id="session_1",
         turn_id="turn_1",
-        workspace_key=resolve_workspace(tmp_path / "workspace").key,
+        workspace_key=resolve_workspace(workspace).key,
         lifecycle=ChangeLifecycle.APPLIED,
         reversibility=ChangeReversibility.FULL,
         files=[
@@ -272,7 +316,7 @@ def test_analysis_rejects_a_blob_that_disagrees_with_the_recorded_hash(
         created_at=datetime.now(UTC),
         sealed_at=datetime.now(UTC),
     )
-    store.save(change_set)
+    await store.save(change_set)
 
     with pytest.raises(ChangeBlobCorrupt, match="does not match"):
-        analyzer.analyze(change_set.id)
+        await analyzer.analyze(change_set.id)

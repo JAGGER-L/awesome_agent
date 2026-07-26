@@ -74,60 +74,60 @@ class ToolActivityRepository(Protocol):
 
 
 class ConversationStore(Protocol):
-    def create_thread(self, thread: Thread) -> Thread: ...
-    def set_thread_model(
+    async def create_thread(self, thread: Thread) -> Thread: ...
+    async def set_thread_model(
         self,
         thread_id: str,
         model: str | None,
         *,
         updated_at: datetime,
     ) -> Thread: ...
-    def rename_thread(
+    async def rename_thread(
         self,
         thread_id: str,
         title: str,
         *,
         updated_at: datetime,
     ) -> Thread: ...
-    def set_thread_thinking(
+    async def set_thread_thinking(
         self,
         thread_id: str,
         enabled: bool,
         *,
         updated_at: datetime,
     ) -> Thread: ...
-    def set_thread_skill_mode(
+    async def set_thread_skill_mode(
         self,
         thread_id: str,
         skill_mode: str,
         *,
         updated_at: datetime,
     ) -> Thread: ...
-    def list_threads(self, workspace_key: str) -> Sequence[Thread]: ...
-    def match_threads(
+    async def list_threads(self, workspace_key: str) -> Sequence[Thread]: ...
+    async def match_threads(
         self,
         workspace_key: str,
         *,
         prefix: str,
         limit: int,
     ) -> Sequence[Thread]: ...
-    def list_threads_page(
+    async def list_threads_page(
         self,
         workspace_key: str,
         *,
         cursor: tuple[datetime, str] | None,
         limit: int,
     ) -> ThreadListPage: ...
-    def read_thread(self, thread_id: str) -> ThreadView: ...
-    def read_thread_page(
+    async def read_thread(self, thread_id: str) -> ThreadView: ...
+    async def read_thread_page(
         self,
         thread_id: str,
         *,
         before_sequence: int | None,
         limit: int,
     ) -> ThreadPage: ...
-    def thread_id_for_turn(self, turn_id: str) -> str | None: ...
-    def begin_turn(
+    async def thread_id_for_turn(self, turn_id: str) -> str | None: ...
+    async def begin_turn(
         self,
         user_entry: ThreadEntry,
         turn: Turn,
@@ -135,16 +135,16 @@ class ConversationStore(Protocol):
         automatic_title: str | None,
         updated_at: datetime,
     ) -> Turn: ...
-    def update_in_progress_turn(
+    async def update_in_progress_turn(
         self,
         turn: Turn,
         *,
         expected_context_manifest: tuple[dict[str, JsonValue], ...],
     ) -> Turn: ...
-    def complete_turn(self, assistant_entry: ThreadEntry, turn: Turn) -> Turn: ...
-    def update_terminal_turn(self, turn: Turn) -> Turn: ...
-    def append_direct_command(self, entry: ThreadEntry) -> ThreadEntry: ...
-    def compare_and_swap_summary(
+    async def complete_turn(self, assistant_entry: ThreadEntry, turn: Turn) -> Turn: ...
+    async def update_terminal_turn(self, turn: Turn) -> Turn: ...
+    async def append_direct_command(self, entry: ThreadEntry) -> ThreadEntry: ...
+    async def compare_and_swap_summary(
         self,
         summary: ThreadSummary,
         *,

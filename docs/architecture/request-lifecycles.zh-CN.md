@@ -91,10 +91,11 @@ turn.submit(thread_id, content, client_message_id)
   -> release foreground lease
 ```
 
-主要终态事实之后的清理尝试是有界的。清理失败不会改写已完成、已取消或失败的 Turn；
-启动校正可以重试残留 checkpoint 的清理。
+主要终态事实之后的本地 durable cleanup 会保持所有权，直到结果明确。清理失败不会改写
+已完成、已取消或失败的 Turn；启动校正可以重试残留 checkpoint 的清理。外部进程清理与
+best-effort event publication 仍使用有界 deadline。
 
-同步的持久化 Turn transition 与 Operation phase 共同构成一个 commit point。在它之前，
+由 worker 持有的 durable Turn transition 与 Operation phase 共同构成一个 commit point。在它之前，
 cancellation 胜出；在它之后，cancellation 会被拒绝，有界 terminal publication 会保留已经
 提交的 completed 或 failed outcome。Shutdown 观察同一 phase，只会等待而不会发出第二次
 cancellation。
@@ -211,11 +212,13 @@ MCP 和未知扩展能力仍需逐次审批。
 ## 取消
 
 `operation.cancel` 指向一个 Operation ID。取消通过 Operation task 传播到模型流或 Tool
-Executor。对于 Turn，Application 随后记录取消事实、尝试有界封存 ChangeSet 和删除
-checkpoint、发出 `operation.cancelled`，并释放 lease。清理失败不会取代已取消这一终态
-事实，并可在启动校正期间重试。对于 shell 进程，Process Runner 执行有界进程树与 pipe
-清理，再重新抛出原始 `CancelledError`。Direct transcript 与 ChangeSet finalizer 会在
-该取消穿过 Application 边界时继续保留它作为主 outcome。
+Executor。对于 Turn，Application 随后记录取消事实，并继续持有 foreground ownership，直到
+本地 ToolActivity、transcript、ChangeSet sealing 和 checkpoint deletion 得到明确结果；之后
+才发出 `operation.cancelled` 并释放 lease。清理失败不会取代已取消这一终态事实，并可在
+启动校正期间重试。对于 shell 进程，Process Runner 执行有界进程树与 pipe 清理，再重新抛出
+原始 `CancelledError`。Direct transcript 与 ChangeSet finalizer 会在该取消穿过 Application
+边界时继续保留它作为主 outcome。Event delivery 是有界 best-effort，不会缩短本地 durable
+ownership。
 
 True cancellation acknowledgement 表示匹配的 Operation 尚未越过 commit point；这包括
 `operation.started` 已可见但 acceptance response 尚未返回的窗口。在这个 starting 窗口中，
@@ -243,17 +246,21 @@ Application 投影。自洽但无关的 checkpoint 不会被接受为权威。�
 
 ## Shutdown
 
-Shutdown 会先关闭前台准入，然后取消活动 Operation，必要时取消另一个 exclusive
-所有者，等待 arbiter idle，最后才在 bootstrap lock 下关闭 MCP client、repository、
-database 和 process resource。
+Shutdown 会先关闭前台准入。它只在活动 Operation 仍处于 running 时取消该 Operation，等待
+任何 committing Operation 和另一个 exclusive 所有者，再等待 arbiter idle。随后它按逆序
+回收 workspace runtime，关闭 checkpoint saver，排空并关闭进程级 Application SQLite
+worker，最后在 bootstrap lock 下释放 workspace 与 state lease。
 
 ```text
 shutdown request
   -> foreground.begin_closing()
-  -> cancel and await Operation
+  -> cancel RUNNING Operation / await COMMITTING Operation
   -> cancel exclusive owner if external
   -> wait_idle()
-  -> close MCP and composed resources
+  -> retire runtime (MCP, Mem0, providers)
+  -> close checkpoint saver
+  -> drain and close ApplicationSQLite
+  -> release workspace and state leases
   -> mark Application closed
 ```
 

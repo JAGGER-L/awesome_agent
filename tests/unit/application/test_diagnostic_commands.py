@@ -19,19 +19,25 @@ async def test_doctor_reports_runtime_readiness_without_assuming_success(
     async def provider_doctor() -> dict[str, str]:
         return {"deepseek": "missing", "kimi": "missing"}
 
-    def unavailable() -> bool | None:
+    async def unavailable() -> bool | None:
         raise RuntimeError("private readiness failure")
+
+    async def absent() -> None:
+        return None
+
+    async def ready() -> bool:
+        return True
 
     service = DiagnosticCommandService(
         workspace_path=tmp_path,
         registry=ToolRegistry(),
         permission_session=PermissionSession(),
-        status_reader=lambda: None,
-        usage_reader=lambda: None,
+        status_reader=absent,
+        usage_reader=absent,
         credential_statuses=missing_provider_credential_statuses,
         provider_doctor=provider_doctor,
-        configuration_ready=lambda: True,
-        sqlite_ready=lambda: None,
+        configuration_ready=ready,
+        sqlite_ready=absent,
         checkpoints_ready=unavailable,
         workspace_instruction_diagnostic=lambda: None,
     )

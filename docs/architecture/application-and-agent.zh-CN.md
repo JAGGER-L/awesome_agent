@@ -81,7 +81,9 @@ provider client、内部创建的 Mem0 client 和 MCP；注册顺序保证按 MC
 startup reconciliation；它把已选择的 Thread 静默带入 candidate，不触发 selection callback，
 完成原子发布后，等绑定旧 runtime 的 mutation 请求退出再回收旧 runtime。资源关闭失败会被
 报告，但不会覆盖 candidate 的主要失败或跳过进程清理。跨 runtime generation 复用的
-checkpoint saver 和 state lease 始终由另一套进程生命周期 Application `AsyncExitStack` 持有。
+checkpoint saver、一个进程级 `ApplicationSQLite` worker 和 state lease 始终由另一套进程
+生命周期 Application `AsyncExitStack` 持有。Database worker 会串行执行面向 Application
+的 repository 调用，而不会占用 event-loop thread。
 
 ## 前台串行化
 
@@ -199,18 +201,23 @@ Application service 负责访问 Conversation 和工作区快照；Agent 不知�
 
 图正常完成时，Application 校验返回的状态、追加 assistant 回答、记录有界 usage，
 并完成 Turn。随后它尝试封存 ChangeSet 并删除 checkpoint。失败或取消时，它会记录
-稳定的终态产品事实，并执行同样的有界终结。主要终态事实落盘后，清理异常会被有意
-抑制；启动校正会重试残留的终态 checkpoint，而不会改变已经完成/取消/失败的结果。
+稳定的终态产品事实，并执行同样的 durable finalization。本地 transcript、activity、
+ChangeSet 与 checkpoint 工作会保持所有权，直到得到明确结果。主要终态事实落盘后，清理
+异常会被有意抑制；启动校正会重试残留的终态 checkpoint，而不会改变已经完成/取消/失败
+的结果。
 
 Operation phase 明确定义了取消边界。Commit point 之前，匹配的 cancel 会把 `running` 改为
-`cancelling`，唯一终态是 cancelled。成功完成只会在同步持久化 completed Turn 时越过 commit
-point；主要失败则会在执行有界的失败事实恢复之前关闭同一边界。一旦 committed，
-`operation.cancel` 返回 false，shutdown 会等待而不是再次 cancel；即使 request task 被取消或
-event sink 失败，有界且受 shield 保护的 publication 仍会保留已经提交的 Turn 和 Operation
-终态。系统不存在 cancellation 和 completion 可以同时胜出的时间窗口。
+`cancelling`，唯一终态是 cancelled。Durable finalization 会先把 `running` 改为
+`committing`，再请求 Application SQLite worker 持久化 completed 或 failed Turn。此时匹配的
+`operation.cancel` 返回 false，shutdown 会等待而不是再次 cancel。如果 request task 在 durable
+write 已准入后被取消，Core 会等待 worker 给出明确的 COMMIT 或 ROLLBACK 结果，再重新抛出
+caller 的第一次 cancellation。即使 event sink 失败，有界且受 shield 保护的 publication 仍会
+保留已经提交的 Turn 和 Operation 终态。系统不存在 cancellation 和 completion 可以同时胜出
+的时间窗口。
 
-模型流、工具或终结步骤活动时都可能收到取消。只有为了有界地保全事实，清理才会受到
-shield 保护；它不能吞掉原始取消，也不能让前台所有权一直保持活动状态。
+模型流、工具或终结步骤活动时都可能收到取消。本地 durable fact preservation 会受到
+shield 保护直到得到明确结果，并在此期间继续持有 foreground lease。只有外部进程清理与
+best-effort event delivery 使用有界 deadline；两条路径都不能吞掉原始取消。
 
 ## 与恢复的关系
 

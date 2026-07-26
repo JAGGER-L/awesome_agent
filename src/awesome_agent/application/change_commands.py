@@ -38,11 +38,11 @@ class ChangeCommandService:
         if len(intent.arguments) > 1:
             return error("invalid_arguments", "Usage: /diff [change_set_id]")
         explicit = intent.arguments[0] if intent.arguments else None
-        identifier = explicit or self._latest_identifier()
+        identifier = explicit or await self._latest_identifier()
         if identifier is None:
             return result(DiffCommandPayload())
         try:
-            content = self._operations.diff(identifier)
+            content = await self._operations.diff(identifier)
         except ChangeSetNotFound:
             return error("change_set_not_found", "ChangeSet was not found.")
         except ChangeLifecycleError:
@@ -53,12 +53,12 @@ class ChangeCommandService:
         return result(DiffCommandPayload(change_set_id=identifier, content=content))
 
     async def undo(self, intent: CommandIntent) -> CommandOutcome:
-        return self._change(intent, action="undo")
+        return await self._change(intent, action="undo")
 
     async def redo(self, intent: CommandIntent) -> CommandOutcome:
-        return self._change(intent, action="redo")
+        return await self._change(intent, action="redo")
 
-    def _change(
+    async def _change(
         self,
         intent: CommandIntent,
         *,
@@ -67,15 +67,15 @@ class ChangeCommandService:
         if len(intent.arguments) > 1:
             return error("invalid_arguments", f"Usage: /{action} [change_set_id]")
         identifier = (
-            intent.arguments[0] if intent.arguments else self._latest_identifier()
+            intent.arguments[0] if intent.arguments else await self._latest_identifier()
         )
         if identifier is None:
             return error("change_set_not_found", "ChangeSet was not found.")
         try:
             changed = (
-                self._operations.undo(identifier)
+                await self._operations.undo(identifier)
                 if action == "undo"
-                else self._operations.redo(identifier)
+                else await self._operations.redo(identifier)
             )
         except ChangeSetNotFound:
             return error("change_set_not_found", "ChangeSet was not found.")
@@ -101,6 +101,6 @@ class ChangeCommandService:
             )
         )
 
-    def _latest_identifier(self) -> str | None:
-        latest = self._store.latest(self._workspace_key)
+    async def _latest_identifier(self) -> str | None:
+        latest = await self._store.latest(self._workspace_key)
         return latest.id if latest is not None else None

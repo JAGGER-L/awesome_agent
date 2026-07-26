@@ -27,6 +27,7 @@ from awesome_agent.application.contracts import (
     thread_display_id,
 )
 from awesome_agent.application.errors import ApplicationFailure
+from awesome_agent.storage.compatibility import ApplicationStateUnavailable
 
 
 class ApplicationFacade(Protocol):
@@ -216,6 +217,14 @@ class LocalApplication:
             return ApplicationResult.success(await call())
         except ApplicationFailure as failure:
             return ApplicationResult.failure(failure.error)
+        except ApplicationStateUnavailable:
+            return ApplicationResult.failure(
+                ProductError(
+                    code=ProductErrorCode.STATE_UNAVAILABLE,
+                    message="Application state cannot be accessed safely.",
+                    retryable=True,
+                )
+            )
 
 
 __all__ = [

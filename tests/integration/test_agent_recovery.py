@@ -51,12 +51,23 @@ from awesome_agent.modeling import (
     TurnCompleted,
     UserMessage,
 )
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.checkpoints import (
     CheckpointCorrupt,
     LangGraphCheckpointStore,
     sqlite_checkpoint_saver,
 )
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+
+
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
 
 
 class UnusedGraph:
@@ -190,7 +201,7 @@ def _state(
     return state
 
 
-def _freeze_context(
+async def _freeze_context(
     state: AgentState,
     turn: Turn,
     conversation: ConversationService,
@@ -233,7 +244,7 @@ def _freeze_context(
         turn.budgets.total_context_tokens,
         turn.budgets.total_context_tokens,
     ).effective_input_limit
-    conversation.store_context_manifest(turn.id, tuple(state["context_manifest"]))
+    await conversation.store_context_manifest(turn.id, tuple(state["context_manifest"]))
 
 
 def _completed(
@@ -261,6 +272,13 @@ def _graph_runtime(
         del state
         raise AssertionError("a frozen recovery context must not be rebuilt")
 
+    async def tool_context_factory(
+        state: AgentState,
+        request: ToolRequest,
+    ) -> Any:
+        del state, request
+        return None
+
     return AgentRuntimeContext(
         gateway=cast(Any, gateway),
         executor=cast(Any, executor),
@@ -273,7 +291,7 @@ def _graph_runtime(
                 read_only=True,
             ),
         ),
-        tool_context_factory=lambda state, request: cast(Any, None),
+        tool_context_factory=tool_context_factory,
         event_projector=cast(Any, projector),
         context_builder=context_builder,
         budget=TurnBudget(tool_calls=1),
@@ -300,8 +318,8 @@ async def _wait_for_budget_checkpoint(
         await asyncio.sleep(0.01)
 
 
-def _turn(conversation: ConversationService, thread_id: str) -> Turn:
-    return conversation.begin_turn(
+async def _turn(conversation: ConversationService, thread_id: str) -> Turn:
+    return await conversation.begin_turn(
         thread_id,
         "inspect",
         TurnConfig(
@@ -313,17 +331,31 @@ def _turn(conversation: ConversationService, thread_id: str) -> Turn:
     )
 
 
+async def _unused_runtime_factory(
+    turn: Turn,
+    operation: str,
+    projector: ApplicationEventProjector,
+) -> AgentRuntimeContext:
+    del turn, operation, projector
+    return cast(AgentRuntimeContext, object())
+
+
+async def _noop_seal_changes(turn_id: str) -> None:
+    del turn_id
+
+
 @pytest.mark.asyncio
 async def test_startup_reconciles_complete_resumable_missing_corrupt_and_leftover(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
     turns: dict[str, Turn] = {}
     for name in ("final", "resume", "missing", "corrupt", "leftover"):
-        thread = conversation.create_thread("workspace_1", name)
-        turns[name] = _turn(conversation, thread.id)
-    conversation.complete_turn(
+        thread = await conversation.create_thread("workspace_1", name)
+        turns[name] = await _turn(conversation, thread.id)
+    await conversation.complete_turn(
         turns["leftover"].id,
         "already committed",
         UsageSummary(),
@@ -332,7 +364,7 @@ async def test_startup_reconciles_complete_resumable_missing_corrupt_and_leftove
 
     checkpoints = RecoveryCheckpoints()
     resume_state = _state(turns["resume"])
-    _freeze_context(resume_state, turns["resume"], conversation)
+    await _freeze_context(resume_state, turns["resume"], conversation)
     checkpoints.states = {
         turns["final"].id: _state(
             turns["final"], answer="recovered answer", reason="completed"
@@ -344,7 +376,7 @@ async def test_startup_reconciles_complete_resumable_missing_corrupt_and_leftove
         ),
     }
     final_state = cast(AgentState, checkpoints.states[turns["final"].id])
-    _freeze_context(final_state, turns["final"], conversation)
+    await _freeze_context(final_state, turns["final"], conversation)
     order: list[str] = []
     original_exists = checkpoints.exists
 
@@ -359,19 +391,21 @@ async def test_startup_reconciles_complete_resumable_missing_corrupt_and_leftove
         workspace_key="workspace_1",
         sink=sink,
     )
+
+    async def reconcile_changes() -> None:
+        order.append("changes")
+
     coordinator = TurnCoordinator(
         workspace_key="workspace_1",
         conversation=conversation,
         config_resolver=lambda thread: cast(Any, None),
         graph=cast(Any, UnusedGraph()),
-        runtime_context_factory=lambda turn, operation, projector: cast(
-            AgentRuntimeContext, object()
-        ),
+        runtime_context_factory=_unused_runtime_factory,
         operations=OperationController(emitter),
         emitter=emitter,
         checkpoints=checkpoints,
-        seal_changes=lambda turn_id: None,
-        reconcile_changes=lambda: order.append("changes"),
+        seal_changes=_noop_seal_changes,
+        reconcile_changes=reconcile_changes,
     )
 
     results = await coordinator.reconcile_startup()
@@ -385,12 +419,11 @@ async def test_startup_reconciles_complete_resumable_missing_corrupt_and_leftove
         turns["corrupt"].id: RecoveryStatus.FAILED,
         turns["leftover"].id: RecoveryStatus.CLEANED,
     }
-    assert (
-        conversation.read_thread(turns["final"].thread_id).turns[0].status
-        is TurnStatus.COMPLETED
-    )
-    missing = conversation.read_thread(turns["missing"].thread_id).turns[0]
-    corrupt = conversation.read_thread(turns["corrupt"].thread_id).turns[0]
+    assert (await conversation.read_thread(turns["final"].thread_id)).turns[
+        0
+    ].status is TurnStatus.COMPLETED
+    missing = (await conversation.read_thread(turns["missing"].thread_id)).turns[0]
+    corrupt = (await conversation.read_thread(turns["corrupt"].thread_id)).turns[0]
     assert (missing.status, missing.error_code) == (
         TurnStatus.FAILED,
         "checkpoint_missing",
@@ -399,7 +432,7 @@ async def test_startup_reconciles_complete_resumable_missing_corrupt_and_leftove
         TurnStatus.FAILED,
         "checkpoint_corrupt",
     )
-    finalized = conversation.read_thread(turns["final"].thread_id).turns[0]
+    finalized = (await conversation.read_thread(turns["final"].thread_id)).turns[0]
     assert finalized.usage == UsageSummary(
         input_tokens=2,
         output_tokens=1,
@@ -418,11 +451,12 @@ async def test_startup_reconciles_complete_resumable_missing_corrupt_and_leftove
 @pytest.mark.asyncio
 async def test_budget_interrupted_tool_batch_resumes_reserved_final_after_restart(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread("workspace_1")
-    turn = conversation.begin_turn(
+    thread = await conversation.create_thread("workspace_1")
+    turn = await conversation.begin_turn(
         thread.id,
         "inspect",
         TurnConfig(
@@ -440,7 +474,7 @@ async def test_budget_interrupted_tool_batch_resumes_reserved_final_after_restar
         model=turn.model,
         thinking_enabled=turn.thinking_enabled,
     )
-    _freeze_context(state, turn, conversation)
+    await _freeze_context(state, turn, conversation)
     executor = RecordingExecutor()
     interrupted_gateway = BudgetCheckpointGateway()
     checkpoint_path = tmp_path / "checkpoints.db"
@@ -489,7 +523,7 @@ async def test_budget_interrupted_tool_batch_resumes_reserved_final_after_restar
         graph = compile_agent_graph(saver)
         checkpoint_store = LangGraphCheckpointStore(saver)
 
-        def runtime_factory(
+        async def runtime_factory(
             current_turn: Turn,
             operation_id: str,
             projector: ApplicationEventProjector,
@@ -506,7 +540,7 @@ async def test_budget_interrupted_tool_batch_resumes_reserved_final_after_restar
             operations=OperationController(emitter),
             emitter=emitter,
             checkpoints=checkpoint_store,
-            seal_changes=lambda turn_id: None,
+            seal_changes=_noop_seal_changes,
         )
 
         [recovery] = await coordinator.reconcile_startup()
@@ -515,7 +549,7 @@ async def test_budget_interrupted_tool_batch_resumes_reserved_final_after_restar
         await coordinator.wait(accepted.operation_id)
         assert await checkpoint_store.exists(turn.id) is False
 
-    recovered = conversation.read_thread(thread.id)
+    recovered = await conversation.read_thread(thread.id)
     assert recovered.turns[0].status is TurnStatus.COMPLETED
     assert recovered.turns[0].termination_reason == "tool_budget_exhausted"
     assert recovered.entries[-1].content == "recovered summary"
@@ -542,11 +576,12 @@ async def test_terminal_recovery_rejects_mismatched_checkpoint_identity(
     terminal_kind: str,
     field: str,
     mismatched_value: object,
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread("workspace_1")
-    turn = _turn(conversation, thread.id)
+    thread = await conversation.create_thread("workspace_1")
+    turn = await _turn(conversation, thread.id)
     state = _state(
         turn,
         answer="must not be committed" if terminal_kind == "completed" else None,
@@ -554,7 +589,7 @@ async def test_terminal_recovery_rejects_mismatched_checkpoint_identity(
             "completed" if terminal_kind == "completed" else "model_authentication"
         ),
     )
-    _freeze_context(state, turn, conversation)
+    await _freeze_context(state, turn, conversation)
     if field == "turn_id":
         state["turn_id"] = cast(str, mismatched_value)
     elif field == "thread_id":
@@ -581,13 +616,11 @@ async def test_terminal_recovery_rejects_mismatched_checkpoint_identity(
         conversation=conversation,
         config_resolver=lambda thread: cast(Any, None),
         graph=cast(Any, UnusedGraph()),
-        runtime_context_factory=lambda turn, operation, projector: cast(
-            AgentRuntimeContext, object()
-        ),
+        runtime_context_factory=_unused_runtime_factory,
         operations=OperationController(emitter),
         emitter=emitter,
         checkpoints=checkpoints,
-        seal_changes=lambda turn_id: None,
+        seal_changes=_noop_seal_changes,
     )
 
     [result] = await coordinator.reconcile_startup()
@@ -596,12 +629,12 @@ async def test_terminal_recovery_rejects_mismatched_checkpoint_identity(
         RecoveryStatus.FAILED,
         "checkpoint_corrupt",
     )
-    recovered = conversation.read_thread(thread.id).turns[0]
+    recovered = (await conversation.read_thread(thread.id)).turns[0]
     assert (recovered.status, recovered.error_code) == (
         TurnStatus.FAILED,
         "checkpoint_corrupt",
     )
-    assert len(conversation.read_thread(thread.id).entries) == 1
+    assert len((await conversation.read_thread(thread.id)).entries) == 1
     assert checkpoints.deleted == [turn.id]
     assert [event.event_type for event in sink.events] == [
         EventType.TURN_STARTED,
@@ -614,11 +647,12 @@ async def test_terminal_recovery_rejects_mismatched_checkpoint_identity(
 async def test_terminal_recovery_requires_a_frozen_context_snapshot(
     tmp_path: Path,
     terminal_kind: str,
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread("workspace_1")
-    turn = _turn(conversation, thread.id)
+    thread = await conversation.create_thread("workspace_1")
+    turn = await _turn(conversation, thread.id)
     state = _state(
         turn,
         answer="must not be committed" if terminal_kind == "completed" else None,
@@ -639,13 +673,11 @@ async def test_terminal_recovery_requires_a_frozen_context_snapshot(
         conversation=conversation,
         config_resolver=lambda thread: cast(Any, None),
         graph=cast(Any, UnusedGraph()),
-        runtime_context_factory=lambda turn, operation, projector: cast(
-            AgentRuntimeContext, object()
-        ),
+        runtime_context_factory=_unused_runtime_factory,
         operations=OperationController(emitter),
         emitter=emitter,
         checkpoints=checkpoints,
-        seal_changes=lambda turn_id: None,
+        seal_changes=_noop_seal_changes,
     )
 
     [result] = await coordinator.reconcile_startup()
@@ -654,23 +686,24 @@ async def test_terminal_recovery_requires_a_frozen_context_snapshot(
         RecoveryStatus.FAILED,
         "context_snapshot_missing",
     )
-    recovered = conversation.read_thread(thread.id).turns[0]
+    recovered = (await conversation.read_thread(thread.id)).turns[0]
     assert (recovered.status, recovered.error_code) == (
         TurnStatus.FAILED,
         "context_snapshot_missing",
     )
-    assert len(conversation.read_thread(thread.id).entries) == 1
+    assert len((await conversation.read_thread(thread.id)).entries) == 1
     assert checkpoints.deleted == [turn.id]
 
 
 @pytest.mark.asyncio
 async def test_persisted_initial_checkpoint_without_frozen_context_fails_after_restart(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread("workspace_1")
-    turn = _turn(conversation, thread.id)
+    thread = await conversation.create_thread("workspace_1")
+    turn = await _turn(conversation, thread.id)
     state = new_agent_state(
         thread_id=turn.thread_id,
         turn_id=turn.id,
@@ -700,13 +733,11 @@ async def test_persisted_initial_checkpoint_without_frozen_context_fails_after_r
             conversation=conversation,
             config_resolver=lambda thread: cast(Any, None),
             graph=cast(Any, UnusedGraph()),
-            runtime_context_factory=lambda turn, operation, projector: cast(
-                AgentRuntimeContext, object()
-            ),
+            runtime_context_factory=_unused_runtime_factory,
             operations=OperationController(emitter),
             emitter=emitter,
             checkpoints=checkpoints,
-            seal_changes=lambda turn_id: None,
+            seal_changes=_noop_seal_changes,
         )
 
         [result] = await coordinator.reconcile_startup()
@@ -714,7 +745,7 @@ async def test_persisted_initial_checkpoint_without_frozen_context_fails_after_r
 
     assert result.status is RecoveryStatus.FAILED
     assert result.error_code == "context_snapshot_missing"
-    recovered = conversation.read_thread(thread.id).turns[0]
+    recovered = (await conversation.read_thread(thread.id)).turns[0]
     assert recovered.status is TurnStatus.FAILED
     assert recovered.error_code == "context_snapshot_missing"
     assert [event.event_type for event in sink.events] == [
@@ -750,12 +781,13 @@ async def test_persisted_initial_checkpoint_without_frozen_context_fails_after_r
 async def test_recovery_rejects_unverifiable_context_snapshots(
     tmp_path: Path,
     variant: str,
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread("workspace_1")
+    thread = await conversation.create_thread("workspace_1")
     turn = (
-        conversation.begin_turn(
+        await conversation.begin_turn(
             thread.id,
             "inspect @note.txt",
             TurnConfig(
@@ -766,10 +798,10 @@ async def test_recovery_rejects_unverifiable_context_snapshots(
             client_message_id="client_recovery",
         )
         if variant == "missing_persisted_explicit_path"
-        else _turn(conversation, thread.id)
+        else await _turn(conversation, thread.id)
     )
     state = _state(turn)
-    _freeze_context(state, turn, conversation)
+    await _freeze_context(state, turn, conversation)
     if variant == "missing_persisted_explicit_path":
         persisted_manifest = copy.deepcopy(state["context_manifest"])
         persisted_manifest[1]["order"] = 2
@@ -786,8 +818,11 @@ async def test_recovery_rejects_unverifiable_context_snapshots(
                 "covered_sequence_end": None,
             },
         )
-        turn = turn.model_copy(update={"context_manifest": tuple(persisted_manifest)})
-        repositories.turns.update(turn)
+        turn = await conversation.compare_and_swap_context_manifest(
+            turn.id,
+            tuple(persisted_manifest),
+            expected_context_manifest=tuple(state["context_manifest"]),
+        )
     if variant == "missing_current_input":
         state["context_manifest"].pop()
         state["messages"].pop()
@@ -902,13 +937,11 @@ async def test_recovery_rejects_unverifiable_context_snapshots(
         conversation=conversation,
         config_resolver=lambda thread: cast(Any, None),
         graph=cast(Any, UnusedGraph()),
-        runtime_context_factory=lambda turn, operation, projector: cast(
-            AgentRuntimeContext, object()
-        ),
+        runtime_context_factory=_unused_runtime_factory,
         operations=OperationController(emitter),
         emitter=emitter,
         checkpoints=checkpoints,
-        seal_changes=lambda turn_id: None,
+        seal_changes=_noop_seal_changes,
     )
 
     [result] = await coordinator.reconcile_startup()
@@ -930,7 +963,7 @@ async def test_recovery_rejects_unverifiable_context_snapshots(
         RecoveryStatus.FAILED,
         expected_error,
     )
-    failed = conversation.read_thread(thread.id).turns[0]
+    failed = (await conversation.read_thread(thread.id)).turns[0]
     assert (failed.status, failed.error_code) == (
         TurnStatus.FAILED,
         expected_error,
@@ -941,13 +974,14 @@ async def test_recovery_rejects_unverifiable_context_snapshots(
 @pytest.mark.asyncio
 async def test_uncertain_execute_is_not_replayed_and_requests_interaction(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread("workspace_1")
-    turn = _turn(conversation, thread.id)
+    thread = await conversation.create_thread("workspace_1")
+    turn = await _turn(conversation, thread.id)
     state = _state(turn)
-    _freeze_context(state, turn, conversation)
+    await _freeze_context(state, turn, conversation)
     state["pending_tool_calls"] = [
         {"call_id": "call_1", "name": "execute", "arguments_json": "{}"}
     ]
@@ -975,18 +1009,18 @@ async def test_uncertain_execute_is_not_replayed_and_requests_interaction(
         conversation=conversation,
         config_resolver=lambda thread: cast(Any, None),
         graph=cast(Any, UnusedGraph()),
-        runtime_context_factory=lambda turn, operation, projector: cast(
-            AgentRuntimeContext, object()
-        ),
+        runtime_context_factory=_unused_runtime_factory,
         operations=OperationController(emitter),
         emitter=emitter,
         checkpoints=checkpoints,
-        seal_changes=lambda turn_id: None,
+        seal_changes=_noop_seal_changes,
     )
 
     [result] = await coordinator.reconcile_startup()
 
     assert result.status is RecoveryStatus.INTERACTION_REQUIRED
     assert checkpoints.deleted == []
-    assert conversation.read_thread(thread.id).turns[0].status is TurnStatus.IN_PROGRESS
+    assert (await conversation.read_thread(thread.id)).turns[
+        0
+    ].status is TurnStatus.IN_PROGRESS
     assert sink.events == []

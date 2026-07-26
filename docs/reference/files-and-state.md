@@ -170,8 +170,14 @@ input and see the [configuration reference](configuration.md#workspace-configura
 ## Application database
 
 `<HOME>/state/application.db` is the authoritative embedded Application SQLite
-database. Current `PRAGMA user_version` is **7**. Connections enable foreign
-keys, a five-second busy timeout, WAL journal mode, and normal synchronous mode.
+database. Current `PRAGMA user_version` is **7**. One process-level bounded FIFO
+worker owns its long-lived connection. The connection enables foreign keys, a
+five-second busy timeout, WAL journal mode, and normal synchronous mode.
+Application-facing repositories expose async methods: reads use deferred
+transactions and writes use `BEGIN IMMEDIATE`. A cancelled read may stop
+waiting; admitted durable writes and lifecycle operations wait for a known
+COMMIT, ROLLBACK, or close result before re-raising the first cancellation.
+SQLite connections, cursors, and rows never cross the worker boundary.
 
 Its logical ownership is:
 
@@ -202,9 +208,11 @@ separate files.
 the default model in `config.yaml` and the selected model on a Thread in
 `application.db`. Those resources cannot participate in one database
 transaction. A model change therefore writes a durable `prepared` record with
-the previous and target model identities, replaces and reloads configuration,
-updates the Thread, verifies both resources, changes the record to `committed`,
-and only then removes it.
+one unique transaction identity plus the previous and target model identities,
+replaces and reloads configuration, updates the Thread, verifies both resources,
+changes the record to `committed`, and only then removes it. A failed callback
+keeps its `prepared` evidence until SQLite has confirmed rollback and a fresh
+transaction has re-verified both previous endpoints.
 
 Startup rolls a `prepared` record back to its previous values and rolls a
 `committed` record forward to its target values. Reconciliation is idempotent

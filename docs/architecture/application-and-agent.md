@@ -97,8 +97,10 @@ reconciliation, carry the selected Thread into that candidate without firing a
 selection callback, publish it atomically, and retire the old runtime only after
 the bound mutation request exits. Cleanup failures are reported without hiding
 the candidate's primary failure or skipping process cleanup. The checkpoint
-saver and state leases remain owned by a separate process-lifetime Application
-`AsyncExitStack` across runtime generations.
+saver, one process-owned `ApplicationSQLite` worker, and state leases remain
+owned by a separate process-lifetime Application `AsyncExitStack` across
+runtime generations. The database worker serializes Application-facing
+repository calls without occupying the event-loop thread.
 
 ## Foreground serialization
 
@@ -230,23 +232,29 @@ On normal graph completion, Application validates the returned state, appends
 the assistant answer, records bounded usage, and completes the Turn. It then
 attempts to seal the ChangeSet and remove the checkpoint. On failure or
 cancellation it records a stable terminal product fact and performs the same
-bounded finalization. Cleanup exceptions are deliberately suppressed after the
-primary terminal fact; startup reconciliation retries stale terminal
-checkpoints rather than changing the completed/cancelled/failed outcome.
+durable finalization. Local transcript, activity, ChangeSet, and checkpoint
+work remains owned until it reaches a known result. Cleanup exceptions are
+deliberately suppressed after the primary terminal fact; startup reconciliation
+retries stale terminal checkpoints rather than changing the
+completed/cancelled/failed outcome.
 
 The Operation phase makes the cancellation boundary explicit. Before the
 commit point, a matching cancel changes `running` to `cancelling` and the sole
-terminal outcome is cancelled. Successful completion crosses the commit point
-only while synchronously persisting the completed Turn; primary failure closes
-the same boundary before bounded failure-fact recovery. Once committed,
-`operation.cancel` returns false, shutdown waits instead of cancelling again,
-and bounded shielded publication preserves the committed Turn and Operation
-terminal events even if the request task is cancelled or the event sink fails.
-There is no interval in which both cancellation and completion can win.
+terminal outcome is cancelled. Durable finalization changes `running` to
+`committing` before it asks the Application SQLite worker to persist the
+completed or failed Turn. A matching `operation.cancel` then returns false and
+shutdown waits instead of issuing another cancellation. If the request task is
+cancelled while a durable write is already admitted, Core waits until the
+worker reports a known COMMIT or ROLLBACK result before re-raising the first
+caller cancellation. Bounded shielded publication preserves the committed Turn
+and Operation terminal events even if the event sink fails. There is no
+interval in which both cancellation and completion can win.
 
 Cancellation may arrive while a model stream, tool, or finalization step is
-active. Cleanup is shielded only for bounded fact preservation; it must not
-swallow the original cancellation or leave foreground ownership active.
+active. Local durable fact preservation is shielded until it reaches a known
+result, and the foreground lease remains owned for that interval. Only external
+process cleanup and best-effort event delivery use bounded deadlines. Neither
+path may swallow the original cancellation.
 
 ## Recovery relationship
 

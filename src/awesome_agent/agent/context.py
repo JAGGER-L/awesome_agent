@@ -137,7 +137,7 @@ class DisabledPostAnswerMemory:
         return MemoryFinalizationResult(enabled=False, status="disabled")
 
 
-def discard_context_snapshot(
+async def discard_context_snapshot(
     manifest: tuple[dict[str, JsonValue], ...],
 ) -> None:
     del manifest
@@ -236,7 +236,9 @@ class AgentRuntimeContext:
     gateway: ModelGateway
     executor: ToolExecutor
     tool_catalog: Callable[[], tuple[ToolSpec, ...]]
-    tool_context_factory: Callable[[AgentState, ToolRequest], ToolExecutionContext]
+    tool_context_factory: Callable[
+        [AgentState, ToolRequest], Awaitable[ToolExecutionContext]
+    ]
     event_projector: AgentEventProjector
     context_builder: AgentContextBuilder
     budget: TurnBudget
@@ -245,7 +247,7 @@ class AgentRuntimeContext:
     current_user_text: str = ""
     context_snapshot_recorder: Callable[
         [tuple[dict[str, JsonValue], ...]],
-        None,
+        Awaitable[None],
     ] = discard_context_snapshot
     compressor: AgentContextCompressor = field(
         default_factory=DisabledAgentContextCompressor

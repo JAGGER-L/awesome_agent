@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import json
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +16,7 @@ from awesome_agent.application.command_results import CommandResult, ModelComman
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import ProviderCredentialSetRequest
 from awesome_agent.application.provider_configuration import (
+    ConversationModelTransaction,
     ProviderConfigurationPublication,
     ProviderConfigurationService,
     reconcile_provider_credential_transaction,
@@ -44,6 +47,7 @@ from awesome_agent.conversation.models import Thread, ThreadView
 from awesome_agent.memory.local_file import LocalMemoryFile
 from awesome_agent.memory.models import MemoryScope
 from awesome_agent.paths import AwesomePaths
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 
@@ -53,6 +57,16 @@ async def _ignore_configuration(
 ) -> None:
     publication.require_active()
     return None
+
+
+@asynccontextmanager
+async def _application_database(path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(path)
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
 
 
 def _wait_for(path: Path, *, timeout_seconds: float = 10.0) -> None:
@@ -292,30 +306,59 @@ class _ObservingUserConfigWriter(UserConfigWriter):
 class _BarrierConversationRepositories(SQLiteConversationRepositories):
     def __init__(
         self,
-        path: Path,
+        database: ApplicationSQLite,
         *,
         marker: Path,
         peer_marker: Path,
         writes_last: bool,
     ) -> None:
-        super().__init__(path)
+        super().__init__(database)
         self._marker = marker
         self._peer_marker = peer_marker
         self._writes_last = writes_last
         self._synchronized = False
 
-    def read_thread(self, thread_id: str) -> ThreadView:
-        view = super().read_thread(thread_id)
-        self._synchronize()
-        return view
-
-    def _patch_thread(
+    async def set_thread_model(
         self,
         thread_id: str,
-        update: dict[str, object],
+        model: str | None,
+        *,
+        updated_at: datetime,
     ) -> Thread:
         self._synchronize()
-        return super()._patch_thread(thread_id, update)
+        return await super().set_thread_model(
+            thread_id,
+            model,
+            updated_at=updated_at,
+        )
+
+    async def rename_thread(
+        self,
+        thread_id: str,
+        title: str,
+        *,
+        updated_at: datetime,
+    ) -> Thread:
+        self._synchronize()
+        return await super().rename_thread(
+            thread_id,
+            title,
+            updated_at=updated_at,
+        )
+
+    async def set_thread_thinking(
+        self,
+        thread_id: str,
+        enabled: bool,
+        *,
+        updated_at: datetime,
+    ) -> Thread:
+        self._synchronize()
+        return await super().set_thread_thinking(
+            thread_id,
+            enabled,
+            updated_at=updated_at,
+        )
 
     def _synchronize(self) -> None:
         if not self._synchronized:
@@ -388,29 +431,72 @@ class _PhaseBlockingConfigWriter(UserConfigWriter):
         return updated
 
 
-class _PhaseBlockingConversationService(ConversationService):
+class _PhaseBlockingModelTransaction:
     def __init__(
         self,
+        delegate: ConversationModelTransaction,
         *,
-        store: SQLiteConversationRepositories,
         crash_phase: str,
         phase_reached: Path,
         release: Path,
     ) -> None:
-        super().__init__(store=store)
+        self._delegate = delegate
         self._crash_phase = crash_phase
         self._phase_reached = phase_reached
         self._release = release
 
-    def set_model(self, thread_id: str, model: str | None) -> Thread:
-        updated = super().set_model(thread_id, model)
+    def read_thread(self, thread_id: str) -> ThreadView:
+        return self._delegate.read_thread(thread_id)
+
+    def set_model(
+        self,
+        thread_id: str,
+        model: str | None,
+        *,
+        updated_at: datetime,
+    ) -> object:
+        updated = self._delegate.set_model(
+            thread_id,
+            model,
+            updated_at=updated_at,
+        )
         if self._crash_phase == "thread":
             self._phase_reached.write_text("thread", encoding="utf-8")
             _wait_for(self._release, timeout_seconds=60.0)
         return updated
 
 
-def _provider_transaction(
+class _PhaseBlockingModelTransactions:
+    def __init__(
+        self,
+        repositories: SQLiteConversationRepositories,
+        *,
+        crash_phase: str,
+        phase_reached: Path,
+        release: Path,
+    ) -> None:
+        self._repositories = repositories
+        self._crash_phase = crash_phase
+        self._phase_reached = phase_reached
+        self._release = release
+
+    async def __call__[ResultT](
+        self,
+        operation: Callable[[ConversationModelTransaction], ResultT],
+    ) -> ResultT:
+        return await self._repositories.run_write_transaction(
+            lambda transaction: operation(
+                _PhaseBlockingModelTransaction(
+                    transaction,
+                    crash_phase=self._crash_phase,
+                    phase_reached=self._phase_reached,
+                    release=self._release,
+                )
+            )
+        )
+
+
+async def _provider_transaction(
     config_path: Path,
     action: str,
     marker: Path,
@@ -451,32 +537,33 @@ def _provider_transaction(
     else:
         raise ValueError(f"Unsupported provider transaction action: {action}")
 
-    service = ProviderConfigurationService(
-        conversation=ConversationService(
-            store=SQLiteConversationRepositories(
-                config_path.parent / f"provider-{action}.db"
-            )
-        ),
-        config_writer=UserConfigWriter(paths.config_file),
-        secret_store=secret_store,
-        validator=_UnexpectedCredentialValidator(),
-        sources=sources,
-        load_configuration=load_configuration,
-        apply_configuration=_ignore_configuration,
-        model_transaction_journal=ProviderModelTransactionJournal(
-            paths.provider_model_transaction_file
-        ),
-        credential_transaction_journal=ProviderCredentialTransactionJournal(
-            paths.provider_credential_transaction_file,
-            paths.provider_credential_backup_file,
-        ),
-    )
-    if action == "delete":
-        coordination_marker.write_text("delete-attempting", encoding="utf-8")
-    asyncio.run(service.set_credential(request))
+    async with _application_database(
+        config_path.parent / f"provider-{action}.db"
+    ) as database:
+        repositories = SQLiteConversationRepositories(database)
+        service = ProviderConfigurationService(
+            conversation=ConversationService(store=repositories),
+            model_transactions=repositories.run_write_transaction,
+            config_writer=UserConfigWriter(paths.config_file),
+            secret_store=secret_store,
+            validator=_UnexpectedCredentialValidator(),
+            sources=sources,
+            load_configuration=load_configuration,
+            apply_configuration=_ignore_configuration,
+            model_transaction_journal=ProviderModelTransactionJournal(
+                paths.provider_model_transaction_file
+            ),
+            credential_transaction_journal=ProviderCredentialTransactionJournal(
+                paths.provider_credential_transaction_file,
+                paths.provider_credential_backup_file,
+            ),
+        )
+        if action == "delete":
+            coordination_marker.write_text("delete-attempting", encoding="utf-8")
+        await service.set_credential(request)
 
 
-def _provider_configuration_race(
+async def _provider_configuration_race(
     config_path: Path,
     kind: str,
     action: str,
@@ -524,76 +611,74 @@ def _provider_configuration_race(
         )
     else:
         writer = UserConfigWriter(paths.config_file)
-    conversation = ConversationService(
-        store=SQLiteConversationRepositories(application_db)
-    )
-    service = ProviderConfigurationService(
-        conversation=conversation,
-        config_writer=writer,
-        secret_store=UserSecretStore(paths.env_file),
-        validator=_UnexpectedCredentialValidator(),
-        sources=sources,
-        load_configuration=load_configuration,
-        apply_configuration=apply_configuration,
-        model_transaction_journal=ProviderModelTransactionJournal(
-            paths.provider_model_transaction_file
-        ),
-        credential_transaction_journal=ProviderCredentialTransactionJournal(
-            paths.provider_credential_transaction_file,
-            paths.provider_credential_backup_file,
-        ),
-    )
+    async with _application_database(application_db) as database:
+        repositories = SQLiteConversationRepositories(database)
+        conversation = ConversationService(store=repositories)
+        service = ProviderConfigurationService(
+            conversation=conversation,
+            model_transactions=repositories.run_write_transaction,
+            config_writer=writer,
+            secret_store=UserSecretStore(paths.env_file),
+            validator=_UnexpectedCredentialValidator(),
+            sources=sources,
+            load_configuration=load_configuration,
+            apply_configuration=apply_configuration,
+            model_transaction_journal=ProviderModelTransactionJournal(
+                paths.provider_model_transaction_file
+            ),
+            credential_transaction_journal=ProviderCredentialTransactionJournal(
+                paths.provider_credential_transaction_file,
+                paths.provider_credential_backup_file,
+            ),
+        )
 
-    if kind == "provider_model":
-        provider = "deepseek" if value.startswith("deepseek/") else "kimi"
-        outcome = asyncio.run(
-            service.model_command(
+        if kind == "provider_model":
+            provider = "deepseek" if value.startswith("deepseek/") else "kimi"
+            outcome = await service.model_command(
                 CommandIntent(
                     name=CommandName.MODEL,
                     arguments=(provider, value),
                 ),
                 thread_id=thread_id,
             )
-        )
-        assert isinstance(outcome, CommandResult)
-        assert isinstance(outcome.payload, ModelCommandPayload)
-        assert len(applied) == 1
-        return {
-            "status": "completed",
-            "snapshot_model": applied[0][1].providers.default_model or "",
-            "result_model": outcome.payload.model,
-            "thread_model": (
-                conversation.read_thread(thread_id).thread.current_model or ""
-            ),
-        }
+            assert isinstance(outcome, CommandResult)
+            assert isinstance(outcome.payload, ModelCommandPayload)
+            assert len(applied) == 1
+            return {
+                "status": "completed",
+                "snapshot_model": applied[0][1].providers.default_model or "",
+                "result_model": outcome.payload.model,
+                "thread_model": (
+                    await conversation.read_thread(thread_id)
+                ).thread.current_model
+                or "",
+            }
 
-    if kind == "provider_source":
-        source = CredentialSource(value)
-        arguments = (
-            ("deepseek", source.value, "use")
-            if source is CredentialSource.AWESOME
-            else ("deepseek", source.value)
-        )
-        outcome = asyncio.run(
-            service.auth_command(
+        if kind == "provider_source":
+            source = CredentialSource(value)
+            arguments = (
+                ("deepseek", source.value, "use")
+                if source is CredentialSource.AWESOME
+                else ("deepseek", source.value)
+            )
+            outcome = await service.auth_command(
                 CommandIntent(
                     name=CommandName.AUTH,
                     arguments=arguments,
                 )
             )
-        )
-        assert isinstance(outcome, CommandResult)
-        assert len(applied) == 1
-        selected = applied[0][0].provider_credentials.deepseek.selected_source
-        return {
-            "status": "completed",
-            "snapshot_source": selected.value if selected is not None else "",
-        }
+            assert isinstance(outcome, CommandResult)
+            assert len(applied) == 1
+            selected = applied[0][0].provider_credentials.deepseek.selected_source
+            return {
+                "status": "completed",
+                "snapshot_source": selected.value if selected is not None else "",
+            }
 
     raise ValueError(f"Unsupported provider race kind: {kind}")
 
 
-def _thread_mutation_race(
+async def _thread_mutation_race(
     database_path: Path,
     action: str,
     marker: Path,
@@ -603,25 +688,26 @@ def _thread_mutation_race(
     if order not in {"first", "last"}:
         raise ValueError(f"Unsupported Thread mutation order: {order}")
     thread_id = database_path.with_name("thread-id").read_text(encoding="utf-8")
-    conversation = ConversationService(
-        store=_BarrierConversationRepositories(
-            database_path,
-            marker=marker,
-            peer_marker=peer_marker,
-            writes_last=order == "last",
+    async with _application_database(database_path) as database:
+        conversation = ConversationService(
+            store=_BarrierConversationRepositories(
+                database,
+                marker=marker,
+                peer_marker=peer_marker,
+                writes_last=order == "last",
+            )
         )
-    )
-    if mutation == "model":
-        conversation.set_model(thread_id, value)
-    elif mutation == "rename":
-        conversation.rename_thread(thread_id, value)
-    elif mutation == "thinking":
-        conversation.set_thinking(thread_id, value == "true")
-    else:
-        raise ValueError(f"Unsupported Thread mutation: {mutation}")
+        if mutation == "model":
+            await conversation.set_model(thread_id, value)
+        elif mutation == "rename":
+            await conversation.rename_thread(thread_id, value)
+        elif mutation == "thinking":
+            await conversation.set_thinking(thread_id, value == "true")
+        else:
+            raise ValueError(f"Unsupported Thread mutation: {mutation}")
 
 
-def _provider_model_crash(
+async def _provider_model_crash(
     config_path: Path,
     phase: str,
     phase_reached: Path,
@@ -645,70 +731,74 @@ def _provider_model_crash(
         loaded = sources()
         return loaded, resolve_application_config(loaded)
 
-    conversation = _PhaseBlockingConversationService(
-        store=SQLiteConversationRepositories(config_path.parent / "application.db"),
-        crash_phase=phase,
-        phase_reached=phase_reached,
-        release=release,
-    )
-    service = ProviderConfigurationService(
-        conversation=conversation,
-        config_writer=_PhaseBlockingConfigWriter(
-            paths.config_file,
-            crash_phase=phase,
-            phase_reached=phase_reached,
-            release=release,
-        ),
-        secret_store=UserSecretStore(paths.env_file),
-        validator=_UnexpectedCredentialValidator(),
-        sources=sources,
-        load_configuration=load_configuration,
-        apply_configuration=_ignore_configuration,
-        model_transaction_journal=_PhaseBlockingJournal(
-            paths.provider_model_transaction_file,
-            crash_phase=phase,
-            phase_reached=phase_reached,
-            release=release,
-        ),
-        credential_transaction_journal=ProviderCredentialTransactionJournal(
-            paths.provider_credential_transaction_file,
-            paths.provider_credential_backup_file,
-        ),
-    )
-    asyncio.run(
-        service.model_command(
+    async with _application_database(config_path.parent / "application.db") as database:
+        repositories = SQLiteConversationRepositories(database)
+        conversation = ConversationService(store=repositories)
+        service = ProviderConfigurationService(
+            conversation=conversation,
+            model_transactions=_PhaseBlockingModelTransactions(
+                repositories,
+                crash_phase=phase,
+                phase_reached=phase_reached,
+                release=release,
+            ),
+            config_writer=_PhaseBlockingConfigWriter(
+                paths.config_file,
+                crash_phase=phase,
+                phase_reached=phase_reached,
+                release=release,
+            ),
+            secret_store=UserSecretStore(paths.env_file),
+            validator=_UnexpectedCredentialValidator(),
+            sources=sources,
+            load_configuration=load_configuration,
+            apply_configuration=_ignore_configuration,
+            model_transaction_journal=_PhaseBlockingJournal(
+                paths.provider_model_transaction_file,
+                crash_phase=phase,
+                phase_reached=phase_reached,
+                release=release,
+            ),
+            credential_transaction_journal=ProviderCredentialTransactionJournal(
+                paths.provider_credential_transaction_file,
+                paths.provider_credential_backup_file,
+            ),
+        )
+        await service.model_command(
             CommandIntent(
                 name=CommandName.MODEL,
                 arguments=("deepseek", "deepseek/deepseek-v4-pro"),
             ),
             thread_id=thread_id,
         )
-    )
 
 
-def _provider_model_reconcile(config_path: Path) -> dict[str, str]:
+async def _provider_model_reconcile(config_path: Path) -> dict[str, str]:
     paths = AwesomePaths.from_home(config_path.parent)
-    conversation = ConversationService(
-        store=SQLiteConversationRepositories(config_path.parent / "application.db")
-    )
-    reconciled = reconcile_provider_model_transaction(
-        journal=ProviderModelTransactionJournal(paths.provider_model_transaction_file),
-        config_writer=UserConfigWriter(paths.config_file),
-        conversation=conversation,
-    )
-    thread_id = config_path.with_name("thread-id").read_text(encoding="utf-8")
-    return {
-        "status": "reconciled" if reconciled else "nothing_to_reconcile",
-        "default_model": (
-            UserConfigWriter(paths.config_file).read().providers.default_model or ""
-        ),
-        "thread_model": (
-            conversation.read_thread(thread_id).thread.current_model or ""
-        ),
-    }
+    async with _application_database(config_path.parent / "application.db") as database:
+        repositories = SQLiteConversationRepositories(database)
+        conversation = ConversationService(store=repositories)
+        reconciled = await reconcile_provider_model_transaction(
+            journal=ProviderModelTransactionJournal(
+                paths.provider_model_transaction_file
+            ),
+            config_writer=UserConfigWriter(paths.config_file),
+            model_transactions=repositories.run_write_transaction,
+        )
+        thread_id = config_path.with_name("thread-id").read_text(encoding="utf-8")
+        return {
+            "status": "reconciled" if reconciled else "nothing_to_reconcile",
+            "default_model": (
+                UserConfigWriter(paths.config_file).read().providers.default_model or ""
+            ),
+            "thread_model": (
+                await conversation.read_thread(thread_id)
+            ).thread.current_model
+            or "",
+        }
 
 
-def _provider_credential_crash(
+async def _provider_credential_crash(
     config_path: Path,
     phase: str,
     phase_reached: Path,
@@ -729,46 +819,45 @@ def _provider_credential_crash(
         loaded = sources()
         return loaded, resolve_application_config(loaded)
 
-    service = ProviderConfigurationService(
-        conversation=ConversationService(
-            store=SQLiteConversationRepositories(config_path.parent / "application.db")
-        ),
-        config_writer=_PhaseBlockingCredentialConfigWriter(
-            paths.config_file,
-            crash_phase=phase,
-            phase_reached=phase_reached,
-            release=release,
-        ),
-        secret_store=_PhaseBlockingCredentialSecretStore(
-            paths.env_file,
-            crash_phase=phase,
-            phase_reached=phase_reached,
-            release=release,
-        ),
-        validator=_UnexpectedCredentialValidator(),
-        sources=sources,
-        load_configuration=load_configuration,
-        apply_configuration=_ignore_configuration,
-        model_transaction_journal=ProviderModelTransactionJournal(
-            paths.provider_model_transaction_file
-        ),
-        credential_transaction_journal=_PhaseBlockingCredentialJournal(
-            paths.provider_credential_transaction_file,
-            paths.provider_credential_backup_file,
-            crash_phase=phase,
-            phase_reached=phase_reached,
-            release=release,
-        ),
-    )
-    asyncio.run(
-        service.set_credential(
+    async with _application_database(config_path.parent / "application.db") as database:
+        repositories = SQLiteConversationRepositories(database)
+        service = ProviderConfigurationService(
+            conversation=ConversationService(store=repositories),
+            model_transactions=repositories.run_write_transaction,
+            config_writer=_PhaseBlockingCredentialConfigWriter(
+                paths.config_file,
+                crash_phase=phase,
+                phase_reached=phase_reached,
+                release=release,
+            ),
+            secret_store=_PhaseBlockingCredentialSecretStore(
+                paths.env_file,
+                crash_phase=phase,
+                phase_reached=phase_reached,
+                release=release,
+            ),
+            validator=_UnexpectedCredentialValidator(),
+            sources=sources,
+            load_configuration=load_configuration,
+            apply_configuration=_ignore_configuration,
+            model_transaction_journal=ProviderModelTransactionJournal(
+                paths.provider_model_transaction_file
+            ),
+            credential_transaction_journal=_PhaseBlockingCredentialJournal(
+                paths.provider_credential_transaction_file,
+                paths.provider_credential_backup_file,
+                crash_phase=phase,
+                phase_reached=phase_reached,
+                release=release,
+            ),
+        )
+        await service.set_credential(
             ProviderCredentialSetRequest(
                 provider="mem0",
                 action="replace",
                 api_key=SecretStr("new-secret"),
             )
         )
-    )
 
 
 def _provider_credential_reconcile(config_path: Path) -> dict[str, str]:
@@ -788,7 +877,7 @@ def _provider_credential_reconcile(config_path: Path) -> dict[str, str]:
     }
 
 
-def main() -> None:
+async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "kind",
@@ -840,14 +929,14 @@ def main() -> None:
             arguments.peer_marker,
         )
     elif arguments.kind == "provider_transaction":
-        _provider_transaction(
+        await _provider_transaction(
             arguments.path,
             arguments.action,
             arguments.marker,
             arguments.peer_marker,
         )
     elif arguments.kind in {"provider_model", "provider_source"}:
-        result = _provider_configuration_race(
+        result = await _provider_configuration_race(
             arguments.path,
             arguments.kind,
             arguments.action,
@@ -857,25 +946,25 @@ def main() -> None:
         arguments.result.write_text(json.dumps(result), encoding="utf-8")
         return
     elif arguments.kind == "thread_mutation":
-        _thread_mutation_race(
+        await _thread_mutation_race(
             arguments.path,
             arguments.action,
             arguments.marker,
             arguments.peer_marker,
         )
     elif arguments.kind == "provider_model_crash":
-        _provider_model_crash(
+        await _provider_model_crash(
             arguments.path,
             arguments.action,
             arguments.marker,
             arguments.peer_marker,
         )
     elif arguments.kind == "provider_model_reconcile":
-        result = _provider_model_reconcile(arguments.path)
+        result = await _provider_model_reconcile(arguments.path)
         arguments.result.write_text(json.dumps(result), encoding="utf-8")
         return
     elif arguments.kind == "provider_credential_crash":
-        _provider_credential_crash(
+        await _provider_credential_crash(
             arguments.path,
             arguments.action,
             arguments.marker,
@@ -889,4 +978,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

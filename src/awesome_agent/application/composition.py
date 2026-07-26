@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-from collections.abc import Callable, Coroutine, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from contextlib import AsyncExitStack, contextmanager, suppress
 from contextvars import Context, ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
@@ -134,7 +135,10 @@ from awesome_agent.conversation import (
     TurnStatus,
     UsageSummary,
 )
-from awesome_agent.core.cancellation import finish_bounded_cancellation_cleanup
+from awesome_agent.core.cancellation import (
+    finish_bounded_cancellation_cleanup,
+    finish_cancellation_safe,
+)
 from awesome_agent.core.changes import (
     ChangeAnalyzer,
     ChangeJournal,
@@ -214,6 +218,7 @@ from awesome_agent.providers import (
 )
 from awesome_agent.storage import (
     ApplicationSchemaMismatch,
+    ApplicationSQLite,
     ApplicationStateUnavailable,
     ApplicationStateUnknown,
     SQLiteMcpEnablementStore,
@@ -223,9 +228,6 @@ from awesome_agent.storage import (
     StateLeaseUnavailable,
     StatePreflight,
     StateResetError,
-    initialize_application_database,
-    inspect_application_state,
-    reset_local_state,
 )
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import (
@@ -233,7 +235,6 @@ from awesome_agent.storage.checkpoints import (
     sqlite_checkpoint_saver,
 )
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
-from awesome_agent.storage.health import sqlite_database_health
 from awesome_agent.storage.pagination import (
     InvalidThreadCursor,
     decode_thread_cursor,
@@ -289,17 +290,21 @@ async def compose_local_application(
     paths = AwesomePaths.from_home(home)
     identity = resolve_workspace(workspace)
     stack = AsyncExitStack()
-    backend = _LocalApplicationBackend(
-        paths=paths,
-        workspace=identity,
-        event_sink=event_sink,
-        resources=stack,
-        environ=environ,
-        gateway_factory=gateway_factory,
-        mcp_client_factory=mcp_client_factory,
-        mem0_client=mem0_client,
-        credential_validator=credential_validator,
-    )
+    try:
+        backend = _LocalApplicationBackend(
+            paths=paths,
+            workspace=identity,
+            event_sink=event_sink,
+            resources=stack,
+            environ=environ,
+            gateway_factory=gateway_factory,
+            mcp_client_factory=mcp_client_factory,
+            mem0_client=mem0_client,
+            credential_validator=credential_validator,
+        )
+    except BaseException:
+        await stack.aclose()
+        raise
     return LocalApplication(backend)
 
 
@@ -411,11 +416,20 @@ class _LocalApplicationBackend:
             self._foreground,
             admission_gate=self._operation_admitted,
         )
-        self._trust = WorkspaceTrustService(
-            SQLiteWorkspaceTrustStore(paths.application_db)
+        self._state_lease: StateLease | None = None
+        self._workspace_path_lease: StateLease | None = None
+        self._workspace_entity_lease: StateLease | None = None
+        self._process_resources.callback(self._close_state_lease)
+        self._process_resources.callback(self._close_workspace_leases)
+        self._database = ApplicationSQLite(paths.application_db)
+        self._process_resources.push_async_callback(self._database.aclose)
+        self._trust = WorkspaceTrustService(SQLiteWorkspaceTrustStore(self._database))
+        self._repositories = SQLiteConversationRepositories(self._database)
+        self._clock = lambda: datetime.now(UTC)
+        self._conversation = ConversationService(
+            store=self._repositories,
+            clock=self._clock,
         )
-        self._repositories = SQLiteConversationRepositories(paths.application_db)
-        self._conversation = ConversationService(store=self._repositories)
         self._provider_model_journal = ProviderModelTransactionJournal(
             paths.provider_model_transaction_file
         )
@@ -450,13 +464,8 @@ class _LocalApplicationBackend:
         self._recovery_required_delivery_lock = asyncio.Lock()
         self._recovery_event_deliveries: set[asyncio.Task[None]] = set()
         self._permission_session = PermissionSession()
-        self._state_lease: StateLease | None = None
-        self._workspace_path_lease: StateLease | None = None
-        self._workspace_entity_lease: StateLease | None = None
         self._bootstrap_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
-        self._process_resources.callback(self._close_state_lease)
-        self._process_resources.callback(self._close_workspace_leases)
 
     async def initialize_application(self) -> InitializeResult:
         async with self._bootstrap_lock:
@@ -480,8 +489,8 @@ class _LocalApplicationBackend:
             )
         await self._reconcile_provider_credentials_before_state()
         try:
-            self._ensure_state_lease()
-            trust_status = self._trust.status(self._workspace)
+            await self._ensure_state_lease()
+            trust_status = await self._trust.status(self._workspace)
         except ApplicationSchemaMismatch as error:
             if error.direction is StateCompatibility.OLDER:
                 return await self._state_reset_required()
@@ -621,10 +630,10 @@ class _LocalApplicationBackend:
         runtime = self._request_runtime.get() or self._runtime
         if runtime is not None:
             with self._runtime_request_scope(runtime) as bound_runtime:
-                return self._application_state_in_runtime(bound_runtime)
-        return self._application_state_in_runtime(None)
+                return await self._application_state_in_runtime(bound_runtime)
+        return await self._application_state_in_runtime(None)
 
-    def _application_state_in_runtime(
+    async def _application_state_in_runtime(
         self,
         runtime: WorkspaceRuntime | None,
     ) -> ApplicationState:
@@ -638,16 +647,16 @@ class _LocalApplicationBackend:
             else self._bootstrap_application_config
         )
         current_id = runtime.commands.current_thread_id if runtime is not None else None
-        current = (
-            conversation.read_thread(current_id).thread
+        current_view = (
+            await conversation.read_thread(current_id)
             if current_id is not None
             else None
         )
-        usage = (
-            conversation.thread_usage(current_id)
-            if current_id is not None
-            else UsageSummary()
-        )
+        current = current_view.thread if current_view is not None else None
+        usage = UsageSummary()
+        if current_view is not None:
+            for turn in current_view.turns:
+                usage += turn.usage
         local_enabled = runtime.local_memory.enabled if runtime is not None else False
         mem0_session = runtime.mem0_session if runtime is not None else None
         return ApplicationState(
@@ -715,9 +724,11 @@ class _LocalApplicationBackend:
     async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
         runtime = self._require_runtime()
         with self._runtime_request_scope(runtime) as bound_runtime:
-            return self._workspace_threads_in_runtime(query, runtime=bound_runtime)
+            return await self._workspace_threads_in_runtime(
+                query, runtime=bound_runtime
+            )
 
-    def _workspace_threads_in_runtime(
+    async def _workspace_threads_in_runtime(
         self,
         query: ThreadListQuery,
         *,
@@ -732,7 +743,7 @@ class _LocalApplicationBackend:
                 ProductErrorCode.INVALID_ARGUMENTS,
                 "Thread cursor is invalid.",
             ) from error
-        page = runtime.conversation.list_thread_page(
+        page = await runtime.conversation.list_thread_page(
             self._workspace.key,
             cursor=cursor,
             limit=query.limit,
@@ -751,9 +762,9 @@ class _LocalApplicationBackend:
     async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
         runtime = self._require_runtime()
         with self._runtime_request_scope(runtime) as bound_runtime:
-            return self._thread_state_in_runtime(query, runtime=bound_runtime)
+            return await self._thread_state_in_runtime(query, runtime=bound_runtime)
 
-    def _thread_state_in_runtime(
+    async def _thread_state_in_runtime(
         self,
         query: ThreadReadQuery,
         *,
@@ -762,7 +773,7 @@ class _LocalApplicationBackend:
         limit = query.limit
         while True:
             try:
-                page = runtime.conversation.read_thread_page(
+                page = await runtime.conversation.read_thread_page(
                     query.thread_id,
                     before_sequence=query.before_sequence,
                     limit=limit,
@@ -779,7 +790,7 @@ class _LocalApplicationBackend:
                 )
             result = ThreadReadResult(
                 view=page.view,
-                change_sets=self._page_change_summaries(
+                change_sets=await self._page_change_summaries(
                     page.view.tool_activities,
                     runtime=runtime,
                 ),
@@ -834,7 +845,7 @@ class _LocalApplicationBackend:
             )
         try:
             await self._require_runtime_consistent(runtime)
-            thread = runtime.conversation.read_thread(thread_id).thread
+            thread = (await runtime.conversation.read_thread(thread_id)).thread
             config = self._turn_config(thread, runtime=runtime)
             self._require_provider_configured(config.provider, runtime=runtime)
             return await runtime.turns.submit_turn(
@@ -1068,7 +1079,7 @@ class _LocalApplicationBackend:
                     ),
                 )
                 if resolved is InteractionDecision.TRUST:
-                    self._trust.accept(self._workspace)
+                    await self._trust.accept(self._workspace)
                     await self._activate_workspace()
                 return InteractionResult(
                     accepted=True,
@@ -1210,12 +1221,12 @@ class _LocalApplicationBackend:
         claimed = False
         resolution_published = asyncio.Event()
 
-        def claim(turn: Turn) -> None:
+        async def claim(turn: Turn) -> None:
             nonlocal claimed
             current = self._bound_recovery(pending)
             if current != recovery or turn.id != recovery.turn_id:
                 raise TurnExecutionFailed("recovery_stale")
-            commands.select_recovery_thread(recovery.thread_id)
+            await commands.select_recovery_thread(recovery.thread_id)
             if not self._interactions.discard(pending.id):
                 raise TurnExecutionFailed("recovery_stale")
             if self._recovery_required_delivery_id == pending.id:
@@ -1269,7 +1280,9 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="operation_busy")
         except TurnExecutionFailed:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery, runtime=runtime):
+            if claimed and await self._recovery_is_in_progress(
+                recovery, runtime=runtime
+            ):
                 self._recovery_queue.insert(0, recovery)
             elif not claimed:
                 self._discard_recovery(pending, recovery)
@@ -1279,7 +1292,9 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="stale")
         except asyncio.CancelledError:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery, runtime=runtime):
+            if claimed and await self._recovery_is_in_progress(
+                recovery, runtime=runtime
+            ):
                 self._recovery_queue.insert(0, recovery)
                 await self._present_next_recovery()
             if response_cancellation is not None:
@@ -1287,7 +1302,9 @@ class _LocalApplicationBackend:
             raise
         except BaseException:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery, runtime=runtime):
+            if claimed and await self._recovery_is_in_progress(
+                recovery, runtime=runtime
+            ):
                 self._recovery_queue.insert(0, recovery)
                 await self._present_next_recovery()
             raise
@@ -1468,14 +1485,14 @@ class _LocalApplicationBackend:
         if self._recovery_queue and self._recovery_queue[0] == recovery:
             self._recovery_queue.pop(0)
 
-    def _recovery_is_in_progress(
+    async def _recovery_is_in_progress(
         self,
         recovery: RecoveryResult,
         *,
         runtime: WorkspaceRuntime,
     ) -> bool:
         try:
-            view = runtime.conversation.read_thread(recovery.thread_id)
+            view = await runtime.conversation.read_thread(recovery.thread_id)
         except ThreadNotFound:
             return False
         return any(
@@ -1602,6 +1619,8 @@ class _LocalApplicationBackend:
             )
 
     async def _recover_older_state(self) -> None:
+        if self._state_lease is not None and self._state_lease.active:
+            return
         try:
             exclusive = StateLease.acquire(
                 self._paths.home,
@@ -1615,22 +1634,18 @@ class _LocalApplicationBackend:
                 data={"state_directory": str(self._paths.state_dir.resolve())},
             ) from error
 
-        worker: asyncio.Task[None] | None = None
+        cancellation: asyncio.CancelledError | None = None
         try:
-            preflight = inspect_application_state(self._paths.application_db)
+            preflight = await self._database.preflight()
             if preflight.compatibility is StateCompatibility.OLDER:
-                worker = asyncio.create_task(
-                    asyncio.to_thread(reset_local_state, exclusive)
+                cancellation = await _finish_state_mutation(
+                    self._database.reset(exclusive)
                 )
-                await asyncio.shield(worker)
-            elif preflight.compatibility is StateCompatibility.NEW:
-                worker = asyncio.create_task(
-                    asyncio.to_thread(
-                        initialize_application_database,
-                        self._paths.application_db,
-                    )
-                )
-                await asyncio.shield(worker)
+            elif preflight.compatibility in {
+                StateCompatibility.NEW,
+                StateCompatibility.CURRENT,
+            }:
+                cancellation = await _finish_state_mutation(self._database.initialize())
             elif preflight.compatibility is StateCompatibility.NEWER:
                 assert preflight.found_schema is not None
                 raise self._newer_state_failure(
@@ -1643,10 +1658,12 @@ class _LocalApplicationBackend:
                     "Awesome cannot identify the local state format.",
                     data={"state_directory": str(self._paths.state_dir.resolve())},
                 )
-            exclusive.downgrade()
+            try:
+                exclusive.downgrade()
+            except StateLeaseUnavailable:
+                await _finish_state_mutation(self._database.suspend())
+                raise
         except asyncio.CancelledError:
-            if worker is not None:
-                await _finish_cancelled_worker(worker)
             exclusive.close()
             raise
         except ApplicationFailure:
@@ -1689,6 +1706,8 @@ class _LocalApplicationBackend:
                 },
             ) from error
         self._state_lease = exclusive
+        if cancellation is not None:
+            raise cancellation
 
     async def cancel_foreground(self, operation_id: str) -> CancelResult:
         cancelled = await self._operations.cancel(operation_id)
@@ -1769,17 +1788,24 @@ class _LocalApplicationBackend:
         )
         self._provider_credential_reconciled = True
 
-    def _ensure_state_lease(self) -> None:
+    async def _ensure_state_lease(self) -> None:
         if self._state_lease is not None and self._state_lease.active:
             return
         shared = StateLease.acquire(self._paths.home, StateLeaseMode.SHARED)
         try:
-            preflight = inspect_application_state(self._paths.application_db)
-        except Exception:
+            preflight = await self._database.preflight()
+        except BaseException:
             shared.close()
             raise
         if preflight.compatibility is StateCompatibility.CURRENT:
+            try:
+                cancellation = await _finish_state_mutation(self._database.initialize())
+            except BaseException:
+                shared.close()
+                raise
             self._state_lease = shared
+            if cancellation is not None:
+                raise cancellation
             return
         shared.close()
         if preflight.compatibility is not StateCompatibility.NEW:
@@ -1789,17 +1815,26 @@ class _LocalApplicationBackend:
             self._paths.home,
             StateLeaseMode.EXCLUSIVE,
         )
+        cancellation = None
         try:
-            confirmed = inspect_application_state(self._paths.application_db)
+            confirmed = await self._database.preflight()
             if confirmed.compatibility is StateCompatibility.NEW:
-                initialize_application_database(self._paths.application_db)
+                cancellation = await _finish_state_mutation(self._database.initialize())
             elif confirmed.compatibility is not StateCompatibility.CURRENT:
                 self._raise_preflight(confirmed)
-            exclusive.downgrade()
-        except Exception:
+            else:
+                cancellation = await _finish_state_mutation(self._database.initialize())
+            try:
+                exclusive.downgrade()
+            except StateLeaseUnavailable:
+                await _finish_state_mutation(self._database.suspend())
+                raise
+        except BaseException:
             exclusive.close()
             raise
         self._state_lease = exclusive
+        if cancellation is not None:
+            raise cancellation
 
     def _raise_preflight(self, preflight: StatePreflight) -> None:
         if preflight.compatibility in {
@@ -1966,11 +2001,11 @@ class _LocalApplicationBackend:
             )
             if configuration is None:
                 try:
-                    await asyncio.to_thread(
-                        reconcile_provider_model_transaction,
+                    await reconcile_provider_model_transaction(
                         journal=self._provider_model_journal,
                         config_writer=UserConfigWriter(self._paths.config_file),
-                        conversation=self._conversation,
+                        model_transactions=(self._repositories.run_write_transaction),
+                        clock=self._clock,
                     )
                 except ProviderConfigurationRecoveryRequired as error:
                     raise _application_failure(
@@ -1993,7 +2028,7 @@ class _LocalApplicationBackend:
             )
             gateway_router = runtime_resources
 
-            change_store = SQLiteChangeSetStore(self._paths.application_db)
+            change_store = SQLiteChangeSetStore(self._database)
             change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
             journal = ChangeJournal(change_store, change_blobs, self._workspace)
             change_analyzer = ChangeAnalyzer(
@@ -2019,7 +2054,7 @@ class _LocalApplicationBackend:
                 session_id=self._session_id,
                 workspace=self._workspace,
             )
-            change_scope.reconcile()
+            await change_scope.reconcile()
 
             bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
             catalog = discover_skills(
@@ -2058,21 +2093,20 @@ class _LocalApplicationBackend:
                 diagnostic=mem0_diagnostic,
             )
 
-            enablements = SQLiteMcpEnablementStore(self._paths.application_db)
+            enablements = SQLiteMcpEnablementStore(self._database)
+            enablement_snapshot = await enablements.snapshot(self._workspace.key)
             if self._mcp_client_factory is None:
                 candidate_mcp = McpManager(
                     configs=_mcp_configs(application_config),
-                    workspace_key=self._workspace.key,
                     workspace_trusted=True,
-                    enablements=enablements,
+                    enablements=enablement_snapshot,
                     registry=registry,
                 )
             else:
                 candidate_mcp = McpManager(
                     configs=_mcp_configs(application_config),
-                    workspace_key=self._workspace.key,
                     workspace_trusted=True,
-                    enablements=enablements,
+                    enablements=enablement_snapshot,
                     registry=registry,
                     client_factory=self._mcp_client_factory,
                 )
@@ -2114,7 +2148,7 @@ class _LocalApplicationBackend:
 
             graph = compile_agent_graph(saver)
 
-            def runtime_factory(
+            async def runtime_factory(
                 turn: Turn,
                 operation_id: str,
                 projector: ApplicationEventProjector,
@@ -2165,7 +2199,7 @@ class _LocalApplicationBackend:
                     decision = await self._interactions.wait(pending.id)
                     return ToolApprovalDecision(decision.value)
 
-                def tool_context(
+                async def tool_context(
                     state: object,
                     request: ToolRequest,
                 ) -> ToolExecutionContext:
@@ -2177,9 +2211,9 @@ class _LocalApplicationBackend:
                         turn_id=turn_id,
                         origin=ToolExecutionOrigin.AGENT,
                         emitter=self._emitter,
-                        activity_writer=self._repositories.tool_activities,
+                        activity_writer=self._repositories,
                         monotonic=monotonic,
-                        change_set_id=runtime.change_scope.change_set_for_tool(
+                        change_set_id=await runtime.change_scope.change_set_for_tool(
                             tool_name=request.tool_name,
                             owner=turn_id,
                             turn_id=turn_id,
@@ -2188,10 +2222,10 @@ class _LocalApplicationBackend:
                         approval_resolver=resolve_tool_interaction,
                     )
 
-                def record_context_snapshot(
+                async def record_context_snapshot(
                     manifest: tuple[dict[str, JsonValue], ...],
                 ) -> None:
-                    runtime.conversation.store_context_manifest(turn.id, manifest)
+                    await runtime.conversation.store_context_manifest(turn.id, manifest)
 
                 post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
                 if (
@@ -2224,7 +2258,7 @@ class _LocalApplicationBackend:
                     monotonic=monotonic,
                     context_token_estimator=estimate_messages,
                     compressor=context_service,
-                    current_user_text=context_service.runtime_current_input(turn),
+                    current_user_text=await context_service.runtime_current_input(turn),
                     context_snapshot_recorder=record_context_snapshot,
                     post_answer_memory=post_answer_memory,
                 )
@@ -2245,7 +2279,7 @@ class _LocalApplicationBackend:
                 context_snapshot_validator=context_service.validate_frozen_snapshot,
             )
 
-            def direct_context(
+            async def direct_context(
                 thread_id: str,
                 operation_id: str,
                 request: ToolRequest,
@@ -2258,9 +2292,9 @@ class _LocalApplicationBackend:
                     turn_id=None,
                     origin=ToolExecutionOrigin.DIRECT,
                     emitter=self._emitter,
-                    activity_writer=self._repositories.tool_activities,
+                    activity_writer=self._repositories,
                     monotonic=monotonic,
-                    change_set_id=runtime.change_scope.change_set_for_tool(
+                    change_set_id=await runtime.change_scope.change_set_for_tool(
                         tool_name=request.tool_name,
                         owner=operation_id,
                         turn_id=None,
@@ -2316,6 +2350,7 @@ class _LocalApplicationBackend:
             await extensions.prepare_turn_extensions()
             provider_configuration = ProviderConfigurationService(
                 conversation=self._conversation,
+                model_transactions=self._repositories.run_write_transaction,
                 config_writer=UserConfigWriter(self._paths.config_file),
                 secret_store=UserSecretStore(self._paths.env_file),
                 validator=self._credential_validator,
@@ -2324,7 +2359,12 @@ class _LocalApplicationBackend:
                 apply_configuration=self._apply_provider_configuration,
                 model_transaction_journal=self._provider_model_journal,
                 credential_transaction_journal=self._provider_credential_journal,
+                clock=self._clock,
             )
+
+            async def configuration_ready() -> bool:
+                return self._runtime is not None
+
             diagnostic_commands = DiagnosticCommandService(
                 workspace_path=self._workspace.display_path,
                 registry=registry,
@@ -2335,13 +2375,9 @@ class _LocalApplicationBackend:
                     self._require_runtime().sources.provider_credentials
                 ),
                 provider_doctor=provider_configuration.doctor,
-                configuration_ready=lambda: self._runtime is not None,
-                sqlite_ready=lambda: sqlite_database_health(
-                    self._paths.application_db
-                ),
-                checkpoints_ready=lambda: sqlite_database_health(
-                    self._paths.checkpoint_db
-                ),
+                configuration_ready=configuration_ready,
+                sqlite_ready=self._database.quick_check,
+                checkpoints_ready=checkpoints.health,
                 workspace_instruction_diagnostic=lambda: (
                     self._require_runtime().workspace_instruction_snapshot.diagnostic
                 ),
@@ -2385,9 +2421,7 @@ class _LocalApplicationBackend:
                     CommandName.PERMISSIONS: permission_commands.permissions,
                 },
                 foreground=self._foreground,
-                has_pending_interaction=lambda: (
-                    self._interactions.pending is not None
-                ),
+                has_pending_interaction=lambda: self._interactions.pending is not None,
                 mutation_guard=self._require_runtime_consistent,
             )
             return WorkspaceRuntime(
@@ -2638,7 +2672,7 @@ class _LocalApplicationBackend:
         thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return error("thread_not_found", "Select a Thread first.")
-        thread = runtime.conversation.read_thread(thread_id).thread
+        thread = (await runtime.conversation.read_thread(thread_id)).thread
         config = self._turn_config(thread, runtime=runtime)
         return await runtime.context.compact_command(
             intent,
@@ -2665,21 +2699,24 @@ class _LocalApplicationBackend:
         runtime = runtime or self._runtime
         return runtime.commands.current_thread_id if runtime is not None else None
 
-    def _command_usage(self) -> UsageSummary | None:
+    async def _command_usage(self) -> UsageSummary | None:
         runtime = self._require_runtime()
         thread_id = self._selected_thread_id(runtime=runtime)
         return (
-            None if thread_id is None else runtime.conversation.thread_usage(thread_id)
+            None
+            if thread_id is None
+            else await runtime.conversation.thread_usage(thread_id)
         )
 
-    def _command_status_snapshot(self) -> StatusSnapshot | None:
+    async def _command_status_snapshot(self) -> StatusSnapshot | None:
         runtime = self._require_runtime()
         thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return None
-        thread = runtime.conversation.read_thread(thread_id).thread
+        view = await runtime.conversation.read_thread(thread_id)
+        thread = view.thread
         config = self._turn_config(thread, runtime=runtime)
-        candidates = runtime.conversation.match_thread_prefix(
+        candidates = await runtime.conversation.match_thread_prefix(
             self._workspace.key,
             prefix=thread_display_id(thread.id),
             limit=200,
@@ -2734,22 +2771,23 @@ class _LocalApplicationBackend:
             credential_source_available=credential.source_available,
             context_used_tokens=sum(
                 ContextManifestItem.model_validate(item).estimated_tokens
-                for item in runtime.conversation.latest_context_manifest(thread_id)
+                for item in await runtime.conversation.latest_context_manifest(
+                    thread_id
+                )
             ),
             context_budget_tokens=config.budgets.total_context_tokens,
-            changed_file_count=self._latest_agent_change_file_count(
-                thread_id,
+            changed_file_count=await self._latest_agent_change_file_count(
+                view.tool_activities,
                 runtime=runtime,
             ),
         )
 
-    def _latest_agent_change_file_count(
+    async def _latest_agent_change_file_count(
         self,
-        thread_id: str,
+        activities: tuple[ToolActivity, ...],
         *,
         runtime: WorkspaceRuntime,
     ) -> int:
-        activities = runtime.conversation.read_thread(thread_id).tool_activities
         seen: set[str] = set()
         for activity in reversed(activities):
             identifier = activity.change_set_id
@@ -2760,7 +2798,7 @@ class _LocalApplicationBackend:
             ):
                 continue
             seen.add(identifier)
-            change_set = runtime.change_store.get(identifier)
+            change_set = await runtime.change_store.get(identifier)
             if (
                 change_set is None
                 or change_set.workspace_key != self._workspace.key
@@ -2804,15 +2842,15 @@ class _LocalApplicationBackend:
                 return None, error.diagnostic
         return Mem0CloudAdapter(cast(Mem0Client, client)), None
 
-    def _seal_turn(self, turn_id: str) -> None:
+    async def _seal_turn(self, turn_id: str) -> None:
         runtime = self._request_runtime.get() or self._runtime
         if runtime is not None:
-            runtime.change_scope.seal(turn_id)
+            await runtime.change_scope.seal(turn_id)
 
-    def _seal_direct(self, operation_id: str) -> None:
+    async def _seal_direct(self, operation_id: str) -> None:
         runtime = self._request_runtime.get() or self._runtime
         if runtime is not None:
-            runtime.change_scope.seal(operation_id)
+            await runtime.change_scope.seal(operation_id)
 
     async def _require_runtime_consistent(
         self,
@@ -2927,7 +2965,7 @@ class _LocalApplicationBackend:
             branch=runtime.workspace_branch if include_branch and runtime else None,
         )
 
-    def _page_change_summaries(
+    async def _page_change_summaries(
         self,
         activities: tuple[ToolActivity, ...],
         *,
@@ -2940,10 +2978,10 @@ class _LocalApplicationBackend:
             if change_set_id is None or change_set_id in seen:
                 continue
             seen.add(change_set_id)
-            change_set = runtime.change_store.get(change_set_id)
+            change_set = await runtime.change_store.get(change_set_id)
             if change_set is None:
                 continue
-            analysis = runtime.change_analyzer.analyze(change_set_id)
+            analysis = await runtime.change_analyzer.analyze(change_set_id)
             if not analysis.changes:
                 continue
             summaries.append(
@@ -2962,6 +3000,15 @@ class _LocalApplicationBackend:
 
 async def _await_shielded_task(task: asyncio.Task[None]) -> None:
     await asyncio.shield(task)
+
+
+async def _finish_state_mutation(
+    operation: Awaitable[None],
+) -> asyncio.CancelledError | None:
+    """Finish a lease-bound state mutation before exposing caller cancellation."""
+
+    _, cancellation = await finish_cancellation_safe(operation)
+    return cancellation
 
 
 async def _finish_cancelled_worker(worker: asyncio.Task[None]) -> None:

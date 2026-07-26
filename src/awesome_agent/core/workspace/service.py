@@ -105,25 +105,25 @@ def workspace_runtime_key(workspace: WorkspaceIdentity) -> str:
 
 
 class WorkspaceTrustStore(Protocol):
-    def get(self, workspace_key: str) -> WorkspaceTrust | None: ...
+    async def get(self, workspace_key: str) -> WorkspaceTrust | None: ...
 
-    def accept(self, identity: WorkspaceIdentity) -> WorkspaceTrust: ...
+    async def accept(self, identity: WorkspaceIdentity) -> WorkspaceTrust: ...
 
-    def revoke(self, workspace_key: str) -> bool: ...
+    async def revoke(self, workspace_key: str) -> bool: ...
 
 
 class WorkspaceTrustService:
     def __init__(self, store: WorkspaceTrustStore) -> None:
         self._store = store
 
-    def status(self, identity: WorkspaceIdentity) -> TrustStatus:
-        record = self._store.get(identity.key)
+    async def status(self, identity: WorkspaceIdentity) -> TrustStatus:
+        record = await self._store.get(identity.key)
         if record is None or record.canonical_path != identity.canonical_path:
             return TrustStatus.UNKNOWN
         return TrustStatus.TRUSTED
 
-    def accept(self, identity: WorkspaceIdentity) -> WorkspaceTrust:
-        return self._store.accept(identity)
+    async def accept(self, identity: WorkspaceIdentity) -> WorkspaceTrust:
+        return await self._store.accept(identity)
 
-    def revoke(self, identity: WorkspaceIdentity) -> bool:
-        return self._store.revoke(identity.key)
+    async def revoke(self, identity: WorkspaceIdentity) -> bool:
+        return await self._store.revoke(identity.key)

@@ -24,6 +24,7 @@ from awesome_agent.context import estimate_messages
 from awesome_agent.core.tools import (
     ToolError,
     ToolErrorCode,
+    ToolExecutionContext,
     ToolRequest,
     ToolResult,
     ToolSpec,
@@ -183,6 +184,15 @@ def _runtime(
             manifest=({"kind": "temporary_thread_history", "count": 1},),
         )
 
+    async def tool_context_factory(
+        state: AgentState,
+        request: ToolRequest,
+    ) -> ToolExecutionContext:
+        return cast(
+            ToolExecutionContext,
+            {"turn_id": state["turn_id"], "tool_name": request.tool_name},
+        )
+
     return AgentRuntimeContext(
         gateway=cast(Any, gateway),
         executor=cast(Any, executor or FakeExecutor()),
@@ -202,10 +212,7 @@ def _runtime(
                 read_only=False,
             ),
         ),
-        tool_context_factory=lambda state, request: cast(
-            Any,
-            {"turn_id": state["turn_id"], "tool_name": request.tool_name},
-        ),
+        tool_context_factory=tool_context_factory,
         event_projector=FakeProjector(),
         context_builder=context_builder,
         budget=budget or TurnBudget(),

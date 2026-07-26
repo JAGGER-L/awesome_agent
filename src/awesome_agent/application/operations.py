@@ -13,6 +13,7 @@ from awesome_agent.application.foreground import (
     ForegroundBusy,
     ForegroundLease,
 )
+from awesome_agent.core.cancellation import finish_cancellation_safe
 from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.events import (
     EventEmitter,
@@ -35,6 +36,7 @@ class _OperationPhase(StrEnum):
     STARTING = "starting"
     RUNNING = "running"
     CANCELLING = "cancelling"
+    COMMITTING = "committing"
     COMMITTED = "committed"
 
 
@@ -346,36 +348,41 @@ class OperationController:
         self._starter_task = None
         return OperationHandle(operation_id=operation_id, task=task)
 
-    def commit_completed[T](
+    async def commit_completed[T](
         self,
         operation_id: str,
-        action: Callable[[], T],
+        action: Callable[[], Awaitable[T]],
     ) -> T:
-        """Atomically close cancellation around one synchronous durable commit."""
+        """Finish one durable success before exposing caller cancellation."""
 
         self._require_running(operation_id)
+        self._active_phase = _OperationPhase.COMMITTING
         try:
-            result = action()
+            result, cancellation = await finish_cancellation_safe(action())
         except BaseException:
             self._commit_terminal(EventType.OPERATION_FAILED)
             raise
         self._commit_terminal(EventType.OPERATION_COMPLETED)
+        if cancellation is not None:
+            raise cancellation
         return result
 
-    def commit_failed[T](self, operation_id: str, action: Callable[[], T]) -> T:
-        """Persist a failed outcome without exposing an intervening cancel point."""
+    async def commit_failed[T](
+        self,
+        operation_id: str,
+        action: Callable[[], Awaitable[T]],
+    ) -> T:
+        """Finish one durable failure before exposing caller cancellation."""
 
         self._require_running(operation_id)
+        self._active_phase = _OperationPhase.COMMITTING
         try:
-            return action()
+            result, cancellation = await finish_cancellation_safe(action())
         finally:
             self._commit_terminal(EventType.OPERATION_FAILED)
-
-    def mark_failed(self, operation_id: str) -> None:
-        """Commit a primary failure before its bounded fact-preservation awaits."""
-
-        self._require_running(operation_id)
-        self._commit_terminal(EventType.OPERATION_FAILED)
+        if cancellation is not None:
+            raise cancellation
+        return result
 
     async def publish_committed(
         self,

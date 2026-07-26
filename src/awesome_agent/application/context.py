@@ -192,11 +192,11 @@ class ApplicationContextService:
         capture = self._captures.get(turn_id)
         return "" if capture is None else capture.natural_input
 
-    def runtime_current_input(self, turn: Turn) -> str:
+    async def runtime_current_input(self, turn: Turn) -> str:
         capture = self._captures.get(turn.id)
         if capture is not None:
             return capture.natural_input
-        view = self._conversation.read_thread(turn.thread_id)
+        view = await self._conversation.read_thread(turn.thread_id)
         entry = next(item for item in view.entries if item.id == turn.user_entry_id)
         return parse_explicit_paths(entry.content).text
 
@@ -224,7 +224,7 @@ class ApplicationContextService:
         capture = self._captures.get(state["turn_id"])
         if capture is None:
             raise RuntimeError("Turn context was not prepared.")
-        view = self._conversation.read_thread(state["thread_id"])
+        view = await self._conversation.read_thread(state["thread_id"])
         turn = next(item for item in view.turns if item.id == state["turn_id"])
         sources: list[ContextSource] = [
             ContextSource(
@@ -337,7 +337,7 @@ class ApplicationContextService:
                 error_code="context_unrecoverable",
             )
         reserved_input_tokens = estimate_messages(tool_tail)
-        view = self._conversation.read_thread(state["thread_id"])
+        view = await self._conversation.read_thread(state["thread_id"])
         result = await self._compressor.compact(
             CompressionRequest(
                 view=view,
@@ -348,7 +348,7 @@ class ApplicationContextService:
         )
         if result.status is CompressionStatus.COMPLETED and result.summary is not None:
             try:
-                self._conversation.store_summary(
+                await self._conversation.store_summary(
                     result.summary,
                     expected=view.summary,
                 )
@@ -398,7 +398,7 @@ class ApplicationContextService:
         *,
         reserved_input_tokens: int = 0,
     ) -> PreparedAgentContext:
-        view = self._conversation.read_thread(state["thread_id"])
+        view = await self._conversation.read_thread(state["thread_id"])
         turn = next(item for item in view.turns if item.id == state["turn_id"])
         sources = _history_sources(view, turn)
         for manifest, raw_message in zip(
@@ -443,7 +443,7 @@ class ApplicationContextService:
         provider: str,
         model: str,
     ) -> CompressionResult:
-        view = self._conversation.read_thread(thread_id)
+        view = await self._conversation.read_thread(thread_id)
         result = await self._compressor.compact(
             CompressionRequest(
                 view=view,
@@ -452,12 +452,14 @@ class ApplicationContextService:
             )
         )
         if result.status is CompressionStatus.COMPLETED and result.summary is not None:
-            self._conversation.store_summary(result.summary, expected=view.summary)
+            await self._conversation.store_summary(
+                result.summary, expected=view.summary
+            )
         return result
 
-    def inspect(self, thread_id: str) -> dict[str, object]:
-        view = self._conversation.read_thread(thread_id)
-        manifest = self._conversation.latest_context_manifest(thread_id)
+    async def inspect(self, thread_id: str) -> dict[str, object]:
+        view = await self._conversation.read_thread(thread_id)
+        manifest = await self._conversation.latest_context_manifest(thread_id)
         return {
             "manifest": list(manifest),
             "summary_covered_entry_sequence": (
@@ -476,7 +478,7 @@ class ApplicationContextService:
     ) -> CommandOutcome:
         if intent.arguments:
             return error("invalid_arguments", "Usage: /context")
-        manifest = self._conversation.latest_context_manifest(thread_id)
+        manifest = await self._conversation.latest_context_manifest(thread_id)
         totals = {
             name: 0 for name in ("instructions", "conversation", "files", "memory")
         }
@@ -508,7 +510,7 @@ class ApplicationContextService:
     ) -> CommandOutcome:
         if intent.arguments:
             return error("invalid_arguments", "Usage: /compact")
-        before = self._conversation.read_thread(thread_id).summary
+        before = (await self._conversation.read_thread(thread_id)).summary
         compression = await self.compact_thread(
             thread_id,
             provider=provider,
@@ -519,7 +521,7 @@ class ApplicationContextService:
                 compression.error_code or "compression_failed",
                 "Context compression failed.",
             )
-        after = self._conversation.read_thread(thread_id).summary
+        after = (await self._conversation.read_thread(thread_id)).summary
         return result(
             CompactCommandPayload(
                 old_covered_entry_sequence=(

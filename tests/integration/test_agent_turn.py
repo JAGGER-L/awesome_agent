@@ -50,12 +50,23 @@ from awesome_agent.modeling import (
     TurnCompleted,
     UserMessage,
 )
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import (
     LangGraphCheckpointStore,
     sqlite_checkpoint_saver,
 )
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+
+
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
 
 
 class ScriptedGateway:
@@ -181,6 +192,7 @@ def _completed(
 )
 async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     tool_name: str | None,
     arguments: dict[str, str],
     expected_status: str | None,
@@ -189,10 +201,10 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
     workspace_path.mkdir()
     (workspace_path / "note.txt").write_text("before", encoding="utf-8")
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
-    change_store = SQLiteChangeSetStore(tmp_path / "application.db")
+    thread = await conversation.create_thread(workspace.key)
+    change_store = SQLiteChangeSetStore(application_database)
     journal = ChangeJournal(
         change_store,
         FileChangeBlobStore(tmp_path / "change-journal"),
@@ -234,12 +246,12 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
         checkpoint_store = LangGraphCheckpointStore(saver)
         graph = compile_agent_graph(saver)
 
-        def runtime_factory(
+        async def runtime_factory(
             turn: Turn,
             operation_id: str,
             projector: ApplicationEventProjector,
         ) -> AgentRuntimeContext:
-            change_set = journal.begin(
+            change_set = await journal.begin(
                 session_id="session_1",
                 turn_id=turn.id,
                 workspace=workspace,
@@ -261,7 +273,7 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                     manifest=({"kind": "temporary_thread_history", "count": 1},),
                 )
 
-            def tool_context_factory(
+            async def tool_context_factory(
                 state: object,
                 request: ToolRequest,
             ) -> ToolExecutionContext:
@@ -273,7 +285,7 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                     turn_id=turn.id,
                     origin=ToolExecutionOrigin.AGENT,
                     emitter=emitter,
-                    activity_writer=repositories.tool_activities,
+                    activity_writer=repositories,
                     monotonic=time.monotonic,
                     change_set_id=change_set.id,
                     permission_session=PermissionSession(
@@ -293,8 +305,8 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
                 context_token_estimator=estimate_messages,
             )
 
-        def seal_changes(turn_id: str) -> None:
-            journal.seal(change_sets[turn_id])
+        async def seal_changes(turn_id: str) -> None:
+            await journal.seal(change_sets[turn_id])
 
         coordinator = TurnCoordinator(
             workspace_key=workspace.key,
@@ -322,14 +334,14 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
         assert accepted.turn_id is not None
         assert await checkpoint_store.exists(accepted.turn_id) is False
 
-    view = conversation.read_thread(thread.id)
+    view = await conversation.read_thread(thread.id)
     assert view.turns[0].status is TurnStatus.COMPLETED
     assert view.entries[-1].content == "done"
     if expected_status is None:
         assert view.tool_activities == ()
     else:
         assert view.tool_activities[0].outcome.value == expected_status
-    stored_change = change_store.get(change_sets[view.turns[0].id])
+    stored_change = await change_store.get(change_sets[view.turns[0].id])
     assert stored_change is not None
     assert stored_change.lifecycle is ChangeLifecycle.APPLIED
     if tool_name == "edit_file":
@@ -355,13 +367,14 @@ async def test_real_graph_tool_turn_commits_history_and_removes_checkpoint(
 @pytest.mark.asyncio
 async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     registry = ToolRegistry()
     executor = ToolExecutor(registry)
     emitter = EventEmitter(
@@ -374,7 +387,7 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
         checkpoint_store = LangGraphCheckpointStore(saver)
         graph = compile_agent_graph(saver)
 
-        def runtime_factory(
+        async def runtime_factory(
             turn: Turn,
             operation_id: str,
             projector: ApplicationEventProjector,
@@ -386,7 +399,7 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
                     manifest=({"kind": "temporary_thread_history"},),
                 )
 
-            def tool_context_factory(
+            async def tool_context_factory(
                 state: object,
                 request: ToolRequest,
             ) -> ToolExecutionContext:
@@ -405,6 +418,9 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
                 context_token_estimator=estimate_messages,
             )
 
+        async def seal_changes(turn_id: str) -> None:
+            del turn_id
+
         coordinator = TurnCoordinator(
             workspace_key=workspace.key,
             conversation=conversation,
@@ -418,7 +434,7 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
             operations=OperationController(emitter),
             emitter=emitter,
             checkpoints=checkpoint_store,
-            seal_changes=lambda turn_id: None,
+            seal_changes=seal_changes,
         )
 
         accepted = await coordinator.submit_turn(
@@ -430,17 +446,20 @@ async def test_real_graph_cancellation_finalizes_turn_and_checkpoint(
         assert accepted.turn_id is not None
         assert await checkpoint_store.exists(accepted.turn_id) is False
 
-    assert conversation.read_thread(thread.id).turns[0].status is TurnStatus.CANCELLED
+    assert (await conversation.read_thread(thread.id)).turns[
+        0
+    ].status is TurnStatus.CANCELLED
 
 
 @pytest.mark.asyncio
 async def test_terminal_event_failure_cannot_skip_turn_resource_cleanup(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace = resolve_workspace(tmp_path)
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     config = TurnConfig(
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
@@ -453,19 +472,28 @@ async def test_terminal_event_failure_cannot_skip_turn_resource_cleanup(
         workspace_key=workspace.key,
         sink=FailOnTurnCompletedSink(),
     )
+
+    async def runtime_context_factory(
+        current: Turn,
+        operation: str,
+        projector: ApplicationEventProjector,
+    ) -> AgentRuntimeContext:
+        del current, operation, projector
+        return cast(AgentRuntimeContext, None)
+
+    async def seal_changes(turn_id: str) -> None:
+        sealed.append(turn_id)
+
     coordinator = TurnCoordinator(
         workspace_key=workspace.key,
         conversation=conversation,
         config_resolver=lambda current: config,
         graph=cast(Any, CompletedGraph()),
-        runtime_context_factory=lambda current, operation, projector: cast(
-            AgentRuntimeContext,
-            None,
-        ),
+        runtime_context_factory=runtime_context_factory,
         operations=OperationController(emitter),
         emitter=emitter,
         checkpoints=cast(Any, checkpoints),
-        seal_changes=sealed.append,
+        seal_changes=seal_changes,
     )
     accepted = await coordinator.submit_turn(
         thread.id,
@@ -474,7 +502,7 @@ async def test_terminal_event_failure_cannot_skip_turn_resource_cleanup(
     )
     await coordinator.wait(accepted.operation_id)
 
-    stored = conversation.read_thread(thread.id).turns[0]
+    stored = (await conversation.read_thread(thread.id)).turns[0]
     assert stored.status is TurnStatus.COMPLETED
     assert accepted.turn_id is not None
     assert sealed == [accepted.turn_id]

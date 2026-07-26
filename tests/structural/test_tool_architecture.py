@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from awesome_agent.core.changes import ChangeJournal
 from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
@@ -9,15 +11,21 @@ from awesome_agent.core.tools.permissions import ToolCapability
 from awesome_agent.core.tools.process import ProcessRunner
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
+from awesome_agent.storage import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 
 
-def test_baseline_tools_exist_without_fixing_total_tool_count(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_baseline_tools_exist_without_fixing_total_tool_count(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     identity = resolve_workspace(workspace)
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
     journal = ChangeJournal(
-        SQLiteChangeSetStore(tmp_path / "application.db"),
+        SQLiteChangeSetStore(database),
         FileChangeBlobStore(tmp_path / "change-journal"),
         identity,
     )
@@ -54,3 +62,4 @@ def test_baseline_tools_exist_without_fixing_total_tool_count(tmp_path: Path) ->
         "read_file": ToolCapability.WORKSPACE_READ,
         "write_file": ToolCapability.WORKSPACE_WRITE,
     }
+    await database.aclose()

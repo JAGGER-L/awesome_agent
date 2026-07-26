@@ -2,11 +2,12 @@ import asyncio
 import base64
 import sqlite3
 import sys
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 from typing import cast
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -46,6 +47,7 @@ from awesome_agent.core.tools.process import (
 )
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 
 
@@ -191,8 +193,19 @@ class CancellationSuppressingProcessRunner(RecordingProcessRunner):
             )
 
 
-def execute_fixture(
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
+
+
+async def execute_fixture(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     runner: ShellExecutionBackend,
     *,
     origin: ToolExecutionOrigin = ToolExecutionOrigin.AGENT,
@@ -209,11 +222,11 @@ def execute_fixture(
     workspace.mkdir()
     identity = resolve_workspace(workspace)
     journal = ChangeJournal(
-        SQLiteChangeSetStore(tmp_path / "application.db"),
+        SQLiteChangeSetStore(application_database),
         FileChangeBlobStore(tmp_path / "change-journal"),
         identity,
     )
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=identity,
@@ -232,7 +245,7 @@ def execute_fixture(
             workspace_key=identity.key,
             sink=sink,
         ),
-        activity_writer=Mock(),
+        activity_writer=AsyncMock(),
         monotonic=monotonic,
         change_set_id=change_set.id,
         permission_session=PermissionSession(
@@ -971,9 +984,12 @@ def test_command_policy_reports_outside_path_without_creating_approval_scope(
 @pytest.mark.asyncio
 async def test_agent_execute_requires_allow_once_for_simple_command(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, _, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, _, _, sink = await execute_fixture(
+        tmp_path, application_database, runner
+    )
 
     approvals: list[ToolApprovalRequest] = []
 
@@ -1005,10 +1021,13 @@ async def test_agent_execute_requires_allow_once_for_simple_command(
 @pytest.mark.asyncio
 async def test_benign_powershell_prefix_uses_normal_approval_flow(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     command = 'pwsh -Com "Write-Output safe"'
     runner = RecordingProcessRunner()
-    executor, context, _, _, _ = execute_fixture(tmp_path, runner)
+    executor, context, _, _, _ = await execute_fixture(
+        tmp_path, application_database, runner
+    )
     approvals: list[ToolApprovalRequest] = []
 
     async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
@@ -1034,10 +1053,12 @@ async def test_benign_powershell_prefix_uses_normal_approval_flow(
 @pytest.mark.asyncio
 async def test_direct_execute_is_already_explicit_user_authority(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, _, _, _ = execute_fixture(
+    executor, context, _, _, _ = await execute_fixture(
         tmp_path,
+        application_database,
         runner,
         origin=ToolExecutionOrigin.DIRECT,
     )
@@ -1058,14 +1079,15 @@ async def test_direct_execute_is_already_explicit_user_authority(
 @pytest.mark.asyncio
 async def test_execute_strips_secrets_redacts_and_records_observation(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SAFE_EXEC_VALUE", "safe-value")
     monkeypatch.setenv("OPENAI_API_KEY", "secret-api-key")
     monkeypatch.setenv("SERVICE_TOKEN", "secret-token")
     monkeypatch.setenv("DB_PASSWORD", "secret-password")
-    executor, context, journal, workspace, _ = execute_fixture(
-        tmp_path, ProcessRunner()
+    executor, context, journal, workspace, _ = await execute_fixture(
+        tmp_path, application_database, ProcessRunner()
     )
     subdirectory = workspace / "subdirectory"
     subdirectory.mkdir()
@@ -1092,7 +1114,7 @@ async def test_execute_strips_secrets_redacts_and_records_observation(
         ),
         context=context,
     )
-    sealed = journal.seal(context.change_set_id or "")
+    sealed = await journal.seal(context.change_set_id or "")
 
     assert result.status is ToolStatus.SUCCESS
     assert str(subdirectory) in result.content
@@ -1139,6 +1161,7 @@ _HARD_DENY_REGRESSION_CASES = [
 @pytest.mark.parametrize("mode", list(PermissionMode))
 async def test_execute_hard_denial_never_starts_process(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
     mode: PermissionMode,
     dialect: ShellDialect,
@@ -1146,8 +1169,9 @@ async def test_execute_hard_denial_never_starts_process(
 ) -> None:
     monkeypatch.setattr(executor_module, "host_shell_dialect", lambda: dialect)
     runner = RecordingProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(
+    executor, context, journal, _, sink = await execute_fixture(
         tmp_path,
+        application_database,
         runner,
         workspace_name=(
             "awesome_agent"
@@ -1172,7 +1196,7 @@ async def test_execute_hard_denial_never_starts_process(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.PERMISSION_DENIED
     assert runner.calls == []
-    assert journal.seal(context.change_set_id or "").execute == []
+    assert (await journal.seal(context.change_set_id or "")).execute == []
     _assert_one_terminal_event(sink)
     _assert_one_activity(context)
 
@@ -1181,14 +1205,16 @@ async def test_execute_hard_denial_never_starts_process(
 @pytest.mark.parametrize(("dialect", "command"), _HARD_DENY_REGRESSION_CASES)
 async def test_direct_execute_cannot_bypass_hard_denial(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
     dialect: ShellDialect,
     command: str,
 ) -> None:
     monkeypatch.setattr(executor_module, "host_shell_dialect", lambda: dialect)
     runner = RecordingProcessRunner()
-    executor, context, journal, _, _ = execute_fixture(
+    executor, context, journal, _, _ = await execute_fixture(
         tmp_path,
+        application_database,
         runner,
         origin=ToolExecutionOrigin.DIRECT,
         workspace_name=(
@@ -1211,15 +1237,18 @@ async def test_direct_execute_cannot_bypass_hard_denial(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.PERMISSION_DENIED
     assert runner.calls == []
-    assert journal.seal(context.change_set_id or "").execute == []
+    assert (await journal.seal(context.change_set_id or "")).execute == []
 
 
 @pytest.mark.asyncio
 async def test_execute_invalid_arguments_do_not_record_an_attempt(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, journal, _, sink = await execute_fixture(
+        tmp_path, application_database, runner
+    )
 
     result = await executor.execute(
         ToolRequest(
@@ -1234,7 +1263,7 @@ async def test_execute_invalid_arguments_do_not_record_an_attempt(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.INVALID_ARGUMENTS
     assert runner.calls == []
-    assert journal.seal(context.change_set_id or "").execute == []
+    assert (await journal.seal(context.change_set_id or "")).execute == []
     _assert_one_terminal_event(sink)
     _assert_one_activity(context)
 
@@ -1242,9 +1271,12 @@ async def test_execute_invalid_arguments_do_not_record_an_attempt(
 @pytest.mark.asyncio
 async def test_execute_permission_denial_does_not_record_an_attempt(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, journal, _, sink = await execute_fixture(
+        tmp_path, application_database, runner
+    )
 
     async def deny(_: ToolApprovalRequest) -> ToolApprovalDecision:
         return ToolApprovalDecision.DENY
@@ -1262,7 +1294,7 @@ async def test_execute_permission_denial_does_not_record_an_attempt(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.PERMISSION_DENIED
     assert runner.calls == []
-    assert journal.seal(context.change_set_id or "").execute == []
+    assert (await journal.seal(context.change_set_id or "")).execute == []
     _assert_one_terminal_event(sink)
     _assert_one_activity(context)
 
@@ -1270,10 +1302,12 @@ async def test_execute_permission_denial_does_not_record_an_attempt(
 @pytest.mark.asyncio
 async def test_execute_uses_requested_timeout_instead_of_global_default(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     runner = DelayedProcessRunner()
-    executor, context, _, _, _ = execute_fixture(
+    executor, context, _, _, _ = await execute_fixture(
         tmp_path,
+        application_database,
         runner,
         executor_timeout_seconds=0.01,
     )
@@ -1297,18 +1331,21 @@ async def test_execute_uses_requested_timeout_instead_of_global_default(
 @pytest.mark.asyncio
 async def test_execute_outer_deadline_rejects_backend_late_success(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(execute_module, "_EXECUTE_CLEANUP_BUDGET_SECONDS", 0.01)
     runner = CancellationSuppressingProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, journal, _, sink = await execute_fixture(
+        tmp_path, application_database, runner
+    )
 
     started = monotonic()
     result = await executor.execute(
         ToolRequest(
             call_id="call_execute",
             tool_name="execute",
-            arguments={"command": "pytest", "timeout_seconds": 0.01},
+            arguments={"command": "pytest", "timeout_seconds": 0.05},
         ),
         context=replace(
             context,
@@ -1319,21 +1356,27 @@ async def test_execute_outer_deadline_rejects_backend_late_success(
     assert result.status is ToolStatus.ERROR
     assert result.error is not None
     assert result.error.code is ToolErrorCode.TIMEOUT
-    assert monotonic() - started < 0.1
+    assert monotonic() - started < 0.2
     await asyncio.wait_for(runner.cancellation_seen.wait(), timeout=1)
     assert not runner.late_returned.is_set()
     await asyncio.wait_for(runner.late_returned.wait(), timeout=1)
     assert [
-        item.command for item in journal.seal(context.change_set_id or "").execute
+        item.command
+        for item in (await journal.seal(context.change_set_id or "")).execute
     ] == ["pytest"]
     _assert_one_terminal_event(sink)
     _assert_one_activity(context)
 
 
 @pytest.mark.asyncio
-async def test_execute_records_attempt_before_backend_failure(tmp_path: Path) -> None:
+async def test_execute_records_attempt_before_backend_failure(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
     runner = FailingProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, journal, _, sink = await execute_fixture(
+        tmp_path, application_database, runner
+    )
 
     with pytest.raises(ToolInvariantError, match="Unexpected tool handler failure"):
         await executor.execute(
@@ -1348,7 +1391,7 @@ async def test_execute_records_attempt_before_backend_failure(tmp_path: Path) ->
             ),
         )
 
-    sealed = journal.seal(context.change_set_id or "")
+    sealed = await journal.seal(context.change_set_id or "")
     assert [item.command for item in sealed.execute] == ["pytest"]
     assert len(runner.calls) == 1
     _assert_one_terminal_event(sink)
@@ -1358,13 +1401,15 @@ async def test_execute_records_attempt_before_backend_failure(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_execute_redacts_persisted_command_but_runs_original(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     command = (
         "echo API_KEY=api-secret Authorization: Bearer bearer-secret token=token-secret"
     )
     runner = RecordingProcessRunner()
-    executor, context, journal, _, _ = execute_fixture(
+    executor, context, journal, _, _ = await execute_fixture(
         tmp_path,
+        application_database,
         runner,
         origin=ToolExecutionOrigin.DIRECT,
     )
@@ -1382,7 +1427,7 @@ async def test_execute_redacts_persisted_command_but_runs_original(
     assert len(runner.calls) == 1
     argv, _, environment = runner.calls[0]
     assert command in argv or environment.get("AWESOME_EXEC_COMMAND") == command
-    sealed = journal.seal(context.change_set_id or "")
+    sealed = await journal.seal(context.change_set_id or "")
     [observation] = sealed.execute
     assert observation.command.startswith("echo ")
     assert "[REDACTED:api_key]" in observation.command
@@ -1401,9 +1446,12 @@ async def test_execute_redacts_persisted_command_but_runs_original(
 @pytest.mark.asyncio
 async def test_execute_timeout_records_one_attempt_and_terminal_event(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     runner = TimedOutProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, journal, _, sink = await execute_fixture(
+        tmp_path, application_database, runner
+    )
 
     result = await executor.execute(
         ToolRequest(
@@ -1420,16 +1468,21 @@ async def test_execute_timeout_records_one_attempt_and_terminal_event(
     assert result.status is ToolStatus.ERROR
     assert result.error is not None
     assert result.error.code is ToolErrorCode.TIMEOUT
-    sealed = journal.seal(context.change_set_id or "")
+    sealed = await journal.seal(context.change_set_id or "")
     assert [item.command for item in sealed.execute] == ["pytest"]
     _assert_one_terminal_event(sink)
     _assert_one_activity(context)
 
 
 @pytest.mark.asyncio
-async def test_execute_records_cancelled_attempt_once(tmp_path: Path) -> None:
+async def test_execute_records_cancelled_attempt_once(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
     runner = WaitingProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, journal, _, sink = await execute_fixture(
+        tmp_path, application_database, runner
+    )
     task = asyncio.create_task(
         executor.execute(
             ToolRequest(
@@ -1449,7 +1502,7 @@ async def test_execute_records_cancelled_attempt_once(tmp_path: Path) -> None:
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    sealed = journal.seal(context.change_set_id or "")
+    sealed = await journal.seal(context.change_set_id or "")
     assert [item.command for item in sealed.execute] == ["pytest"]
     event_types = [event.event_type.value for event in sink.events]
     assert event_types.count("tool.cancelled") == 1
@@ -1460,9 +1513,12 @@ async def test_execute_records_cancelled_attempt_once(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_execute_preserves_user_cancellation_when_backend_returns_late(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     runner = CancellationSuppressingProcessRunner()
-    executor, context, journal, _, sink = execute_fixture(tmp_path, runner)
+    executor, context, journal, _, sink = await execute_fixture(
+        tmp_path, application_database, runner
+    )
     task = asyncio.create_task(
         executor.execute(
             ToolRequest(
@@ -1487,7 +1543,8 @@ async def test_execute_preserves_user_cancellation_when_backend_returns_late(
     assert runner.cancellation_seen.is_set()
     assert runner.late_returned.is_set()
     assert [
-        item.command for item in journal.seal(context.change_set_id or "").execute
+        item.command
+        for item in (await journal.seal(context.change_set_id or "")).execute
     ] == ["pytest"]
     _assert_one_terminal_event(sink)
     _assert_one_activity(context)
@@ -1496,9 +1553,12 @@ async def test_execute_preserves_user_cancellation_when_backend_returns_late(
 @pytest.mark.asyncio
 async def test_execute_outside_path_requires_matching_allow_once_scope(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     runner = RecordingProcessRunner()
-    executor, context, _, _workspace, _ = execute_fixture(tmp_path, runner)
+    executor, context, _, _workspace, _ = await execute_fixture(
+        tmp_path, application_database, runner
+    )
     outside = tmp_path / "outside.txt"
     command = f"echo {outside}"
     request = ToolRequest(

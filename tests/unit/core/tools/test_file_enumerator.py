@@ -6,7 +6,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 from threading import Event
 from time import monotonic, sleep
-from unittest.mock import Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -48,7 +48,7 @@ def _context(workspace: Path) -> ToolExecutionContext:
             workspace_key=identity.key,
             sink=CollectingEventSink(),
         ),
-        activity_writer=Mock(),
+        activity_writer=AsyncMock(),
         monotonic=monotonic,
     )
 

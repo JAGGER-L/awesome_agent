@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, JsonValue, ValidationError
 
-from awesome_agent.core.cancellation import finish_bounded_cancellation_cleanup
+from awesome_agent.core.cancellation import finish_cancellation_safe
 from awesome_agent.core.events import EventType, ToolResultPayload, ToolStartedPayload
 from awesome_agent.core.tools.command_policy import (
     CommandPolicyAction,
@@ -165,23 +165,29 @@ class ToolExecutor:
                 timeout_seconds=total_timeout,
             )
         except asyncio.CancelledError as cancellation:
-            await finish_bounded_cancellation_cleanup(
-                self._finalize(
+            presentation, activity = self._terminal_artifacts(
+                request,
+                context,
+                started,
+                outcome="cancelled",
+                presentation=self._request_presentation(
                     request,
-                    context,
-                    started,
-                    outcome="cancelled",
-                    presentation=self._request_presentation(
-                        request,
-                        outcome="Cancelled",
-                        summary="Cancelled",
-                    ),
-                    error_code=ToolErrorCode.CANCELLED.value,
-                    event_type=EventType.TOOL_CANCELLED,
-                    best_effort=True,
+                    outcome="Cancelled",
+                    summary="Cancelled",
                 ),
-                timeout_seconds=_TERMINAL_CANCELLATION_CLEANUP_SECONDS,
+                error_code=ToolErrorCode.CANCELLED.value,
             )
+            await finish_cancellation_safe(
+                self._persist_activity_after_cancellation(context, activity)
+            )
+            terminal_task = self._start_terminal_event(
+                request,
+                context,
+                presentation,
+                activity,
+                event_type=EventType.TOOL_CANCELLED,
+            )
+            await self._finish_terminal_event(terminal_task)
             raise cancellation
         except ValidationError:
             return await self._error_result(
@@ -460,73 +466,126 @@ class ToolExecutor:
         error_code: str | None,
         event_type: ToolTerminalEventType,
     ) -> ToolPresentation:
-        finalization_task = asyncio.create_task(
-            self._finalize(
+        measured, activity = self._terminal_artifacts(
+            request,
+            context,
+            started,
+            outcome=outcome,
+            presentation=presentation,
+            error_code=error_code,
+        )
+        audit_error, audit_cancellation = await finish_cancellation_safe(
+            self._capture_activity_error(context, activity)
+        )
+        if audit_cancellation is not None:
+            if audit_error is not None:
+                logger.warning(
+                    "Tool audit finalization failed after caller cancellation.",
+                    exc_info=(
+                        type(audit_error),
+                        audit_error,
+                        audit_error.__traceback__,
+                    ),
+                )
+            terminal_task = self._start_terminal_event(
                 request,
                 context,
-                started,
-                outcome=outcome,
-                presentation=presentation,
-                error_code=error_code,
+                measured,
+                activity,
                 event_type=event_type,
-            ),
-            name=f"tool-finalize:{request.call_id}",
+            )
+            await self._finish_terminal_event(terminal_task)
+            raise audit_cancellation
+        if audit_error is not None:
+            raise ToolInvariantError("Tool audit finalization failed.") from audit_error
+
+        terminal_task = self._start_terminal_event(
+            request,
+            context,
+            measured,
+            activity,
+            event_type=event_type,
         )
         try:
-            return await asyncio.shield(finalization_task)
-        except asyncio.CancelledError as cancellation:
-            await self._finish_handler_outcome_finalization(finalization_task)
-            raise cancellation
+            await asyncio.shield(terminal_task)
+        except asyncio.CancelledError as event_cancellation:
+            await self._finish_terminal_event(terminal_task)
+            raise event_cancellation
+        return measured
 
     @staticmethod
-    async def _finish_handler_outcome_finalization(
-        finalization_task: asyncio.Task[ToolPresentation],
+    async def _finish_terminal_event(
+        terminal_task: asyncio.Task[None],
     ) -> None:
         deadline = (
             asyncio.get_running_loop().time() + _TERMINAL_CANCELLATION_CLEANUP_SECONDS
         )
-        while not finalization_task.done():
+        while not terminal_task.done():
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 break
             try:
-                await asyncio.wait((finalization_task,), timeout=remaining)
+                await asyncio.wait((terminal_task,), timeout=remaining)
             except asyncio.CancelledError:
                 continue
 
-        if not finalization_task.done():
-            finalization_task.cancel()
-            finalization_task.add_done_callback(ToolExecutor._consume_finalization_task)
+        if not terminal_task.done():
+            terminal_task.cancel()
+            terminal_task.add_done_callback(ToolExecutor._consume_terminal_task)
             logger.warning(
-                "Tool finalization exceeded its bounded cancellation deadline; "
+                "Tool terminal event exceeded its bounded cancellation deadline; "
                 "terminal event delivery is uncertain."
             )
             return
-        if finalization_task.cancelled():
+        if terminal_task.cancelled():
             logger.warning(
-                "Tool finalization was cancelled after handler completion; "
+                "Tool terminal event was cancelled after handler completion; "
                 "terminal event delivery is uncertain."
             )
             return
-        error = finalization_task.exception()
+        error = terminal_task.exception()
         if error is not None:
             logger.warning(
-                "Tool finalization failed after caller cancellation.",
+                "Tool terminal event delivery failed after caller cancellation.",
                 exc_info=(type(error), error, error.__traceback__),
             )
 
     @staticmethod
-    def _consume_finalization_task(
-        finalization_task: asyncio.Task[ToolPresentation],
+    def _consume_terminal_task(
+        terminal_task: asyncio.Task[None],
     ) -> None:
-        if finalization_task.cancelled():
+        if terminal_task.cancelled():
             return
         try:
-            finalization_task.exception()
+            terminal_task.exception()
         except Exception:
             return
 
-    async def _finalize(
+    @staticmethod
+    async def _capture_activity_error(
+        context: ToolExecutionContext,
+        activity: ToolActivityDraft,
+    ) -> Exception | None:
+        try:
+            await context.activity_writer.finalize(activity)
+        except Exception as error:
+            return error
+        return None
+
+    @staticmethod
+    async def _persist_activity_after_cancellation(
+        context: ToolExecutionContext,
+        activity: ToolActivityDraft,
+    ) -> None:
+        try:
+            await context.activity_writer.finalize(activity)
+        except (Exception, asyncio.CancelledError):
+            logger.warning(
+                "Tool audit finalization failed after cancellation.",
+                exc_info=True,
+            )
+
+    def _terminal_artifacts(
         self,
         request: ToolRequest,
         context: ToolExecutionContext,
@@ -535,9 +594,7 @@ class ToolExecutor:
         outcome: ToolOutcome,
         presentation: ToolPresentation,
         error_code: str | None,
-        event_type: ToolTerminalEventType,
-        best_effort: bool = False,
-    ) -> ToolPresentation:
+    ) -> tuple[ToolPresentation, ToolActivityDraft]:
         duration_ms = max(0, round((context.monotonic() - started) * 1_000))
         measured = presentation.model_copy(update={"duration_ms": duration_ms})
         argument_names = ", ".join(
@@ -546,57 +603,54 @@ class ToolExecutor:
         input_summary = (
             f"arguments: {argument_names}" if argument_names else "arguments: none"
         )
-        try:
-            context.activity_writer.finalize(
-                ToolActivityDraft(
-                    thread_id=context.thread_id,
-                    turn_id=context.turn_id,
-                    operation_id=context.operation_id,
-                    call_id=request.call_id,
-                    origin=context.origin,
-                    tool_name=request.tool_name,
-                    outcome=outcome,
-                    input_summary=input_summary,
-                    result_summary=measured.summary,
-                    error_code=error_code,
-                    duration_ms=duration_ms,
-                    change_set_id=context.change_set_id,
-                )
-            )
-        except Exception as error:
-            if not best_effort:
-                raise ToolInvariantError("Tool audit finalization failed.") from error
-            logger.warning(
-                "Tool audit finalization failed after cancellation.",
-                exc_info=True,
-            )
-        try:
+        return measured, ToolActivityDraft(
+            thread_id=context.thread_id,
+            turn_id=context.turn_id,
+            operation_id=context.operation_id,
+            call_id=request.call_id,
+            origin=context.origin,
+            tool_name=request.tool_name,
+            outcome=outcome,
+            input_summary=input_summary,
+            result_summary=measured.summary,
+            error_code=error_code,
+            duration_ms=duration_ms,
+            change_set_id=context.change_set_id,
+        )
+
+    @staticmethod
+    def _start_terminal_event(
+        request: ToolRequest,
+        context: ToolExecutionContext,
+        presentation: ToolPresentation,
+        activity: ToolActivityDraft,
+        *,
+        event_type: ToolTerminalEventType,
+    ) -> asyncio.Task[None]:
+        async def emit_terminal() -> None:
             await context.emitter.emit(
                 ToolResultPayload(
                     kind=event_type,
                     call_id=request.call_id,
                     tool_name=request.tool_name,
-                    verb=measured.verb,
-                    target=measured.target,
-                    outcome=measured.outcome or outcome.title(),
-                    summary=measured.summary,
-                    detail=measured.detail,
-                    detail_truncated_count=measured.detail_truncated_count,
-                    duration_ms=duration_ms,
-                    error_code=error_code,
+                    verb=presentation.verb,
+                    target=presentation.target,
+                    outcome=presentation.outcome or activity.outcome.title(),
+                    summary=presentation.summary,
+                    detail=presentation.detail,
+                    detail_truncated_count=presentation.detail_truncated_count,
+                    duration_ms=activity.duration_ms,
+                    error_code=activity.error_code,
                 ),
                 thread_id=context.thread_id,
                 turn_id=context.turn_id,
                 operation_id=context.operation_id,
             )
-        except Exception:
-            if not best_effort:
-                raise
-            logger.warning(
-                "Tool terminal event delivery failed after cancellation.",
-                exc_info=True,
-            )
-        return measured
+
+        return asyncio.create_task(
+            emit_terminal(),
+            name=f"tool-terminal:{request.call_id}",
+        )
 
     def _request_presentation(
         self,

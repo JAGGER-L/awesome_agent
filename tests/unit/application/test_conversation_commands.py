@@ -29,7 +29,7 @@ class ConversationStub:
             updated_at=datetime.now(UTC),
         )
 
-    def create_thread(
+    async def create_thread(
         self, workspace_key: str, title: str | None, **_: object
     ) -> Thread:
         assert workspace_key == "workspace_1"
@@ -38,16 +38,16 @@ class ConversationStub:
             self.thread = self.thread.model_copy(update={"title": title})
         return self.thread
 
-    def read_thread(self, thread_id: str) -> _ReadResult:
+    async def read_thread(self, thread_id: str) -> _ReadResult:
         assert thread_id == self.thread.id
         return _ReadResult(self.thread)
 
-    def set_thinking(self, thread_id: str, enabled: bool) -> Thread:
+    async def set_thinking(self, thread_id: str, enabled: bool) -> Thread:
         assert thread_id == self.thread.id
         self.thread = self.thread.model_copy(update={"thinking_enabled": enabled})
         return self.thread
 
-    def rename_thread(self, thread_id: str, title: str) -> Thread:
+    async def rename_thread(self, thread_id: str, title: str) -> Thread:
         assert thread_id == self.thread.id
         self.thread = self.thread.model_copy(
             update={

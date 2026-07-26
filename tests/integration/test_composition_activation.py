@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import os
+import threading
 import weakref
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager, suppress
@@ -55,8 +56,25 @@ from awesome_agent.extensions.mcp import McpServerConfig, McpServerStatus
 from awesome_agent.extensions.skills import SkillCatalog, discover_skills
 from awesome_agent.modeling import ModelGateway
 from awesome_agent.paths import AwesomePaths
-from awesome_agent.storage import StateLease, StateLeaseMode, StateLeaseUnavailable
+from awesome_agent.storage import (
+    ApplicationSQLite,
+    ApplicationSQLiteClosed,
+    StateLease,
+    StateLeaseMode,
+    StateLeaseUnavailable,
+)
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
+
+
+async def _trust_workspaces(home: Path, *workspaces: Path) -> None:
+    database = ApplicationSQLite(AwesomePaths.from_home(home).application_db)
+    await database.initialize()
+    try:
+        trust = WorkspaceTrustService(SQLiteWorkspaceTrustStore(database))
+        for workspace in workspaces:
+            await trust.accept(resolve_workspace(workspace))
+    finally:
+        await database.aclose()
 
 
 async def _trusted_application(
@@ -67,9 +85,7 @@ async def _trusted_application(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    ).accept(resolve_workspace(workspace))
+    await _trust_workspaces(home, workspace)
     application = await composition.compose_local_application(
         home=home,
         workspace=workspace,
@@ -159,9 +175,7 @@ async def test_credential_recovery_precedes_the_first_real_config_load(
     journal.stage_backup(previous_env)
     journal.prepare(record)
     store.restore(target_env)
-    WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(resolved_paths.application_db)
-    ).accept(resolve_workspace(workspace))
+    await _trust_workspaces(home, workspace)
     real_load = load_config_sources
     observed_env_at_load: list[bytes] = []
 
@@ -221,10 +235,7 @@ async def test_failed_credential_recovery_can_be_retried_without_publishing_stat
     workspace = tmp_path / "workspace"
     home.mkdir()
     workspace.mkdir()
-    paths = AwesomePaths.from_home(home)
-    WorkspaceTrustService(SQLiteWorkspaceTrustStore(paths.application_db)).accept(
-        resolve_workspace(workspace)
-    )
+    await _trust_workspaces(home, workspace)
     attempts = 0
 
     def fail_once(
@@ -347,9 +358,7 @@ async def test_same_workspace_runtime_lease_prevents_live_turn_recovery(
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     identity = resolve_workspace(workspace)
-    WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    ).accept(identity)
+    await _trust_workspaces(home, workspace)
     first = await composition.compose_local_application(
         home=home,
         workspace=workspace,
@@ -359,8 +368,8 @@ async def test_same_workspace_runtime_lease_prevents_live_turn_recovery(
     first_ready = await first.initialize()
     assert first_ready.ok is True
     first_backend = cast(composition._LocalApplicationBackend, first._backend)
-    thread = first_backend._conversation.create_thread(identity.key)
-    turn = first_backend._conversation.begin_turn(
+    thread = await first_backend._conversation.create_thread(identity.key)
+    turn = await first_backend._conversation.begin_turn(
         thread.id,
         "still running",
         TurnConfig(
@@ -382,17 +391,16 @@ async def test_same_workspace_runtime_lease_prevents_live_turn_recovery(
     assert blocked.ok is False
     assert blocked.error is not None
     assert blocked.error.code is ProductErrorCode.OPERATION_BUSY
-    observed = first_backend._conversation.read_thread(thread.id).turns[0]
+    observed = (await first_backend._conversation.read_thread(thread.id)).turns[0]
     assert (observed.id, observed.status) == (turn.id, TurnStatus.IN_PROGRESS)
 
     await first.shutdown()
     recovered = await second.initialize()
     assert recovered.ok is True
     second_backend = cast(composition._LocalApplicationBackend, second._backend)
-    assert (
-        second_backend._conversation.read_thread(thread.id).turns[0].status
-        is TurnStatus.FAILED
-    )
+    assert (await second_backend._conversation.read_thread(thread.id)).turns[
+        0
+    ].status is TurnStatus.FAILED
     await second.shutdown()
 
 
@@ -409,11 +417,7 @@ async def test_workspace_runtime_lease_uses_filesystem_identity_across_path_alia
     assert alias_identity.root_identity == direct_identity.root_identity
     if os.name == "nt":
         assert alias_identity.key != direct_identity.key
-    trust = WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    )
-    trust.accept(direct_identity)
-    trust.accept(alias_identity)
+    await _trust_workspaces(home, workspace, alias)
     first = await composition.compose_local_application(
         home=home,
         workspace=workspace,
@@ -445,10 +449,7 @@ async def test_workspace_runtime_path_lease_survives_root_replacement(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    trust = WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    )
-    trust.accept(resolve_workspace(workspace))
+    await _trust_workspaces(home, workspace)
     first = await composition.compose_local_application(
         home=home,
         workspace=workspace,
@@ -507,6 +508,168 @@ async def test_entity_lease_failure_releases_already_acquired_path_lease(
 
 
 @pytest.mark.asyncio
+async def test_backend_construction_failure_closes_application_sqlite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    closed: list[ApplicationSQLite] = []
+    close = ApplicationSQLite.aclose
+
+    async def observe_close(database: ApplicationSQLite) -> None:
+        await close(database)
+        closed.append(database)
+
+    def fail_trust_store(database: ApplicationSQLite) -> object:
+        del database
+        raise RuntimeError("trust store construction failed")
+
+    monkeypatch.setattr(ApplicationSQLite, "aclose", observe_close)
+    monkeypatch.setattr(composition, "SQLiteWorkspaceTrustStore", fail_trust_store)
+
+    with pytest.raises(RuntimeError, match="trust store construction failed"):
+        await composition.compose_local_application(
+            home=tmp_path / "home",
+            workspace=tmp_path,
+            event_sink=CollectingEventSink(),
+            environ={},
+        )
+
+    assert len(closed) == 1
+    with pytest.raises(ApplicationSQLiteClosed):
+        await closed[0].preflight()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_state", [False, True])
+async def test_cancelled_state_initialization_publishes_a_shared_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    current_state: bool,
+) -> None:
+    if current_state:
+        application, backend = await _trusted_application(tmp_path)
+    else:
+        home = tmp_path / "home"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        application = await composition.compose_local_application(
+            home=home,
+            workspace=workspace,
+            event_sink=CollectingEventSink(),
+            environ={},
+        )
+        backend = cast(composition._LocalApplicationBackend, application._backend)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    initialize = backend._database.initialize
+
+    async def blocked_initialize() -> None:
+        entered.set()
+        await release.wait()
+        await initialize()
+
+    monkeypatch.setattr(backend._database, "initialize", blocked_initialize)
+    initializing = asyncio.create_task(backend._ensure_state_lease())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    initializing.cancel("first cancellation")
+    await asyncio.sleep(0)
+    initializing.cancel("second cancellation")
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await asyncio.wait_for(initializing, timeout=1)
+
+    assert cancelled.value.args == ("first cancellation",)
+    assert backend._state_lease is not None
+    assert backend._state_lease.active is True
+    assert backend._state_lease.mode is StateLeaseMode.SHARED
+    assert await backend._database.quick_check() is True
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_state_lease_downgrade_failure_suspends_database_before_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+    downgrade = StateLease.downgrade
+
+    def fail_downgrade(lease: StateLease) -> None:
+        raise StateLeaseUnavailable(lease.home, StateLeaseMode.SHARED)
+
+    monkeypatch.setattr(StateLease, "downgrade", fail_downgrade)
+    with pytest.raises(StateLeaseUnavailable):
+        await backend._ensure_state_lease()
+
+    assert backend._state_lease is None
+    assert await backend._database.quick_check() is None
+
+    monkeypatch.setattr(StateLease, "downgrade", downgrade)
+    await backend._ensure_state_lease()
+    assert backend._state_lease is not None
+    assert backend._state_lease.mode is StateLeaseMode.SHARED
+    assert await backend._database.quick_check() is True
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cancel_foreground_responds_while_application_sqlite_is_blocked(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    assert (await application.initialize()).ok is True
+    database_entered = threading.Event()
+    database_release = threading.Event()
+    operation_started = asyncio.Event()
+
+    def block_worker(_: object) -> int:
+        database_entered.set()
+        if not database_release.wait(timeout=2):
+            raise AssertionError("Application SQLite worker was not released.")
+        return 1
+
+    async def foreground_operation(operation_id: str) -> None:
+        del operation_id
+        operation_started.set()
+        await asyncio.Event().wait()
+
+    blocked_read = asyncio.create_task(backend._database.read(block_worker))
+    while not database_entered.is_set():
+        await asyncio.sleep(0)
+    running = asyncio.create_task(backend._operations.run(foreground_operation))
+    await asyncio.wait_for(operation_started.wait(), timeout=1)
+    operation_id = backend._operations.active_operation_id
+    assert operation_id is not None
+
+    started_at = asyncio.get_running_loop().time()
+    cancelled = await asyncio.wait_for(
+        application.cancel_operation(operation_id),
+        timeout=0.25,
+    )
+    elapsed = asyncio.get_running_loop().time() - started_at
+
+    assert cancelled.ok is True
+    assert cancelled.value is not None
+    assert cancelled.value.cancelled is True
+    assert elapsed < 0.25
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(running, timeout=1)
+    database_release.set()
+    assert await asyncio.wait_for(blocked_read, timeout=1) == 1
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_activation_passes_union_of_disabled_skills_to_discovery(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -523,9 +686,7 @@ async def test_activation_passes_union_of_disabled_skills_to_discovery(
         "skills:\n  disabled: [workspace_only, shared]\n",
         encoding="utf-8",
     )
-    WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    ).accept(resolve_workspace(workspace))
+    await _trust_workspaces(home, workspace)
     discovered: list[set[str]] = []
 
     def capture_discovery(
@@ -587,7 +748,7 @@ async def test_selected_model_context_limit_clamps_turn_and_context_budgets(
     context = runtime.context
     assert context._configured_total_tokens == 999_999
     assert context._model_context_limit == 262_144
-    thread = backend._conversation.create_thread(
+    thread = await backend._conversation.create_thread(
         backend._workspace.key,
         current_model="deepseek/deepseek-v4-flash",
     )
@@ -824,9 +985,7 @@ async def test_injected_gateway_and_mem0_resources_are_borrowed(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    ).accept(resolve_workspace(workspace))
+    await _trust_workspaces(home, workspace)
     gateway = _BorrowedResource()
     model_gateway = cast(ModelGateway, gateway)
     mem0 = _BorrowedResource()
@@ -1160,10 +1319,7 @@ async def test_cancelled_initial_recovery_delivery_reuses_published_runtime_and_
 
         async def emit(self, event: Any) -> None:
             payload = event.payload
-            if (
-                getattr(payload, "interaction_kind", None)
-                == "recovery_decision"
-            ):
+            if getattr(payload, "interaction_kind", None) == "recovery_decision":
                 self.interaction_ids.append(payload.interaction_id)
                 if len(self.interaction_ids) == 1:
                     self.first_started.set()
@@ -1198,9 +1354,7 @@ async def test_cancelled_initial_recovery_delivery_reuses_published_runtime_and_
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    ).accept(resolve_workspace(workspace))
+    await _trust_workspaces(home, workspace)
     sink = _BlockFirstRecoveryDelivery()
     application = await composition.compose_local_application(
         home=home,
@@ -1517,9 +1671,7 @@ async def test_shutdown_prevents_cancelled_provider_child_from_publishing(
     assert all(manager.close_calls == 1 for manager in _TrackingMcpManager.instances)
     with pytest.raises(ProviderConfigurationRecoveryRequired) as fenced:
         provider_configuration.require_consistent()
-    assert "runtime_publish" in {
-        stage for stage, _ in fenced.value.recovery_failures
-    }
+    assert "runtime_publish" in {stage for stage, _ in fenced.value.recovery_failures}
 
 
 @pytest.mark.asyncio
@@ -1542,8 +1694,7 @@ async def test_repeated_runtime_rebuilds_release_close_registrations(
         runtime_generations.append(backend._runtime)
         assert len(_TrackingMcpManager.instances) == generation + 1
         assert all(
-            manager.close_calls == 1
-            for manager in _TrackingMcpManager.instances[:-1]
+            manager.close_calls == 1 for manager in _TrackingMcpManager.instances[:-1]
         )
         assert _TrackingMcpManager.instances[-1].close_calls == 0
         assert len(backend._runtime_retirements) == 0
@@ -1563,10 +1714,7 @@ async def test_candidate_resource_tasks_do_not_inherit_request_runtime(
     application, backend = await _trusted_application(tmp_path)
     backend._paths.config_file.parent.mkdir(parents=True, exist_ok=True)
     backend._paths.config_file.write_text(
-        "mcp_servers:\n"
-        "  - id: fake\n"
-        "    command: fake\n"
-        "    enabled: true\n",
+        "mcp_servers:\n  - id: fake\n    command: fake\n    enabled: true\n",
         encoding="utf-8",
     )
     observed_contexts: list[composition.WorkspaceRuntime | None] = []
@@ -1636,6 +1784,5 @@ async def test_candidate_resource_tasks_do_not_inherit_request_runtime(
     assert old_commands_ref() is None
     await application.shutdown()
     assert all(
-        manager.close_calls == 1
-        for manager in _ContextCapturingMcpManager.instances
+        manager.close_calls == 1 for manager in _ContextCapturingMcpManager.instances
     )

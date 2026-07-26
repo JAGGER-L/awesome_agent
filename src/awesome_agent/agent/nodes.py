@@ -66,7 +66,7 @@ async def prepare_context(
     updated["compression_reason"] = (
         "automatic" if prepared.compression_recommended else None
     )
-    context.context_snapshot_recorder(prepared.manifest)
+    await context.context_snapshot_recorder(prepared.manifest)
     await context.event_projector.project_context(
         source_count=len(prepared.manifest),
         estimated_tokens=prepared.estimated_input_tokens,
@@ -127,7 +127,7 @@ async def compress_context(
         updated["context_manifest"] = list(prepared.manifest)
         updated["context_estimated_tokens"] = prepared.estimated_input_tokens
         updated["context_effective_limit"] = prepared.effective_input_limit
-        context.context_snapshot_recorder(prepared.manifest)
+        await context.context_snapshot_recorder(prepared.manifest)
         await context.event_projector.project_context(
             source_count=len(prepared.manifest),
             estimated_tokens=prepared.estimated_input_tokens,
@@ -348,7 +348,7 @@ async def execute_one_tool(
             )
             result = await context.executor.execute(
                 request,
-                context=context.tool_context_factory(updated, request),
+                context=await context.tool_context_factory(updated, request),
             )
             ended = context.monotonic()
             updated = add_active_segment(updated, started_at=started, ended_at=ended)

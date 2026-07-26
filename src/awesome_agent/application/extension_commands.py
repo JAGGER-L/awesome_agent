@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable
 
 from awesome_agent.application.command_results import (
     CommandOption,
@@ -28,7 +29,10 @@ from awesome_agent.config import (
     UserConfigWriter,
 )
 from awesome_agent.conversation import ConversationService
-from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.cancellation import (
+    finish_cancellation_safe,
+    run_cancellation_safe_blocking_call,
+)
 from awesome_agent.core.tools.registry import ToolRegistry, ToolRegistryLimitError
 from awesome_agent.extensions.mcp import (
     McpConnectionState,
@@ -115,9 +119,9 @@ class ApplicationExtensionService:
                     self._catalog.resolve(selected)
                 except SkillNotFound:
                     return error("skill_not_found", "Skill was not found.")
-            updated = self._conversation.set_skill_mode(thread_id, selected)
+            updated = await self._conversation.set_skill_mode(thread_id, selected)
             return result(self._skill_payload(updated.skill_mode))
-        current = self._conversation.read_thread(thread_id).thread.skill_mode
+        current = (await self._conversation.read_thread(thread_id)).thread.skill_mode
         payload = self._skill_payload(current)
         return interaction(
             CommandSelection(
@@ -164,13 +168,21 @@ class ApplicationExtensionService:
                 "User MCP enablement is controlled by user configuration.",
             )
         if action == "enable":
-            self._enablements.enable(
-                self._workspace_key, config.id, mcp_config_hash(config)
+            status = await _finish_mcp_enablement(
+                self._enablements.enable(
+                    self._workspace_key, config.id, mcp_config_hash(config)
+                ),
+                manager=self._manager,
+                server_id=config.id,
+                config_hash=mcp_config_hash(config),
             )
-            status = await self._manager.refresh_enablement(config.id)
         elif action == "disable":
-            self._enablements.disable(self._workspace_key, config.id)
-            status = await self._manager.refresh_enablement(config.id)
+            status = await _finish_mcp_enablement(
+                self._enablements.disable(self._workspace_key, config.id),
+                manager=self._manager,
+                server_id=config.id,
+                config_hash=None,
+            )
         else:
             status = await self._manager.restart(config.id)
         if status.state is McpConnectionState.ERROR:
@@ -557,3 +569,25 @@ def _memory_mutation_result(mutation: MemoryMutationResult) -> CommandOutcome:
             error_code=mutation.error_code,
         )
     )
+
+
+async def _finish_mcp_enablement(
+    persistence: Awaitable[None],
+    *,
+    manager: McpManager,
+    server_id: str,
+    config_hash: str | None,
+) -> McpServerStatus:
+    async def persist_and_publish() -> McpServerStatus:
+        await persistence
+        manager.publish_enablement(server_id, config_hash)
+        return await manager.refresh_enablement(server_id)
+
+    task = asyncio.create_task(
+        persist_and_publish(),
+        name=f"mcp-enablement:{server_id}",
+    )
+    result_status, cancellation = await finish_cancellation_safe(task)
+    if cancellation is not None:
+        raise cancellation
+    return result_status

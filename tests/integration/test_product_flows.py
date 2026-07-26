@@ -266,15 +266,23 @@ async def _wait_for_thread(
     *,
     entries: int,
 ) -> ThreadView:
-    for _ in range(200):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5.0
+    while True:
         view = _unwrap(
             await application.read_thread(ThreadReadQuery(thread_id=thread_id))
         ).view
         state = _unwrap(await application.get_state())
         if len(view.entries) >= entries and state.active_operation_id is None:
             return view
-        await asyncio.sleep(0.01)
-    raise AssertionError("foreground operation did not complete")
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise AssertionError(
+                "foreground operation did not complete within 5 seconds "
+                f"(entries={len(view.entries)}, "
+                f"active_operation_id={state.active_operation_id!r})"
+            )
+        await asyncio.sleep(min(0.01, remaining))
 
 
 async def _wait_for_interaction(application: LocalApplication) -> str:

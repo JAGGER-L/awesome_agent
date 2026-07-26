@@ -6,8 +6,8 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "1ad9aa5590e8a81f7a69849944851eeb478611794da4167b469c5c2b63e3c9ca",
-      "chinese_sha256": "5286638c2b14ea980fdec895dea92a6a0a285763f2a5159bcdf22fd50a8ebd32"
+      "english_sha256": "7c49b7c306e77590759b26e115889752b8dacd228c96d958cecf771a037322f0",
+      "chinese_sha256": "3a6e7247a95eebe72fdd84f4b391771832de6591d7850772d216e08524542ed0"
     },
     {
       "english_source": "README.md",
@@ -30,8 +30,8 @@
     {
       "english_source": "docs/architecture/application-and-agent.md",
       "chinese_source": "docs/architecture/application-and-agent.zh-CN.md",
-      "english_sha256": "dbd9107e756ee663bf9ad90fc339a6d2f1b505937619ed5b2c3a492c069f68c9",
-      "chinese_sha256": "7b8175bdaf8c3fe84dc8abd601ee116b93173cbb60645ad63e35444bacae7cb7"
+      "english_sha256": "e9e97e0e94b61d4355989c99d129798b658b84268735172fa545fe1c4e45d263",
+      "chinese_sha256": "1f1b9ca4e72cc718f4f58f18336ea957317cf728435892d43fe675be62eb614b"
     },
     {
       "english_source": "docs/architecture/context-model-and-extensions.md",
@@ -48,8 +48,8 @@
     {
       "english_source": "docs/architecture/request-lifecycles.md",
       "chinese_source": "docs/architecture/request-lifecycles.zh-CN.md",
-      "english_sha256": "bcc780410f24d9f4e66b27ebd997cd33480af6e26c224e27e8d4230251610552",
-      "chinese_sha256": "91bc2b68fd4c7819f55a0de882695a3d7ff96b2f390a6edad48778bc09cd2a31"
+      "english_sha256": "bb3b75bf93228745b565b31e22b498d8a6d8d78344c98325d1e1a50e1cf6bfbe",
+      "chinese_sha256": "550283a4b2b66ec35e570a095d5fcac60c9f329f516e0e158c1b361f710ac858"
     },
     {
       "english_source": "docs/architecture/security-and-dependencies.md",
@@ -60,8 +60,8 @@
     {
       "english_source": "docs/architecture/storage-and-recovery.md",
       "chinese_source": "docs/architecture/storage-and-recovery.zh-CN.md",
-      "english_sha256": "04d79e66701dc5f89bdce9827e7d44c58c7172e01058ed11895ca67c4c5cbac2",
-      "chinese_sha256": "be4dec24ba9a000b2ad39c82b950b2bff79aeff5e9513a2b3154660c6b606144"
+      "english_sha256": "7b47ca96c1257aa57b73267e3142b0f2d2e2a7858858d82a4833179c72e4ff19",
+      "chinese_sha256": "4b7f07575db616006131d68e1c1622ac13442bc3fc017902ef368f8bd5536f4a"
     },
     {
       "english_source": "docs/architecture/tools-and-changes.md",
@@ -192,8 +192,8 @@
     {
       "english_source": "docs/reference/commands.md",
       "chinese_source": "docs/reference/commands.zh-CN.md",
-      "english_sha256": "41a1131d0103bcfca54be264d7bdd65acde9ce467b5879a674953a03313cb86e",
-      "chinese_sha256": "5011be530bacde02039fdfb188f4524ff18b998b1ba88f922fd9626cd8089322"
+      "english_sha256": "c97cdee6c3204760050528ea152649bf3da548d685ebef25e819a205ee8f03c8",
+      "chinese_sha256": "6b8120257846ed0f03c928e1cf08c355b85154ad82ff0d7dbd3dff4abf88e1ab"
     },
     {
       "english_source": "docs/reference/configuration.md",
@@ -204,8 +204,8 @@
     {
       "english_source": "docs/reference/files-and-state.md",
       "chinese_source": "docs/reference/files-and-state.zh-CN.md",
-      "english_sha256": "67bfe966aa8aefda3dae61b0916dd083487468c18b194b3f9027bdf46caf30b9",
-      "chinese_sha256": "ac6b1663c61a10bc98ac7372caf505b2bb94938ee35b2769643389fbd1deea44"
+      "english_sha256": "269cd1b7315736bd4b78aa2eb384ff926da5843e84f4e0daccabfbb5089a755a",
+      "chinese_sha256": "e30cbe21ca893cb25c3c77faf8c7ba6bfd1c21971b4ccdd208e7df61bab4043f"
     },
     {
       "english_source": "docs/reference/permission-modes.md",
@@ -216,8 +216,8 @@
     {
       "english_source": "docs/reference/protocol.md",
       "chinese_source": "docs/reference/protocol.zh-CN.md",
-      "english_sha256": "02960c075baea037e409b21aa70af35e5b8fe812934220cbe5d5b85de19e1d0c",
-      "chinese_sha256": "4262a554f4ddbdacc2d9703944af47b811f3e4806a002a553785047b48fd8d65"
+      "english_sha256": "d00a9e2019edc7193d2418b3725b3c41d34cc163e147d1dc2714029fbc81d11e",
+      "chinese_sha256": "59bac52ff2118c0d8fa7135c08773b5bfbd3e04ac796b9bbe2176116c2ce616f"
     },
     {
       "english_source": "docs/roadmap.md",

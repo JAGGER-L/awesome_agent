@@ -307,14 +307,17 @@ provider client、内部创建的 Mem0 client 和 MCP，并按 MCP、Mem0、prov
 资源，不影响此前发布的 runtime。Provider 与
 credential mutation 复用同一条完整 candidate 发布路径，但不重复 startup recovery，并保留
 已选择的 Thread。前台所有权、interaction、permission session、recovery delivery、
-checkpoint saver、state lease 和其他进程生命周期资源仍由另一套 Application
-`AsyncExitStack` 持有，而不是 workspace snapshot 字段。
+checkpoint saver、进程级 Application SQLite worker、state lease 和其他进程生命周期资源
+仍由另一套 Application `AsyncExitStack` 持有，而不是 workspace snapshot 字段。一个有界
+FIFO worker thread 持有长期 Application database connection；面向 Application 的
+repository 只暴露 async method，SQLite 所有的值不会跨越该边界。
 
 共享 foreground arbiter 向 Agent Turn、直接命令、改变状态的命令、credential mutation、
 非 Tool interaction resolution 或 shutdown 授予唯一原子 lease。准入发生在 Turn 持久化
 之前。活动 Operation 期间，显式例外是只读 snapshot command；pending interaction 会
 阻止新 Operation 与 mutation，而匹配的 Tool approval 会继续其所属 Operation。Shutdown
-会关闭准入、取消活动工作，并等待 lease 完成清理，再关闭进程或数据库。
+会关闭准入、取消仍可取消的活动工作、等待 durable commit 和 lease 清理，回收 runtime
+resource，再关闭 checkpoint saver 和 Application SQLite worker，最后释放 state lease。
 
 ### Agent Core 与 LangGraph
 
@@ -363,8 +366,9 @@ checkpoint saver、state lease 和其他进程生命周期资源仍由另一套 
   checkpoint 访问与 SQLite transaction。
 - **不负责：** graph node transition 或 TUI transcript state。
 - **主要文件：** `conversation/models.py`、`conversation/service.py`、
-  `storage/database.py`、`storage/compatibility.py`、`storage/state_lease.py`、
-  `storage/state_recovery.py`、`storage/conversations.py`、
+  `storage/application_sqlite.py`、`storage/database.py`、
+  `storage/compatibility.py`、`storage/state_lease.py`、
+  `storage/state_recovery.py`、`storage/conversations.py` 和
   `storage/checkpoints.py`。
 
 可重置边界恰好是 `<AWESOME_HOME>/state`。Storage 在 exclusive lease 下执行原子替换；
@@ -559,8 +563,9 @@ activity history 存储有界 summary。
 - Provider adapter 会分类错误并报告 retry usage；Agent 强制配置的 retry 与 model-call
   上限。
 - 取消会经过 foreground operation、model call 和 tool execution 传播。Application 将
-  Turn 标记为 cancelled，随后尝试封存已知变更并删除其 checkpoint。有界清理失败会
-  保留主要 cancelled 事实；启动校正会重试残留终态 checkpoint evidence。
+  Turn 标记为 cancelled，随后继续持有 foreground lease，直到本地 activity、transcript、
+  ChangeSet 与 checkpoint cleanup 得到明确结果。清理失败会保留主要 cancelled 事实；启动
+  校正会重试残留终态 checkpoint evidence。只有进程清理与 best-effort event delivery 有界。
 - 终态 event 允许 TUI 提升一个 pending input。类型化 busy 竞态会把同一 identity 重新
   放回队首，不产生重复 failure text。
 - TUI cancellation 与 interaction controller 会在下一个 Operation 或 Interaction 前

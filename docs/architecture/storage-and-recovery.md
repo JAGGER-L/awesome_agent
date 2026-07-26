@@ -47,6 +47,18 @@ Thread page observes one coherent snapshot without reserving the only writer.
 Mutations use `BEGIN IMMEDIATE`, obtaining the writer reservation before
 validating and changing product state.
 
+One process-level `ApplicationSQLite` owns a bounded FIFO worker thread and one
+long-lived connection. Application-facing repositories expose async methods;
+their synchronous transaction callbacks run on that worker and may return only
+detached domain values, never a SQLite connection, cursor, or row. A cancelled
+read may stop waiting while the admitted read finishes in the background.
+Durable write, initialize, reset, suspend, and close operations instead wait for
+a known worker result before propagating the caller's first cancellation. This
+keeps SQLite ownership and transaction state unambiguous while leaving the
+event loop available for urgent control requests. If SQLite cannot confirm a
+rollback, the owner closes and fails the worker instead of reusing a connection
+whose transaction state is unknown.
+
 One important transaction is first-message acceptance:
 
 ```text
@@ -308,11 +320,13 @@ Change metadata and pending intents live in Application SQLite; blobs live in
 `state/change-journal`; effects happen in the project filesystem. These three
 locations cannot share a single transaction.
 
-The journal writes content blobs before publishing their IDs, persists intent
-before mutation, verifies the result, then records the committed change. Undo
-and redo persist all intents before their first restore and commit one lifecycle
-transition after all restores succeed. Startup reconciliation uses pending
-evidence to finalize or roll back what it can prove.
+The journal writes content blobs before publishing their IDs. Each ordinary
+mutation then follows one durable order: commit the pending intent, mutate the
+workspace, commit the ChangeSet result, and finally commit deletion of the
+pending intent. Undo and redo persist all intents before their first restore
+and commit one lifecycle transition after all restores succeed. Startup
+reconciliation uses pending evidence to finalize or roll back what it can
+prove.
 
 SQLite uses WAL with `synchronous=NORMAL`. Blob files are synchronized before
 replacement, but the database, blob directory, and workspace have no shared
@@ -354,6 +368,7 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 ## Source and test map
 
 - Database schema: `storage/database.py`
+- Application SQLite owner: `storage/application_sqlite.py`
 - Conversations and trust: `storage/conversations.py`, `storage/trust.py`
 - Checkpoints: `storage/checkpoints.py`
 - Compatibility and reset: `storage/compatibility.py`,
@@ -365,7 +380,8 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
   `application/provider_configuration.py`
 - Provider credential transaction: `config/credential_transaction.py`,
   `config/credentials.py`, `application/provider_configuration.py`
-- Tests: `tests/unit/storage/`, `tests/integration/test_sqlite_checkpoints.py`,
+- Tests: `tests/unit/storage/test_application_sqlite.py`,
+  `tests/unit/storage/`, `tests/integration/test_sqlite_checkpoints.py`,
   `tests/integration/test_agent_recovery.py`,
   `tests/unit/config/test_model_transaction.py`,
   `tests/unit/config/test_credential_transaction.py`,

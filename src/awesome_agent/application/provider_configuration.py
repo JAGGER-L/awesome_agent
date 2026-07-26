@@ -4,7 +4,9 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal, Protocol, cast
+from uuid import uuid4
 
 from pydantic import SecretStr
 
@@ -50,9 +52,10 @@ from awesome_agent.config.model_transaction import (
     ProviderModelTransactionPhase,
     ProviderModelTransactionRecord,
 )
-from awesome_agent.conversation import ConversationService, ThreadNotFound
+from awesome_agent.conversation import ConversationService, ThreadNotFound, ThreadView
 from awesome_agent.core.cancellation import (
     finish_bounded_cancellation_cleanup,
+    finish_cancellation_safe,
     run_cancellation_safe_blocking_call,
 )
 
@@ -72,6 +75,31 @@ _SERVICE_HELP_URLS: dict[CredentialService, str] = {
 }
 
 type ProviderConfigurationSnapshot = tuple[LoadedConfigSources, ApplicationConfig]
+type PersistedModelConfiguration = tuple[
+    ProviderConfigurationSnapshot,
+    str,
+    ProviderModelTransactionRecord,
+]
+
+
+class ConversationModelTransaction(Protocol):
+    def read_thread(self, thread_id: str) -> ThreadView: ...
+
+    def set_model(
+        self,
+        thread_id: str,
+        model: str | None,
+        *,
+        updated_at: datetime,
+    ) -> object: ...
+
+
+class ConversationModelTransactionRunner(Protocol):
+    async def __call__[ResultT](
+        self,
+        operation: Callable[[ConversationModelTransaction], ResultT],
+    ) -> ResultT: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -125,59 +153,150 @@ class ProviderConfigurationRecoveryRequired(RuntimeError):
         self.recovery_failures = recovery_failures
 
 
-def reconcile_provider_model_transaction(
+class _ModelTransactionRolledBack(RuntimeError):
+    """Marks a model mutation whose YAML and Thread state were both restored."""
+
+    def __init__(
+        self,
+        primary_error: Exception,
+        record: ProviderModelTransactionRecord,
+    ) -> None:
+        super().__init__(str(primary_error))
+        self.primary_error = primary_error
+        self.record = record
+
+
+async def reconcile_provider_model_transaction(
     *,
     journal: ProviderModelTransactionJournal,
     config_writer: UserConfigWriter,
-    conversation: ConversationService,
+    model_transactions: ConversationModelTransactionRunner,
+    clock: Callable[[], datetime] | None = None,
 ) -> bool:
     """Reconcile one crash-interrupted model transaction before activation."""
 
-    with config_writer.transaction():
+    timestamp = clock or (lambda: datetime.now(UTC))
+
+    def has_pending_transaction() -> bool:
         try:
-            record = journal.read()
+            with config_writer.transaction():
+                return journal.read() is not None
         except Exception as error:
             raise ProviderConfigurationRecoveryRequired(
                 error,
                 (("journal_read", error),),
             ) from error
-        if record is None:
-            return False
-        use_target = record.phase is ProviderModelTransactionPhase.COMMITTED
-        try:
-            default_model = (
-                record.target_default_model
-                if use_target
-                else record.previous_default_model
-            )
-            thread_model = (
-                record.target_thread_model
-                if use_target
-                else record.previous_thread_model
-            )
-            config_writer.update(
-                lambda current: current.model_copy(
-                    update={
-                        "providers": current.providers.model_copy(
-                            update={"default_model": default_model}
-                        )
-                    }
+
+    def reconcile(
+        conversation: ConversationModelTransaction,
+    ) -> tuple[bool, ProviderModelTransactionRecord | None]:
+        with config_writer.transaction():
+            try:
+                record = journal.read()
+            except Exception as error:
+                raise ProviderConfigurationRecoveryRequired(
+                    error,
+                    (("journal_read", error),),
+                ) from error
+            if record is None:
+                return False, None
+            use_target = record.phase is ProviderModelTransactionPhase.COMMITTED
+            try:
+                default_model = (
+                    record.target_default_model
+                    if use_target
+                    else record.previous_default_model
                 )
-            )
-            conversation.set_model(record.thread_id, thread_model)
-            _verify_model_transaction_state(
-                record=record,
-                config_writer=config_writer,
-                conversation=conversation,
-                use_target=use_target,
-            )
-            journal.clear(record)
+                thread_model = (
+                    record.target_thread_model
+                    if use_target
+                    else record.previous_thread_model
+                )
+                config_writer.update(
+                    lambda current: current.model_copy(
+                        update={
+                            "providers": current.providers.model_copy(
+                                update={"default_model": default_model}
+                            )
+                        }
+                    )
+                )
+                conversation.set_model(
+                    record.thread_id,
+                    thread_model,
+                    updated_at=timestamp(),
+                )
+                _verify_model_transaction_state(
+                    record=record,
+                    config_writer=config_writer,
+                    conversation=conversation,
+                    use_target=use_target,
+                )
+            except Exception as error:
+                raise ProviderConfigurationRecoveryRequired(
+                    error,
+                    (("startup_reconcile", error),),
+                ) from error
+            return True, record
+
+    def verify_and_clear(
+        conversation: ConversationModelTransaction,
+        record: ProviderModelTransactionRecord,
+    ) -> None:
+        with config_writer.transaction():
+            try:
+                observed = journal.read()
+                if observed is not None and observed != record:
+                    raise ProviderModelTransactionJournalError(
+                        "Provider model transaction changed before cleanup."
+                    )
+                _verify_model_transaction_state(
+                    record=record,
+                    config_writer=config_writer,
+                    conversation=conversation,
+                    use_target=(
+                        record.phase is ProviderModelTransactionPhase.COMMITTED
+                    ),
+                )
+                if observed is not None:
+                    journal.clear(record)
+            except Exception as error:
+                raise ProviderConfigurationRecoveryRequired(
+                    error,
+                    (("startup_finalize", error),),
+                ) from error
+
+    async def reconcile_and_finalize() -> bool:
+        if not await run_cancellation_safe_blocking_call(has_pending_transaction):
+            return False
+        try:
+            changed, record = await model_transactions(reconcile)
+        except ProviderConfigurationRecoveryRequired:
+            raise
         except Exception as error:
             raise ProviderConfigurationRecoveryRequired(
                 error,
-                (("startup_reconcile", error),),
+                (("startup_reconcile_commit", error),),
             ) from error
-        return True
+        if record is None:
+            return changed
+        try:
+            await model_transactions(
+                lambda conversation: verify_and_clear(conversation, record)
+            )
+        except ProviderConfigurationRecoveryRequired:
+            raise
+        except Exception as error:
+            raise ProviderConfigurationRecoveryRequired(
+                error,
+                (("startup_finalize_commit", error),),
+            ) from error
+        return changed
+
+    result, cancellation = await finish_cancellation_safe(reconcile_and_finalize())
+    if cancellation is not None:
+        raise cancellation
+    return result
 
 
 def reconcile_provider_credential_transaction(
@@ -245,6 +364,7 @@ class ProviderConfigurationService:
         self,
         *,
         conversation: ConversationService,
+        model_transactions: ConversationModelTransactionRunner,
         config_writer: UserConfigWriter,
         secret_store: UserSecretStore,
         validator: CredentialValidator,
@@ -256,8 +376,10 @@ class ProviderConfigurationService:
         ],
         model_transaction_journal: ProviderModelTransactionJournal,
         credential_transaction_journal: ProviderCredentialTransactionJournal,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._conversation = conversation
+        self._model_transactions = model_transactions
         self._config_writer = config_writer
         self._secret_store = secret_store
         self._validator = validator
@@ -266,6 +388,7 @@ class ProviderConfigurationService:
         self._apply_configuration = apply_configuration
         self._model_transaction_journal = model_transaction_journal
         self._credential_transaction_journal = credential_transaction_journal
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._recovery_required: ProviderConfigurationRecoveryRequired | None = None
         self._publication_generation = 0
 
@@ -423,7 +546,7 @@ class ProviderConfigurationService:
         if len(arguments) == 1:
             if not status.configured:
                 return self._secret_prompt(provider, action="add")
-            thread = self._conversation.read_thread(thread_id).thread
+            thread = (await self._conversation.read_thread(thread_id)).thread
             models = sorted(
                 model
                 for model in SUPPORTED_MODEL_IDS
@@ -456,11 +579,17 @@ class ProviderConfigurationService:
         if blocked is not None:
             return blocked
         try:
-            self._conversation.read_thread(thread_id)
+            await self._conversation.read_thread(thread_id)
         except ThreadNotFound:
             return _error("thread_not_found", "Thread was not found.")
 
-        def persist_model() -> tuple[ProviderConfigurationSnapshot, str]:
+        prepared_attempt: list[ProviderModelTransactionRecord] = []
+        committed_attempt: list[PersistedModelConfiguration] = []
+        rolled_back_attempt: list[_ModelTransactionRolledBack] = []
+
+        def persist_model(
+            conversation: ConversationModelTransaction,
+        ) -> PersistedModelConfiguration:
             # YAML and Application SQLite cannot share one storage transaction.
             # The config lock is therefore the provider-configuration ordering
             # boundary: every successful model change writes the user default,
@@ -469,12 +598,13 @@ class ProviderConfigurationService:
             with self._config_writer.transaction():
                 self._require_consistent_locked()
                 previous_document = self._config_writer.read()
-                previous_model = self._conversation.read_thread(
+                previous_model = conversation.read_thread(
                     thread_id
                 ).thread.current_model
                 try:
                     prepared = self._model_transaction_journal.prepare(
                         ProviderModelTransactionRecord(
+                            transaction_id=uuid4().hex,
                             phase=ProviderModelTransactionPhase.PREPARED,
                             thread_id=thread_id,
                             previous_default_model=(
@@ -485,6 +615,7 @@ class ProviderConfigurationService:
                             target_thread_model=model,
                         )
                     )
+                    prepared_attempt.append(prepared)
                 except Exception as primary_error:
                     failure = ProviderConfigurationRecoveryRequired(
                         primary_error,
@@ -503,17 +634,22 @@ class ProviderConfigurationService:
                         )
                     )
                     snapshot = self._load_configuration()
-                    self._conversation.set_model(thread_id, model)
+                    conversation.set_model(
+                        thread_id,
+                        model,
+                        updated_at=self._clock(),
+                    )
                     _verify_model_transaction_state(
                         record=prepared,
                         config_writer=self._config_writer,
-                        conversation=self._conversation,
+                        conversation=conversation,
                         use_target=True,
                     )
                 except Exception as primary_error:
                     recovery_failures = self._restore_model_change(
                         record=prepared,
                         previous_document=previous_document,
+                        conversation=conversation,
                     )
                     if recovery_failures:
                         failure = ProviderConfigurationRecoveryRequired(
@@ -522,10 +658,14 @@ class ProviderConfigurationService:
                         )
                         self._fence(failure)
                         raise failure from primary_error
-                    raise
+                    rolled_back = _ModelTransactionRolledBack(
+                        primary_error,
+                        prepared,
+                    )
+                    rolled_back_attempt.append(rolled_back)
+                    raise rolled_back from primary_error
                 try:
                     committed = self._model_transaction_journal.mark_committed(prepared)
-                    self._model_transaction_journal.clear(committed)
                 except Exception as primary_error:
                     failure = ProviderConfigurationRecoveryRequired(
                         primary_error,
@@ -533,11 +673,49 @@ class ProviderConfigurationService:
                     )
                     self._fence(failure)
                     raise failure from primary_error
-                return snapshot, model
+                persisted = snapshot, model, committed
+                committed_attempt.append(persisted)
+                return persisted
 
-        _, updated_model = await self._persist_and_apply(
+        def finalize_model(
+            conversation: ConversationModelTransaction,
+            persisted: PersistedModelConfiguration,
+        ) -> ProviderConfigurationSnapshot:
+            committed = persisted[2]
+            with self._config_writer.transaction():
+                try:
+                    observed = self._model_transaction_journal.read()
+                    if observed is not None and observed != committed:
+                        raise ProviderModelTransactionJournalError(
+                            "Committed Provider model transaction changed."
+                        )
+                    _verify_model_transaction_state(
+                        record=committed,
+                        config_writer=self._config_writer,
+                        conversation=conversation,
+                        use_target=True,
+                    )
+                    if observed is not None:
+                        self._model_transaction_journal.clear(committed)
+                    return self._load_configuration()
+                except Exception as primary_error:
+                    failure = ProviderConfigurationRecoveryRequired(
+                        primary_error,
+                        (("journal_finalize", primary_error),),
+                    )
+                    self._fence(failure)
+                    raise failure from primary_error
+
+        _, updated_model, _ = await self._persist_model_and_apply(
             persist_model,
-            snapshot=lambda persisted: persisted[0],
+            finalize=finalize_model,
+            prepared_attempt=lambda: prepared_attempt[-1] if prepared_attempt else None,
+            committed_attempt=lambda: (
+                committed_attempt[-1] if committed_attempt else None
+            ),
+            rolled_back_attempt=lambda: (
+                rolled_back_attempt[-1] if rolled_back_attempt else None
+            ),
         )
         return result(
             ModelCommandPayload(
@@ -695,12 +873,179 @@ class ProviderConfigurationService:
             )
         except asyncio.CancelledError:
             if completed:
-                await self._apply_after_committed_cancellation(
-                    snapshot(completed[-1])
-                )
+                await self._apply_after_committed_cancellation(snapshot(completed[-1]))
             raise
         await self._apply_committed_configuration(snapshot(persisted))
         return persisted
+
+    async def _persist_model_and_apply(
+        self,
+        persist: Callable[
+            [ConversationModelTransaction],
+            PersistedModelConfiguration,
+        ],
+        *,
+        finalize: Callable[
+            [ConversationModelTransaction, PersistedModelConfiguration],
+            ProviderConfigurationSnapshot,
+        ],
+        prepared_attempt: Callable[[], ProviderModelTransactionRecord | None],
+        committed_attempt: Callable[[], PersistedModelConfiguration | None],
+        rolled_back_attempt: Callable[[], _ModelTransactionRolledBack | None],
+    ) -> PersistedModelConfiguration:
+        async def persist_and_finalize() -> PersistedModelConfiguration:
+            try:
+                persisted = await self._model_transactions(persist)
+            except _ModelTransactionRolledBack as error:
+                await self._finalize_rolled_back_model_transaction(error)
+                raise error.primary_error from error
+            except ProviderConfigurationRecoveryRequired:
+                raise
+            except Exception as primary_error:
+                pending_rollback = rolled_back_attempt()
+                if pending_rollback is not None:
+                    failure = ProviderConfigurationRecoveryRequired(
+                        pending_rollback.primary_error,
+                        (("database_rollback", primary_error),),
+                    )
+                    self._fence(failure)
+                    raise failure from pending_rollback.primary_error
+                try:
+                    recovered = await self._resolve_model_transaction_boundary(
+                        primary_error=primary_error,
+                        prepared=prepared_attempt(),
+                        committed=committed_attempt(),
+                    )
+                except ProviderConfigurationRecoveryRequired:
+                    raise
+                except Exception as inspection_error:
+                    failure = ProviderConfigurationRecoveryRequired(
+                        primary_error,
+                        (("database_boundary_inspect", inspection_error),),
+                    )
+                    self._fence(failure)
+                    raise failure from primary_error
+                if recovered is None:
+                    raise
+                persisted = recovered
+            try:
+                final_snapshot = await self._model_transactions(
+                    lambda conversation: finalize(conversation, persisted)
+                )
+            except ProviderConfigurationRecoveryRequired:
+                raise
+            except Exception as primary_error:
+                failure = ProviderConfigurationRecoveryRequired(
+                    primary_error,
+                    (("journal_finalize", primary_error),),
+                )
+                self._fence(failure)
+                raise failure from primary_error
+            return final_snapshot, persisted[1], persisted[2]
+
+        persisted, cancellation = await finish_cancellation_safe(persist_and_finalize())
+        if cancellation is not None:
+            await self._apply_after_committed_cancellation(persisted[0])
+            raise cancellation
+        await self._apply_committed_configuration(persisted[0])
+        return persisted
+
+    async def _finalize_rolled_back_model_transaction(
+        self,
+        rollback: _ModelTransactionRolledBack,
+    ) -> None:
+        record = rollback.record
+
+        def verify_previous(conversation: ConversationModelTransaction) -> None:
+            with self._config_writer.transaction():
+                observed = self._model_transaction_journal.read()
+                if observed is not None and observed != record:
+                    raise ProviderModelTransactionJournalError(
+                        "Rolled-back Provider model transaction changed."
+                    )
+                _verify_model_transaction_state(
+                    record=record,
+                    config_writer=self._config_writer,
+                    conversation=conversation,
+                    use_target=False,
+                )
+                if observed is not None:
+                    self._model_transaction_journal.clear(record)
+
+        try:
+            await self._model_transactions(verify_previous)
+        except ProviderConfigurationRecoveryRequired:
+            raise
+        except Exception as recovery_error:
+            failure = ProviderConfigurationRecoveryRequired(
+                rollback.primary_error,
+                (("database_rollback_finalize", recovery_error),),
+            )
+            self._fence(failure)
+            raise failure from rollback.primary_error
+
+    async def _resolve_model_transaction_boundary(
+        self,
+        *,
+        primary_error: Exception,
+        prepared: ProviderModelTransactionRecord | None,
+        committed: PersistedModelConfiguration | None,
+    ) -> PersistedModelConfiguration | None:
+        if committed is None:
+            if prepared is None:
+                return None
+            failure = ProviderConfigurationRecoveryRequired(
+                primary_error,
+                (("database_rollback", primary_error),),
+            )
+            self._fence(failure)
+            raise failure from primary_error
+
+        record = committed[2]
+
+        def inspect_boundary(
+            conversation: ConversationModelTransaction,
+        ) -> ProviderConfigurationSnapshot | None:
+            with self._config_writer.transaction():
+                observed = self._model_transaction_journal.read()
+                if observed is not None and observed != record:
+                    raise ProviderModelTransactionJournalError(
+                        "Provider model transaction changed at the SQLite boundary."
+                    )
+                document = self._config_writer.read()
+                thread_model = conversation.read_thread(
+                    record.thread_id
+                ).thread.current_model
+                target_matches = (
+                    document.providers.default_model == record.target_default_model
+                    and thread_model == record.target_thread_model
+                )
+                previous_matches = (
+                    document.providers.default_model == record.previous_default_model
+                    and thread_model == record.previous_thread_model
+                )
+                if target_matches:
+                    return self._load_configuration()
+                if observed is None and previous_matches:
+                    return None
+                raise RuntimeError(
+                    "Provider model transaction boundary is not at one exact endpoint."
+                )
+
+        try:
+            recovered_snapshot = await self._model_transactions(inspect_boundary)
+        except ProviderConfigurationRecoveryRequired:
+            raise
+        except Exception as inspection_error:
+            failure = ProviderConfigurationRecoveryRequired(
+                primary_error,
+                (("database_commit", inspection_error),),
+            )
+            self._fence(failure)
+            raise failure from primary_error
+        if recovered_snapshot is None:
+            return None
+        return recovered_snapshot, committed[1], committed[2]
 
     async def _apply_committed_configuration(
         self,
@@ -897,6 +1242,7 @@ class ProviderConfigurationService:
         *,
         record: ProviderModelTransactionRecord,
         previous_document: UserConfigDocument,
+        conversation: ConversationModelTransaction,
     ) -> tuple[tuple[str, Exception], ...]:
         failures: list[tuple[str, Exception]] = []
         try:
@@ -905,13 +1251,14 @@ class ProviderConfigurationService:
             failures.append(("config_restore", error))
 
         try:
-            current_model = self._conversation.read_thread(
+            current_model = conversation.read_thread(
                 record.thread_id
             ).thread.current_model
             if current_model != record.previous_thread_model:
-                self._conversation.set_model(
+                conversation.set_model(
                     record.thread_id,
                     record.previous_thread_model,
+                    updated_at=self._clock(),
                 )
         except Exception as error:
             failures.append(("thread_restore", error))
@@ -926,16 +1273,11 @@ class ProviderConfigurationService:
             _verify_model_transaction_state(
                 record=record,
                 config_writer=self._config_writer,
-                conversation=self._conversation,
+                conversation=conversation,
                 use_target=False,
             )
         except Exception as error:
             failures.append(("state_verify", error))
-        if not failures:
-            try:
-                self._model_transaction_journal.clear(record)
-            except Exception as error:
-                failures.append(("journal_clear", error))
         return tuple(failures)
 
     def _mutation_blocked(self) -> CommandOutcome | None:
@@ -1010,7 +1352,7 @@ def _verify_model_transaction_state(
     *,
     record: ProviderModelTransactionRecord,
     config_writer: UserConfigWriter,
-    conversation: ConversationService,
+    conversation: ConversationModelTransaction,
     use_target: bool,
 ) -> None:
     expected_default = (

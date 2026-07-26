@@ -1,3 +1,11 @@
+from awesome_agent.storage.application_sqlite import (
+    ApplicationSQLite,
+    ApplicationSQLiteBusy,
+    ApplicationSQLiteClosed,
+    ApplicationSQLiteError,
+    ApplicationSQLiteResultError,
+    ApplicationSQLiteUnavailable,
+)
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import sqlite_checkpoint_saver
 from awesome_agent.storage.compatibility import (
@@ -26,6 +34,12 @@ from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 __all__ = [
     "APPLICATION_SCHEMA_VERSION",
+    "ApplicationSQLite",
+    "ApplicationSQLiteBusy",
+    "ApplicationSQLiteClosed",
+    "ApplicationSQLiteError",
+    "ApplicationSQLiteResultError",
+    "ApplicationSQLiteUnavailable",
     "ApplicationSchemaMismatch",
     "ApplicationStateUnavailable",
     "ApplicationStateUnknown",

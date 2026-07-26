@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Protocol, cast
 
 from pydantic import JsonValue
@@ -11,6 +11,7 @@ from pydantic import JsonValue
 from awesome_agent.application.contracts import OperationAccepted
 from awesome_agent.application.operations import OperationController
 from awesome_agent.conversation import ConversationService, ThreadEntryKind
+from awesome_agent.core.cancellation import finish_cancellation_safe
 from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.tools import (
     ToolExecutionContext,
@@ -37,8 +38,14 @@ class DirectToolExecutor(Protocol):
     ) -> ToolResult: ...
 
 
-type DirectContextFactory = Callable[[str, str, ToolRequest], ToolExecutionContext]
-type DirectOperationFinalizer = Callable[[str], None]
+type DirectContextFactory = Callable[
+    [str, str, ToolRequest], Awaitable[ToolExecutionContext]
+]
+type DirectOperationFinalizer = Callable[[str], Awaitable[None]]
+
+
+async def _noop_finalizer(operation_id: str) -> None:
+    del operation_id
 
 
 class DirectCommandService:
@@ -49,7 +56,7 @@ class DirectCommandService:
         executor: DirectToolExecutor,
         operations: OperationController,
         context_factory: DirectContextFactory,
-        finalize_operation: DirectOperationFinalizer = lambda operation_id: None,
+        finalize_operation: DirectOperationFinalizer = _noop_finalizer,
     ) -> None:
         self._conversation = conversation
         self._executor = executor
@@ -64,7 +71,7 @@ class DirectCommandService:
             raise ValueError("Direct command cannot be empty.")
         reservation = self._operations.reserve()
         try:
-            self._conversation.read_thread(thread_id)
+            await self._conversation.read_thread(thread_id)
         except BaseException:
             self._operations.abort(reservation)
             raise
@@ -75,19 +82,18 @@ class DirectCommandService:
                 tool_name="execute",
                 arguments={"command": normalized},
             )
-            context = self._context_factory(thread_id, operation_id, request)
+            context = await self._context_factory(thread_id, operation_id, request)
             if (
                 context.origin is not ToolExecutionOrigin.DIRECT
                 or context.turn_id is not None
                 or context.thread_id != thread_id
             ):
                 raise RuntimeError("Direct context violates operation authority.")
-            primary_failure: BaseException | None = None
             try:
-                try:
-                    result = await self._executor.execute(request, context=context)
-                except asyncio.CancelledError:
-                    self._persist_after_primary_failure(
+                result = await self._executor.execute(request, context=context)
+            except asyncio.CancelledError as cancellation:
+                await finish_cancellation_safe(
+                    self._persist_failure_and_finalize(
                         thread_id,
                         operation_id=operation_id,
                         command=normalized,
@@ -95,32 +101,30 @@ class DirectCommandService:
                         status="cancelled",
                         exit_code=None,
                     )
-                    raise
-                except Exception:
-                    self._persist_after_primary_failure(
+                )
+                raise cancellation
+            except Exception:
+                await self._operations.commit_failed(
+                    operation_id,
+                    lambda: self._persist_failure_and_finalize(
                         thread_id,
                         operation_id=operation_id,
                         command=normalized,
                         output="Command execution failed.",
                         status="error",
                         exit_code=None,
-                    )
-                    raise
-                self._persist_result(thread_id, operation_id, normalized, result)
-            except BaseException as error:
-                primary_failure = error
+                    ),
+                )
                 raise
-            finally:
-                try:
-                    self._finalize_operation(operation_id)
-                except BaseException:
-                    if primary_failure is None:
-                        raise
-                    logger.warning(
-                        "Direct operation finalization failed while preserving "
-                        "the primary terminal outcome.",
-                        exc_info=True,
-                    )
+            await self._operations.commit_completed(
+                operation_id,
+                lambda: self._persist_result_and_finalize(
+                    thread_id,
+                    operation_id,
+                    normalized,
+                    result,
+                ),
+            )
 
         try:
             handle = await self._operations.start_reserved(
@@ -156,7 +160,7 @@ class DirectCommandService:
             task.exception()
         self._trim_tasks()
 
-    def _persist_result(
+    async def _persist_result_and_finalize(
         self,
         thread_id: str,
         operation_id: str,
@@ -165,7 +169,7 @@ class DirectCommandService:
     ) -> None:
         raw_exit = result.metadata.get("exit_code")
         exit_code = raw_exit if isinstance(raw_exit, int) else None
-        self._persist(
+        await self._persist(
             thread_id,
             operation_id=operation_id,
             command=command,
@@ -173,8 +177,9 @@ class DirectCommandService:
             status=result.status.value,
             exit_code=exit_code,
         )
+        await self._finalize_operation(operation_id)
 
-    def _persist_after_primary_failure(
+    async def _persist_failure_and_finalize(
         self,
         thread_id: str,
         *,
@@ -185,7 +190,7 @@ class DirectCommandService:
         exit_code: int | None,
     ) -> None:
         try:
-            self._persist(
+            await self._persist(
                 thread_id,
                 operation_id=operation_id,
                 command=command,
@@ -199,8 +204,16 @@ class DirectCommandService:
                 "the primary terminal outcome.",
                 exc_info=True,
             )
+        try:
+            await self._finalize_operation(operation_id)
+        except BaseException:
+            logger.warning(
+                "Direct operation finalization failed while preserving the "
+                "primary terminal outcome.",
+                exc_info=True,
+            )
 
-    def _persist(
+    async def _persist(
         self,
         thread_id: str,
         *,
@@ -229,13 +242,13 @@ class DirectCommandService:
             },
         )
         try:
-            self._conversation.append_direct_command(
+            await self._conversation.append_direct_command(
                 thread_id,
                 content,
                 metadata,
             )
         except (Exception, asyncio.CancelledError):
-            if not self._direct_entry_matches(
+            if not await self._direct_entry_matches(
                 thread_id,
                 operation_id=operation_id,
                 content=content,
@@ -248,7 +261,7 @@ class DirectCommandService:
                 exc_info=True,
             )
 
-    def _direct_entry_matches(
+    async def _direct_entry_matches(
         self,
         thread_id: str,
         *,
@@ -257,7 +270,7 @@ class DirectCommandService:
         metadata: dict[str, JsonValue],
     ) -> bool:
         try:
-            view = self._conversation.read_thread(thread_id)
+            view = await self._conversation.read_thread(thread_id)
         except (Exception, asyncio.CancelledError):
             return False
         matches = [

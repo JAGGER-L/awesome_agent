@@ -343,8 +343,12 @@ only candidate resources and leaves the previously published runtime untouched.
 Provider and credential mutations use the same complete-candidate publication
 path, without repeating startup recovery, and preserve the selected Thread.
 Foreground ownership, interactions, permission session, recovery delivery,
-checkpoint saver, state leases, and other process-lifetime resources remain in
-a separate Application `AsyncExitStack` rather than the workspace snapshot.
+checkpoint saver, the process-owned Application SQLite worker, state leases,
+and other process-lifetime resources remain in a separate Application
+`AsyncExitStack` rather than the workspace snapshot. One bounded FIFO worker
+thread owns the long-lived Application database connection; Application-facing
+repositories expose async methods and never pass SQLite-owned values across
+that boundary.
 
 A shared foreground arbiter grants one atomic lease to Agent Turns, direct
 commands, state-changing commands, credential mutation, non-Tool interaction
@@ -352,8 +356,9 @@ resolution, or shutdown. Admission happens before Turn persistence. Read-only
 snapshot commands are the explicit exception during an active Operation; a
 pending interaction blocks new Operations and mutations, while matching Tool
 approval continues the Operation that owns it. Shutdown closes admission,
-cancels active work, and waits for leases to clean up before closing processes
-or databases.
+cancels cancellable active work, waits for durable commits and leases to clean
+up, retires runtime resources, then closes the checkpoint saver and Application
+SQLite worker before releasing state leases.
 
 ### Agent Core and LangGraph
 
@@ -409,8 +414,9 @@ maximum tool count.
   ChangeSet metadata, checkpoint access, and SQLite transactions.
 - **Does not own:** graph node transitions or TUI transcript state.
 - **Primary files:** `conversation/models.py`, `conversation/service.py`,
-  `storage/database.py`, `storage/compatibility.py`, `storage/state_lease.py`,
-  `storage/state_recovery.py`, `storage/conversations.py`,
+  `storage/application_sqlite.py`, `storage/database.py`,
+  `storage/compatibility.py`, `storage/state_lease.py`,
+  `storage/state_recovery.py`, `storage/conversations.py`, and
   `storage/checkpoints.py`.
 
 The resettable boundary is exactly `<AWESOME_HOME>/state`. Storage performs
@@ -646,10 +652,11 @@ history stores bounded summaries.
 - Provider adapters classify errors and report retry usage; the Agent enforces
   configured retry and model-call limits.
 - Cancellation propagates through the foreground operation, model call, and
-  tool execution. Application marks the Turn cancelled, then attempts to seal
-  known changes and remove its checkpoint. Bounded cleanup failure preserves
-  the primary cancelled fact; startup reconciliation retries stale terminal
-  checkpoint evidence.
+  tool execution. Application marks the Turn cancelled, then keeps the
+  foreground lease until local activity, transcript, ChangeSet, and checkpoint
+  cleanup reaches a known result. Cleanup failure preserves the primary
+  cancelled fact; startup reconciliation retries stale terminal checkpoint
+  evidence. Only process cleanup and best-effort event delivery are bounded.
 - A terminal event permits the TUI to promote one pending input. Typed busy
   races requeue the same identity at the head without duplicate failure text.
 - TUI cancellation and interaction controllers release completed request

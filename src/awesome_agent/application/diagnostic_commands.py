@@ -30,10 +30,10 @@ from awesome_agent.core.tools.permissions import (
 )
 from awesome_agent.core.tools.registry import ToolRegistry
 
-type StatusReader = Callable[[], StatusSnapshot | None]
-type UsageReader = Callable[[], UsageSummary | None]
+type StatusReader = Callable[[], Awaitable[StatusSnapshot | None]]
+type UsageReader = Callable[[], Awaitable[UsageSummary | None]]
 type ProviderDoctor = Callable[[], Awaitable[dict[str, str]]]
-type ReadinessReader = Callable[[], bool | None]
+type ReadinessReader = Callable[[], Awaitable[bool | None]]
 type WorkspaceInstructionDiagnosticReader = Callable[
     [], WorkspaceInstructionDiagnostic | None
 ]
@@ -107,7 +107,7 @@ class DiagnosticCommandService:
     async def status(self, intent: CommandIntent) -> CommandOutcome:
         if intent.arguments:
             return error("invalid_arguments", "Usage: /status")
-        snapshot = self._status_reader()
+        snapshot = await self._status_reader()
         if snapshot is None:
             return error("thread_not_found", "Select a Thread first.")
         return result(StatusCommandPayload(snapshot=snapshot))
@@ -115,7 +115,7 @@ class DiagnosticCommandService:
     async def usage(self, intent: CommandIntent) -> CommandOutcome:
         if intent.arguments:
             return error("invalid_arguments", "Usage: /usage")
-        usage = self._usage_reader()
+        usage = await self._usage_reader()
         if usage is None:
             return error("thread_not_found", "Select a Thread first.")
         return result(UsageCommandPayload(usage=usage))
@@ -125,9 +125,9 @@ class DiagnosticCommandService:
             return error("invalid_arguments", "Usage: /doctor")
         providers = await self._provider_doctor()
         checks = [
-            self._readiness_check("Configuration", self._configuration_ready),
-            self._readiness_check("SQLite", self._sqlite_ready),
-            self._readiness_check("Checkpoints", self._checkpoints_ready),
+            await self._readiness_check("Configuration", self._configuration_ready),
+            await self._readiness_check("SQLite", self._sqlite_ready),
+            await self._readiness_check("Checkpoints", self._checkpoints_ready),
         ]
         workspace_diagnostic = self._workspace_instruction_diagnostic()
         if workspace_diagnostic is not None:
@@ -174,9 +174,9 @@ class DiagnosticCommandService:
         return result(DoctorCommandPayload(checks=tuple(checks)))
 
     @staticmethod
-    def _readiness_check(name: str, reader: ReadinessReader) -> DoctorCheck:
+    async def _readiness_check(name: str, reader: ReadinessReader) -> DoctorCheck:
         try:
-            ready = reader()
+            ready = await reader()
         except Exception:
             ready = None
         if ready is True:

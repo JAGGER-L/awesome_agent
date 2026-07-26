@@ -1,7 +1,8 @@
 import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 from time import monotonic
-from unittest.mock import Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -19,11 +20,23 @@ from awesome_agent.core.tools import (
 from awesome_agent.core.tools.builtins import register_modifying_tools
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 
 
-def delete_fixture(
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
+
+
+async def delete_fixture(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> tuple[
     ToolExecutor,
     ToolExecutionContext,
@@ -36,11 +49,11 @@ def delete_fixture(
     identity = resolve_workspace(workspace)
     blobs = FileChangeBlobStore(tmp_path / "change-journal")
     journal = ChangeJournal(
-        SQLiteChangeSetStore(tmp_path / "application.db"),
+        SQLiteChangeSetStore(application_database),
         blobs,
         identity,
     )
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=identity,
@@ -58,7 +71,7 @@ def delete_fixture(
             workspace_key=identity.key,
             sink=CollectingEventSink(),
         ),
-        activity_writer=Mock(),
+        activity_writer=AsyncMock(),
         monotonic=monotonic,
         change_set_id=change_set.id,
         permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
@@ -67,8 +80,14 @@ def delete_fixture(
 
 
 @pytest.mark.asyncio
-async def test_recursive_delete_records_every_node_for_restore(tmp_path: Path) -> None:
-    executor, context, journal, blobs, workspace = delete_fixture(tmp_path)
+async def test_recursive_delete_records_every_node_for_restore(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    executor, context, journal, blobs, workspace = await delete_fixture(
+        tmp_path,
+        application_database,
+    )
     target = workspace / "target"
     nested = target / "nested"
     empty = target / "empty"
@@ -85,7 +104,7 @@ async def test_recursive_delete_records_every_node_for_restore(tmp_path: Path) -
         ),
         context=context,
     )
-    change_set = journal.seal(context.change_set_id or "")
+    change_set = await journal.seal(context.change_set_id or "")
 
     assert result.status is ToolStatus.SUCCESS
     assert not target.exists()
@@ -105,23 +124,29 @@ async def test_recursive_delete_records_every_node_for_restore(tmp_path: Path) -
     assert all(change.before_mode is not None for change in change_set.files)
 
     reopened = ChangeOperations(
-        SQLiteChangeSetStore(tmp_path / "application.db"),
+        SQLiteChangeSetStore(application_database),
         FileChangeBlobStore(tmp_path / "change-journal"),
         resolve_workspace(workspace),
     )
-    reopened.undo(change_set.id)
+    await reopened.undo(change_set.id)
 
     assert (target / "text.txt").read_text(encoding="utf-8") == "text"
     assert (nested / "binary.bin").read_bytes() == b"before\x00after"
     assert empty.is_dir()
 
-    reopened.redo(change_set.id)
+    await reopened.redo(change_set.id)
     assert not target.exists()
 
 
 @pytest.mark.asyncio
-async def test_delete_removes_symlink_without_following_target(tmp_path: Path) -> None:
-    executor, context, journal, blobs, workspace = delete_fixture(tmp_path)
+async def test_delete_removes_symlink_without_following_target(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    executor, context, journal, blobs, workspace = await delete_fixture(
+        tmp_path,
+        application_database,
+    )
     outside = tmp_path / "outside.txt"
     outside.write_text("outside", encoding="utf-8")
     link = workspace / "linked.txt"
@@ -139,7 +164,7 @@ async def test_delete_removes_symlink_without_following_target(tmp_path: Path) -
         ),
         context=context,
     )
-    change_set = journal.seal(context.change_set_id or "")
+    change_set = await journal.seal(context.change_set_id or "")
 
     assert result.status is ToolStatus.SUCCESS
     assert not link.exists()
@@ -151,14 +176,14 @@ async def test_delete_removes_symlink_without_following_target(tmp_path: Path) -
     assert blobs.get(change.before_blob) == os.fsencode(raw_target)
 
     reopened = ChangeOperations(
-        SQLiteChangeSetStore(tmp_path / "application.db"),
+        SQLiteChangeSetStore(application_database),
         FileChangeBlobStore(tmp_path / "change-journal"),
         resolve_workspace(workspace),
     )
-    reopened.undo(change_set.id)
+    await reopened.undo(change_set.id)
     assert link.is_symlink()
     assert os.readlink(link) == raw_target
     assert link.read_text(encoding="utf-8") == "outside"
-    reopened.redo(change_set.id)
+    await reopened.redo(change_set.id)
     assert not link.exists()
     assert outside.read_text(encoding="utf-8") == "outside"

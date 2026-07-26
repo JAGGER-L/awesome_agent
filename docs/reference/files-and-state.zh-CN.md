@@ -146,8 +146,12 @@ Workspace Skill 加载相同的保证。请把受信任 Workspace 配置当作�
 ## Application database
 
 `<HOME>/state/application.db` 是权威的嵌入式 Application SQLite database。当前
-`PRAGMA user_version` 是 **7**。连接会启用 foreign key、五秒 busy timeout、WAL journal
-mode 和 normal synchronous mode。
+`PRAGMA user_version` 是 **7**。一个进程级有界 FIFO worker 持有其长期 connection；该
+connection 会启用 foreign key、五秒 busy timeout、WAL journal mode 和 normal synchronous
+mode。面向 Application 的 repository 暴露 async method：read 使用 deferred transaction，
+write 使用 `BEGIN IMMEDIATE`。取消的 read 可以停止等待；已准入的 durable write 与 lifecycle
+operation 会等到明确的 COMMIT、ROLLBACK 或 close 结果，再重新抛出第一次 cancellation。
+SQLite connection、cursor 和 row 不会跨越 worker 边界。
 
 其逻辑所有权为：
 
@@ -174,8 +178,10 @@ blob 虽使用不同文件，却共同组成一份恢复契约。
 `<HOME>/state/provider-model-transaction.json` 用于闭合 `config.yaml` 中 default model 与
 `application.db` 中 Thread selected model 之间的原子性缺口。这两类资源无法加入同一个
 database transaction。因此 model mutation 会先写入包含旧值与目标 model identity 的持久
-`prepared` 记录，再替换并 reload 配置、更新 Thread、验证两侧状态，将记录改为
-`committed`，最后才移除 journal。
+`prepared` 记录；该记录还带有唯一 transaction identity。随后系统替换并 reload 配置、
+更新 Thread、验证两侧状态，将记录改为 `committed`，最后才移除 journal。若 callback
+失败，系统会保留 `prepared` 证据，直到 SQLite 明确完成 rollback，且新的 transaction
+重新验证两侧旧值。
 
 启动时，`prepared` 记录会回滚到旧值，`committed` 记录会向前完成到目标值。
 Reconciliation 是幂等的，只有两侧均验证通过后才清除 journal。journal 格式错误或无法恢复

@@ -5,7 +5,7 @@ import contextvars
 import logging
 import math
 import threading
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from concurrent.futures import Future as ConcurrentFuture
 from typing import Any
 
@@ -14,6 +14,38 @@ logger = logging.getLogger(__name__)
 # A credential transaction can wait on two independently locked user-state files.
 # Two 10-second lock deadlines plus bounded local persistence remain below this cap.
 _BLOCKING_CALL_CLEANUP_TIMEOUT_SECONDS = 22.0
+
+
+async def finish_cancellation_safe[ResultT](
+    operation: Awaitable[ResultT],
+) -> tuple[ResultT, asyncio.CancelledError | None]:
+    """Observe one caller-owned convergent action before exposing cancellation.
+
+    The action must be fully owned by the caller and guaranteed to converge. This
+    helper can wait without a deadline, so it must not wrap arbitrary external I/O.
+    A successful action returns its result and the first caller cancellation; if
+    the action fails after cancellation, that first cancellation remains primary.
+    """
+
+    task = asyncio.ensure_future(operation)
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            if cancellation is None:
+                cancellation = error
+        except BaseException:
+            if cancellation is not None:
+                raise cancellation from None
+            raise
+    try:
+        result = task.result()
+    except BaseException:
+        if cancellation is not None:
+            raise cancellation from None
+        raise
+    return result, cancellation
 
 
 async def run_cancellation_safe_blocking_call[ResultT](

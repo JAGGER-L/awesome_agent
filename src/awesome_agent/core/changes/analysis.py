@@ -129,8 +129,8 @@ class ChangeAnalyzer:
         self._blobs = blobs
         self._workspace = workspace
 
-    def _get(self, change_set_id: str) -> ChangeSet:
-        change_set = self._store.get(change_set_id)
+    async def _get(self, change_set_id: str) -> ChangeSet:
+        change_set = await self._store.get(change_set_id)
         if change_set is None:
             raise ChangeSetNotFound(change_set_id)
         if change_set.workspace_key != self._workspace.key:
@@ -169,8 +169,8 @@ class ChangeAnalyzer:
             )
         return NodeSnapshot(node_type, content, mode)
 
-    def analyze(self, change_set_id: str) -> ChangeAnalysis:
-        change_set = self._get(change_set_id)
+    async def analyze(self, change_set_id: str) -> ChangeAnalysis:
+        change_set = await self._get(change_set_id)
         diff_parts: list[str] = []
         deltas: list[ChangeDelta] = []
         for change in sorted(

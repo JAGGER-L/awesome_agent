@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
@@ -43,15 +43,6 @@ class McpClient(Protocol):
     async def aclose(self) -> None: ...
 
 
-class McpEnablementReader(Protocol):
-    def is_enabled(
-        self,
-        workspace_key: str,
-        server_id: str,
-        config_hash: str,
-    ) -> bool: ...
-
-
 class McpConnectionState(StrEnum):
     DISABLED = "disabled"
     UNTRUSTED = "untrusted"
@@ -77,9 +68,8 @@ class McpManager:
         self,
         *,
         configs: tuple[McpServerConfig, ...],
-        workspace_key: str,
         workspace_trusted: bool,
-        enablements: McpEnablementReader,
+        enablements: Mapping[str, str],
         registry: ToolRegistry,
         client_factory: Callable[[McpServerConfig], McpClient] = McpStdioClient,
         call_timeout_seconds: float = _MCP_CALL_TIMEOUT_SECONDS,
@@ -92,9 +82,8 @@ class McpManager:
             raise ValueError("MCP call timeout must be positive")
         if catalog_timeout_seconds <= 0:
             raise ValueError("MCP catalog timeout must be positive")
-        self._workspace_key = workspace_key
         self._workspace_trusted = workspace_trusted
-        self._enablements = enablements
+        self._enablements = dict(enablements)
         self._registry = registry
         self._client_factory = client_factory
         self._call_timeout_seconds = call_timeout_seconds
@@ -118,6 +107,17 @@ class McpManager:
 
     def statuses(self) -> tuple[McpServerStatus, ...]:
         return tuple(self.status(server_id) for server_id in self._configs)
+
+    def publish_enablement(
+        self,
+        server_id: str,
+        config_hash: str | None,
+    ) -> None:
+        self._config(server_id)
+        if config_hash is None:
+            self._enablements.pop(server_id, None)
+        else:
+            self._enablements[server_id] = config_hash
 
     def tool_names(self, server_id: str) -> tuple[str, ...]:
         return tuple(tool.name for tool in self.tools(server_id))
@@ -424,11 +424,7 @@ class McpManager:
     def _is_effective(self, config: McpServerConfig) -> bool:
         if config.source is McpSource.USER:
             return config.enabled
-        return self._workspace_trusted and self._enablements.is_enabled(
-            self._workspace_key,
-            config.id,
-            mcp_config_hash(config),
-        )
+        return self._workspace_trusted and self._workspace_enabled(config)
 
     def _inactive_status(self, config: McpServerConfig) -> McpServerStatus:
         if config.source is McpSource.USER:
@@ -439,15 +435,14 @@ class McpManager:
             )
         elif not self._workspace_trusted:
             state = McpConnectionState.UNTRUSTED
-        elif self._enablements.is_enabled(
-            self._workspace_key,
-            config.id,
-            mcp_config_hash(config),
-        ):
+        elif self._workspace_enabled(config):
             state = McpConnectionState.CONFIGURED
         else:
             state = McpConnectionState.ENABLEMENT_REQUIRED
         return McpServerStatus(config.id, state)
+
+    def _workspace_enabled(self, config: McpServerConfig) -> bool:
+        return self._enablements.get(config.id) == mcp_config_hash(config)
 
 
 def _detach_task(task: asyncio.Task[object]) -> None:

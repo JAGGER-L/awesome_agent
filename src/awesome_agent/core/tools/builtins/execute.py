@@ -101,7 +101,7 @@ def create_execute_handler(
         environment = _sanitized_environment()
         if os.name == "nt":
             environment["AWESOME_EXEC_COMMAND"] = options.command
-        journal.record_execute(
+        await journal.record_execute(
             change_set_id=context.change_set_id,
             command=redact_text(options.command).text,
             observed_paths=[],

@@ -107,7 +107,7 @@ def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
                     max_bytes=MAX_CHANGESET_BYTES,
                 )
                 try:
-                    journal.preflight_batch(
+                    await journal.preflight_batch(
                         change_set_id=context.change_set_id,
                         additional_nodes=len(nodes),
                         additional_bytes=sum(node.content_bytes for node in nodes),
@@ -120,7 +120,7 @@ def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
                     ) from error
 
                 for node in nodes:
-                    journal.apply_file_mutation(
+                    await journal.apply_file_mutation(
                         change_set_id=context.change_set_id,
                         kind=FileChangeKind.DELETED,
                         intended_after=None,

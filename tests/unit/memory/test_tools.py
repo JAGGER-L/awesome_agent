@@ -51,7 +51,7 @@ class ActivityWriter(ToolActivityWriter):
     def __init__(self) -> None:
         self.items: list[ToolActivityDraft] = []
 
-    def finalize(self, activity: ToolActivityDraft) -> None:
+    async def finalize(self, activity: ToolActivityDraft) -> None:
         self.items.append(activity)
 
 

@@ -204,10 +204,12 @@ operation/permission binding。陈旧响应不会修改当前权限。
 
 Cancel 是 best-effort 且针对特定 identity。True result 表示取消在匹配 Operation 仍可取消
 时已经传递，其终态为 `operation.cancelled`。False 也包括未知 ID、已经进入 cancelling 的
-Operation，或 completed/failed outcome 已越过 commit point 的 Operation。Commit point 之后
-的取消不能重写持久化 outcome；系统会继续发布原来的 completed/failed terminal event。
-Handler/process/MCP cleanup 和 terminal publication 均有界，之后继续传播 commit 前的原始
-cancellation。
+Operation，以及处于 `committing` 或终态的 Operation。Commit boundary 之后的取消不能重写
+持久化 outcome。已经准入的 durable write 会先等到明确的 COMMIT 或 ROLLBACK，再重新抛出
+caller 的第一次 cancellation；shutdown 也会等待同一边界。系统会继续发布原来的
+completed/failed terminal event。本地 activity、transcript、ChangeSet 和 checkpoint
+finalization 会继续持有 Operation lease，直到结果明确；process/MCP cleanup 与 best-effort
+terminal publication 仍有界。
 
 Shutdown 是紧急操作。有效 request 会先取消其他 background request、阻止新 foreground
 lease、取消/等待活动 operation 和 mutation、关闭 MCP 与其他资源，然后返回。有效 shutdown

@@ -1,8 +1,10 @@
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from awesome_agent.storage import database as database_module
 from awesome_agent.storage.database import (
     APPLICATION_SCHEMA_VERSION,
     ApplicationSchemaMismatch,
@@ -60,3 +62,31 @@ def test_noncurrent_schema_is_rejected_without_mutation(tmp_path: Path) -> None:
     assert tuple(sorted(item.name for item in path.parent.iterdir())) == before_entries
     assert not path.with_name("application.db-wal").exists()
     assert not path.with_name("application.db-shm").exists()
+
+
+def test_connect_closes_partial_connection_when_pragma_setup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingConnection:
+        row_factory: object | None = None
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def execute(self, statement: str) -> None:
+            raise sqlite3.OperationalError(f"injected failure: {statement}")
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = FailingConnection()
+    monkeypatch.setattr(
+        "awesome_agent.storage.database.sqlite3.connect",
+        lambda *args, **kwargs: cast(sqlite3.Connection, connection),
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="injected failure"):
+        database_module._connect(tmp_path / "application.db")
+
+    assert connection.closed is True

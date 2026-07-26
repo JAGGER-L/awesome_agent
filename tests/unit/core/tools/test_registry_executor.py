@@ -87,7 +87,7 @@ class CollectingActivityWriter(ToolActivityWriter):
     def __init__(self) -> None:
         self.activities: dict[tuple[str, str], ToolActivityDraft] = {}
 
-    def finalize(self, activity: ToolActivityDraft) -> None:
+    async def finalize(self, activity: ToolActivityDraft) -> None:
         self.activities.setdefault((activity.operation_id, activity.call_id), activity)
 
 
@@ -95,10 +95,22 @@ class FailingActivityWriter(ToolActivityWriter):
     def __init__(self) -> None:
         self.calls = 0
 
-    def finalize(self, activity: ToolActivityDraft) -> None:
+    async def finalize(self, activity: ToolActivityDraft) -> None:
         del activity
         self.calls += 1
         raise RuntimeError("audit storage unavailable")
+
+
+class BlockingActivityWriter(ToolActivityWriter):
+    def __init__(self) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.activities: dict[tuple[str, str], ToolActivityDraft] = {}
+
+    async def finalize(self, activity: ToolActivityDraft) -> None:
+        self.entered.set()
+        await self.release.wait()
+        self.activities.setdefault((activity.operation_id, activity.call_id), activity)
 
 
 class FailingToolTerminalSink(CollectingEventSink):
@@ -1034,6 +1046,58 @@ async def test_executor_bounds_cancelled_terminal_delivery(
 
 
 @pytest.mark.asyncio
+async def test_executor_waits_for_cancelled_activity_before_terminal_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler_entered = asyncio.Event()
+
+    async def cancellable(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        handler_entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("Cancellation did not stop the handler.")
+
+    context, sink, _ = execution_context(tmp_path)
+    writer = BlockingActivityWriter()
+    context = replace(context, activity_writer=writer)
+    monkeypatch.setattr(
+        "awesome_agent.core.tools.executor._TERMINAL_CANCELLATION_CLEANUP_SECONDS",
+        0.01,
+    )
+    executor = ToolExecutor(echo_registry(cancellable), timeout_seconds=30.0)
+    task = asyncio.create_task(
+        executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+    )
+    await handler_entered.wait()
+
+    task.cancel("cancel while handler runs")
+    await writer.entered.wait()
+    await asyncio.sleep(0.03)
+
+    assert not task.done()
+    assert [event.event_type for event in sink.events] == [EventType.TOOL_STARTED]
+
+    writer.release.set()
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await asyncio.wait_for(task, timeout=1)
+
+    assert captured.value.args == ("cancel while handler runs",)
+    [activity] = writer.activities.values()
+    assert activity.outcome == "cancelled"
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_CANCELLED,
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("handler_outcome", "terminal_type", "activity_outcome"),
     (
@@ -1094,6 +1158,65 @@ async def test_executor_finishes_handler_outcome_when_cancelled_during_terminal_
     ]
     [activity] = writer.activities.values()
     assert activity.outcome == activity_outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler_outcome", "terminal_type", "activity_outcome"),
+    (
+        ("success", EventType.TOOL_COMPLETED, "success"),
+        ("error", EventType.TOOL_FAILED, "error"),
+    ),
+)
+async def test_executor_preserves_handler_outcome_when_cancelled_during_audit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    handler_outcome: str,
+    terminal_type: EventType,
+    activity_outcome: str,
+) -> None:
+    async def completed_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        if handler_outcome == "error":
+            raise ExpectedToolFailure(ToolErrorCode.NOT_FOUND, "Missing.")
+        return ToolOutput(content="ok")
+
+    context, sink, _ = execution_context(tmp_path)
+    writer = BlockingActivityWriter()
+    context = replace(context, activity_writer=writer)
+    monkeypatch.setattr(
+        "awesome_agent.core.tools.executor._TERMINAL_CANCELLATION_CLEANUP_SECONDS",
+        0.01,
+    )
+    executor = ToolExecutor(echo_registry(completed_handler))
+    task = asyncio.create_task(
+        executor.execute(
+            ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "x"}),
+            context=context,
+        )
+    )
+    await writer.entered.wait()
+
+    task.cancel("cancel during audit")
+    await asyncio.sleep(0.03)
+
+    assert not task.done()
+    assert [event.event_type for event in sink.events] == [EventType.TOOL_STARTED]
+
+    writer.release.set()
+    with pytest.raises(asyncio.CancelledError) as captured:
+        await asyncio.wait_for(task, timeout=1)
+
+    assert captured.value.args == ("cancel during audit",)
+    [activity] = writer.activities.values()
+    assert activity.outcome == activity_outcome
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        terminal_type,
+    ]
 
 
 @pytest.mark.asyncio
