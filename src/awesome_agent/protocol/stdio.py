@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import queue
 import sys
@@ -14,7 +15,13 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from awesome_agent.application.composition import compose_local_application
+from awesome_agent.application.contracts import (
+    ApplicationResult,
+    ProductError,
+    ProductErrorCode,
+)
 from awesome_agent.application.facade import ApplicationFacade
+from awesome_agent.core.contracts import MAX_JSON_SAFE_INTEGER
 from awesome_agent.core.events import EventEnvelope, EventSink
 from awesome_agent.core.process_lifetime import (
     ProcessTreeGuardError,
@@ -25,6 +32,7 @@ from awesome_agent.protocol.jsonrpc import (
     JsonRpcDispatcher,
     event_notification,
     jsonrpc_error,
+    normalize_jsonrpc_request_id,
     parse_jsonrpc_request,
 )
 
@@ -35,6 +43,7 @@ _MAX_IN_FLIGHT_CONTROL_REQUESTS = 16
 _MAX_RECENT_REQUEST_IDS = 4_096
 _OUTPUT_QUEUE_SIZE = 64
 _OUTPUT_WRITE_TIMEOUT_SECONDS = 5.0
+_MAX_PROTOCOL_JSON_DEPTH = 64
 _BACKGROUND_CONTROL_METHODS = frozenset({"initialize", "interaction.respond"})
 _URGENT_CONTROL_METHODS = frozenset({"operation.cancel", "shutdown"})
 
@@ -162,16 +171,113 @@ class JsonLineWriter:
         self._lock = asyncio.Lock()
 
     async def send(self, value: Mapping[str, object]) -> None:
-        payload = (
-            json.dumps(
-                value,
+        try:
+            snapshot = _snapshot_json_frame(value)
+            content = json.dumps(
+                snapshot,
                 ensure_ascii=False,
+                allow_nan=False,
                 separators=(",", ":"),
             ).encode("utf-8")
-            + b"\n"
-        )
+        except (TypeError, ValueError, RecursionError) as error:
+            raise _FrameInvalid("Protocol frame is not strict UTF-8 JSON.") from error
+        if len(content) > MAX_JSON_LINE_BYTES:
+            raise _FrameTooLarge(f"Protocol frame exceeds {MAX_JSON_LINE_BYTES} bytes.")
+        payload = content + b"\n"
         async with self._lock:
             await self._output.write(payload)
+
+
+class _FrameTooLarge(ValueError):
+    pass
+
+
+class _FrameInvalid(ValueError):
+    pass
+
+
+def _snapshot_json_frame(value: object, *, depth: int = 1) -> object:
+    """Validate and copy one immutable-by-ownership protocol JSON snapshot."""
+
+    if depth > _MAX_PROTOCOL_JSON_DEPTH:
+        raise _FrameInvalid("Protocol frame exceeds the JSON depth limit.")
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        _validate_unicode(value)
+        return str(value)
+    if type(value) is int:
+        if abs(value) > MAX_JSON_SAFE_INTEGER:
+            raise _FrameInvalid("Protocol frame contains an unsafe JSON integer.")
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise _FrameInvalid("Protocol frame contains a non-finite number.")
+        if value.is_integer() and abs(value) > MAX_JSON_SAFE_INTEGER:
+            raise _FrameInvalid("Protocol frame contains an unsafe JSON integer.")
+        return value
+    if isinstance(value, dict):
+        snapshot: dict[str, object] = {}
+        try:
+            for key, child in value.items():
+                if not isinstance(key, str):
+                    raise _FrameInvalid(
+                        "Protocol frame contains a non-string object key."
+                    )
+                _validate_unicode(key)
+                snapshot[str(key)] = _snapshot_json_frame(child, depth=depth + 1)
+        except RuntimeError as error:
+            raise _FrameInvalid("Protocol frame changed during validation.") from error
+        return snapshot
+    if isinstance(value, list):
+        try:
+            return [_snapshot_json_frame(child, depth=depth + 1) for child in value]
+        except RuntimeError as error:
+            raise _FrameInvalid("Protocol frame changed during validation.") from error
+    raise _FrameInvalid("Protocol frame contains a non-JSON value.")
+
+
+def _validate_unicode(value: str) -> None:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise _FrameInvalid("Protocol frame contains invalid Unicode.") from error
+
+
+def _reject_non_json_constant(value: str) -> None:
+    del value
+    raise ValueError("Non-finite numbers are not valid JSON.")
+
+
+def _result_too_large_response(
+    request_id: str | int | None,
+) -> dict[str, Any]:
+    result = ApplicationResult[object].failure(
+        ProductError(
+            code=ProductErrorCode.RESULT_TOO_LARGE,
+            message="The result exceeds the protocol frame limit.",
+            data={"maximum_bytes": MAX_JSON_LINE_BYTES},
+        )
+    )
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": result.model_dump(mode="json", exclude_none=True),
+    }
+
+
+def _invalid_result_response(request_id: str | int | None) -> dict[str, Any]:
+    result = ApplicationResult[object].failure(
+        ProductError(
+            code=ProductErrorCode.INTERNAL_ERROR,
+            message="The result could not be represented by the protocol.",
+        )
+    )
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": result.model_dump(mode="json", exclude_none=True),
+    }
 
 
 class ProtocolEventSink(EventSink):
@@ -339,8 +445,16 @@ async def serve_stdio(
             if not raw.strip():
                 continue
             try:
-                value = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+                value = json.loads(
+                    raw.decode("utf-8"),
+                    parse_constant=_reject_non_json_constant,
+                )
+            except (
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                ValueError,
+                RecursionError,
+            ):
                 await protocol_writer.send(jsonrpc_error(-32700, "Parse error"))
                 continue
             duplicate = request_ids.accept(value)
@@ -430,7 +544,14 @@ async def _dispatch_request(
     try:
         response = await dispatcher.dispatch(value)
         if response is not None:
-            await writer.send(response)
+            try:
+                await writer.send(response)
+            except _FrameTooLarge:
+                response = _result_too_large_response(request_id)
+                await writer.send(response)
+            except _FrameInvalid:
+                response = _invalid_result_response(request_id)
+                await writer.send(response)
         return response
     finally:
         request_ids.complete(request_id)
@@ -462,10 +583,7 @@ class _RequestIdTracker:
 def _request_id(value: object) -> str | int | None:
     if not isinstance(value, dict) or "id" not in value:
         return None
-    identifier = value["id"]
-    if isinstance(identifier, bool) or not isinstance(identifier, (str, int)):
-        return None
-    return identifier
+    return normalize_jsonrpc_request_id(value["id"])
 
 
 def _method(value: object) -> str | None:

@@ -25,8 +25,10 @@ MAX_MCP_TOOLS = 128
 MAX_MCP_SCHEMA_BYTES = 256 * 1024
 MAX_MCP_CATALOG_BYTES = 1024 * 1024
 MAX_MCP_SCHEMA_DEPTH = 64
+MAX_NAMESPACED_MCP_TOOL_NAME_CHARS = 128
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
+_SERVER_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _JSON_POINTER_ARRAY_INDEX = re.compile(r"^(?:0|[1-9][0-9]*)$")
 _REFERENCE_KEYWORDS = frozenset({"$ref", "$dynamicRef", "$recursiveRef"})
 _ROOT_RESOURCE_URI = "https://awesome-agent.invalid/mcp/catalog/root"
@@ -165,12 +167,15 @@ class McpCatalog:
 def compile_mcp_catalog(
     tools: tuple[Tool, ...],
     *,
+    server_id: str,
     generation: int = 0,
 ) -> McpCatalog:
     """Compile and fully check one remote catalog without external I/O."""
 
     if generation < 0:
         raise ValueError("MCP catalog generation cannot be negative")
+    if _SERVER_ID.fullmatch(server_id) is None:
+        raise McpCatalogError("MCP server identifier is not supported")
     if len(tools) > MAX_MCP_TOOLS:
         raise McpCatalogError(f"MCP catalog exceeds the {MAX_MCP_TOOLS}-tool limit")
 
@@ -178,7 +183,7 @@ def compile_mcp_catalog(
     names: set[str] = set()
     catalog_bytes = 0
     for tool in tools:
-        _validate_tool_contract(tool, names)
+        _validate_tool_contract(tool, names, server_id=server_id)
         catalog_bytes += mcp_tool_contract_size(tool)
         if catalog_bytes > MAX_MCP_CATALOG_BYTES:
             raise McpCatalogError("MCP catalog exceeds the 1 MiB limit")
@@ -211,9 +216,19 @@ def mcp_tool_contract_size(tool: Tool) -> int:
     return _serialized_size(tool.model_dump(by_alias=True, exclude_none=True))
 
 
-def _validate_tool_contract(tool: Tool, names: set[str]) -> None:
+def _validate_tool_contract(
+    tool: Tool,
+    names: set[str],
+    *,
+    server_id: str,
+) -> None:
     if _TOOL_NAME.fullmatch(tool.name) is None:
         raise McpCatalogError("MCP tool name is not supported")
+    namespaced_name = f"mcp.{server_id}.{tool.name}"
+    if len(namespaced_name) > MAX_NAMESPACED_MCP_TOOL_NAME_CHARS:
+        raise McpCatalogError(
+            "MCP namespaced tool name exceeds the 128-character limit"
+        )
     if tool.name in names:
         raise McpCatalogError("MCP catalog contains a duplicate tool name")
     names.add(tool.name)
@@ -229,14 +244,16 @@ def _serialized_size(value: object) -> int:
             allow_nan=False,
             separators=(",", ":"),
         )
+        encoded = serialized.encode("utf-8")
     except (TypeError, ValueError, RecursionError) as error:
         raise McpCatalogError("MCP tool schema is not bounded JSON") from error
-    return len(serialized.encode("utf-8"))
+    return len(encoded)
 
 
 def _compile_schema(schema: dict[str, object]) -> Validator:
     if _serialized_size(schema) > MAX_MCP_SCHEMA_BYTES:
         raise McpCatalogError("MCP tool schema exceeds the 256 KiB limit")
+    _validate_complete_json_depth(schema)
     validator_type = _validator_type(schema)
     _validate_required_vocabularies(schema, validator_type)
     try:
@@ -247,6 +264,22 @@ def _compile_schema(schema: dict[str, object]) -> Validator:
     # jsonschema's default registry never retrieves arbitrary remote resources.
     # The preflight above rejects every non-fragment reference first.
     return validator_type(schema)
+
+
+def _validate_complete_json_depth(value: object) -> None:
+    """Bound every JSON path, including annotation and extension values."""
+
+    stack: list[tuple[object, int]] = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > MAX_MCP_SCHEMA_DEPTH:
+            raise McpCatalogError(
+                f"MCP tool schema exceeds the depth limit of {MAX_MCP_SCHEMA_DEPTH}"
+            )
+        if isinstance(current, dict):
+            stack.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list | tuple):
+            stack.extend((child, depth + 1) for child in current)
 
 
 def _validator_type(schema: dict[str, object]) -> type[Validator]:

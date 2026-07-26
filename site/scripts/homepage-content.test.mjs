@@ -59,6 +59,27 @@ test("canonical homepage sources compile to six aligned bilingual resource cards
   assert(Object.isFrozen(homepageContentByLocale.en.resources));
 });
 
+test("homepage promises only optional verification and bounded file recovery", () => {
+  const english = homepageContentByLocale.en;
+  const chinese = homepageContentByLocale["zh-CN"];
+  const englishBoundaries = Object.fromEntries(
+    english.boundaries.map((boundary) => [boundary.id, boundary]),
+  );
+  const chineseBoundaries = Object.fromEntries(
+    chinese.boundaries.map((boundary) => [boundary.id, boundary]),
+  );
+
+  assert(!english.title.toLowerCase().includes("verified"));
+  assert(englishBoundaries.verify.description.includes("can run"));
+  assert(englishBoundaries.verify.description.includes("does not guarantee"));
+  assert(englishBoundaries.recover.description.includes("controlled file edits"));
+  assert(englishBoundaries.recover.description.includes("not reversible"));
+  assert(chineseBoundaries.verify.description.includes("可按需运行"));
+  assert(chineseBoundaries.verify.description.includes("不保证"));
+  assert(chineseBoundaries.recover.description.includes("受控文件修改"));
+  assert(chineseBoundaries.recover.description.includes("不可撤销"));
+});
+
 test("rejects missing, extra, and nested target fields", () => {
   const missing = sourceCopies();
   delete missing.english.title;

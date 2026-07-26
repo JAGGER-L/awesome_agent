@@ -57,6 +57,22 @@ releases.astral.sh, and nodejs.org; check whether a corporate proxy rewrites
 downloads; then retry. A persistent mismatch can be a damaged or incomplete
 release and should be reported with the asset name and exact error.
 
+### Another installer is running or an upgrade was interrupted
+
+One exclusive installer lock covers recovery, download, same-root staging,
+application replacement, launcher replacement, and post-commit cleanup. Wait
+for a live installer rather than starting another. If it was terminated, rerun
+the same version-bound installer; it validates the recorded owner before
+reclaiming a dead lock and reconciles `.install-transaction` with
+`app.rollback`. Do not delete those paths manually unless you have separately
+proved that no installer process is alive.
+
+If the run ends with a `PATH`, shell-profile, or deferred-cleanup warning, the
+application may already be committed. Open a new terminal or add the documented
+launcher directory manually, check `awesome --version`, close running Awesome
+sessions, and rerun once to clean rollback residue. Do not interpret a cleanup
+warning as permission to overwrite release assets or bypass checksums.
+
 ### Awesome requires an interactive terminal
 
 The Ink UI requires TTY input and output. Start it directly in a terminal, not
@@ -294,10 +310,12 @@ updates. Resolve the concurrent edit and retry against a fresh list rather
 than replacing the file blindly.
 
 If enabled `USER.md` or `MEMORY.md` is invalid or unreadable, Turn context
-preparation fails instead of omitting the scope. A current cleanup gap can leave
-the already-created Turn `in_progress` after the Operation reports failure.
-Repair the managed markers/UTF-8/size problem or disable local Memory, then
-restart so startup recovery can reconcile the Turn.
+preparation fails instead of omitting the scope. The same Operation terminalizes
+the already-created Turn as failed and attempts to remove its checkpoint, so
+another Turn can start normally. If cleanup fails, the primary error is
+preserved and startup reconciliation retries removal of the residual
+checkpoint. Repair the managed markers/UTF-8/size problem or disable local
+Memory before retrying.
 
 ### Mem0 Cloud is unavailable
 
@@ -317,12 +335,13 @@ Run:
 
 Confirm the configured command, arguments, allowlisted environment variable
 names, executable availability, and server schema. `/mcp restart <id>` removes
-the old namespace before reconnecting. The Manager publishes only a complete
-catalog, and Registry replacement publishes only a complete namespace; these
-are two atomic steps rather than one transaction. If Manager status is
-`connected` but `/tools` or Turn preparation fails, also check whether the full
-`mcp.<server>.<tool>` name exceeds the 128-character `/tools` contract. The
-current compiler does not reject that downstream mismatch.
+the old namespace before reconnecting. `connected` means the live client,
+complete compiled catalog, and complete Registry namespace were all published.
+If publication reports `error`, inspect the server catalog for an invalid
+schema or final `mcp.<server>.<tool>` name longer than 128 characters. Also
+reduce the enabled tool set or schema definitions if the effective shared
+Registry would exceed 128 tools or 1 MiB; a rejected candidate leaves no stale
+namespace and does not disturb another server's namespace.
 
 After an MCP timeout or connection loss, the server may already have acted.
 Awesome invalidates the catalog and reports a non-retryable uncertain outcome

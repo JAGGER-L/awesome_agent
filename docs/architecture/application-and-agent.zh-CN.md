@@ -63,6 +63,12 @@ interaction。它记录所属的 `asyncio.Task`，拒绝任何第二个所有者
 同步取得 lease。`start_reserved()` 发出 `operation.started`，启动唯一任务，并在
 `finally` 中负责终态事件的交付和 lease 释放。
 
+准入不是在取得 lease 之前执行的一次检查。`reserve()` 拿到 lease 后、发布活动 Operation
+ID 前，会同步重新验证当前 pending interaction。普通 Turn 和 Direct command 要求没有
+pending interaction。唯一例外是 recovery resume：它携带内部 continuation，并精确绑定当前
+recovery interaction ID、interaction generation、Thread 和 Turn。陈旧或部分匹配的 token
+不能退化为通用 bypass。
+
 这个进程内 arbiter 与存储 lease 不同：
 
 - 前台 lease 在单个 Core 会话内串行化语义工作；
@@ -165,6 +171,13 @@ Application service 负责访问 Conversation 和工作区快照；Agent 不知�
 并完成 Turn。随后它尝试封存 ChangeSet 并删除 checkpoint。失败或取消时，它会记录
 稳定的终态产品事实，并执行同样的有界终结。主要终态事实落盘后，清理异常会被有意
 抑制；启动校正会重试残留的终态 checkpoint，而不会改变已经完成/取消/失败的结果。
+
+Operation phase 明确定义了取消边界。Commit point 之前，匹配的 cancel 会把 `running` 改为
+`cancelling`，唯一终态是 cancelled。成功完成只会在同步持久化 completed Turn 时越过 commit
+point；主要失败则会在执行有界的失败事实恢复之前关闭同一边界。一旦 committed，
+`operation.cancel` 返回 false，shutdown 会等待而不是再次 cancel；即使 request task 被取消或
+event sink 失败，有界且受 shield 保护的 publication 仍会保留已经提交的 Turn 和 Operation
+终态。系统不存在 cancellation 和 completion 可以同时胜出的时间窗口。
 
 模型流、工具或终结步骤活动时都可能收到取消。只有为了有界地保全事实，清理才会受到
 shield 保护；它不能吞掉原始取消，也不能让前台所有权一直保持活动状态。

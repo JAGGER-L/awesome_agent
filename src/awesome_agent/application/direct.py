@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Callable
 from typing import Protocol, cast
@@ -9,7 +10,7 @@ from pydantic import JsonValue
 
 from awesome_agent.application.contracts import OperationAccepted
 from awesome_agent.application.operations import OperationController
-from awesome_agent.conversation import ConversationService
+from awesome_agent.conversation import ConversationService, ThreadEntryKind
 from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.tools import (
     ToolExecutionContext,
@@ -20,6 +21,7 @@ from awesome_agent.core.tools import (
 from awesome_agent.safety import redact_text
 
 _MAX_DIRECT_ENTRY_CHARS = 30_000
+logger = logging.getLogger(__name__)
 _PRIVATE_PATH = re.compile(
     r"(?i)(?:\b[A-Z]:\\(?:Users|Documents and Settings)\\[^\s\r\n]+|"
     r"(?<![\w.])/(?:Users|home|root|private)/[^\s\r\n]+)"
@@ -80,11 +82,12 @@ class DirectCommandService:
                 or context.thread_id != thread_id
             ):
                 raise RuntimeError("Direct context violates operation authority.")
+            primary_failure: BaseException | None = None
             try:
                 try:
                     result = await self._executor.execute(request, context=context)
                 except asyncio.CancelledError:
-                    self._persist(
+                    self._persist_after_primary_failure(
                         thread_id,
                         operation_id=operation_id,
                         command=normalized,
@@ -94,7 +97,7 @@ class DirectCommandService:
                     )
                     raise
                 except Exception:
-                    self._persist(
+                    self._persist_after_primary_failure(
                         thread_id,
                         operation_id=operation_id,
                         command=normalized,
@@ -104,8 +107,20 @@ class DirectCommandService:
                     )
                     raise
                 self._persist_result(thread_id, operation_id, normalized, result)
+            except BaseException as error:
+                primary_failure = error
+                raise
             finally:
-                self._finalize_operation(operation_id)
+                try:
+                    self._finalize_operation(operation_id)
+                except BaseException:
+                    if primary_failure is None:
+                        raise
+                    logger.warning(
+                        "Direct operation finalization failed while preserving "
+                        "the primary terminal outcome.",
+                        exc_info=True,
+                    )
 
         try:
             handle = await self._operations.start_reserved(
@@ -159,6 +174,32 @@ class DirectCommandService:
             exit_code=exit_code,
         )
 
+    def _persist_after_primary_failure(
+        self,
+        thread_id: str,
+        *,
+        operation_id: str,
+        command: str,
+        output: str,
+        status: str,
+        exit_code: int | None,
+    ) -> None:
+        try:
+            self._persist(
+                thread_id,
+                operation_id=operation_id,
+                command=command,
+                output=output,
+                status=status,
+                exit_code=exit_code,
+            )
+        except BaseException:
+            logger.warning(
+                "Direct terminal transcript persistence failed while preserving "
+                "the primary terminal outcome.",
+                exc_info=True,
+            )
+
     def _persist(
         self,
         thread_id: str,
@@ -176,19 +217,59 @@ class DirectCommandService:
             f"status: {status}\nexit_status: {exit_code}\n{safe_output}"
         )
         truncated = len(rendered) > _MAX_DIRECT_ENTRY_CHARS
-        self._conversation.append_direct_command(
-            thread_id,
-            rendered[:_MAX_DIRECT_ENTRY_CHARS],
-            cast(
-                dict[str, JsonValue],
-                {
-                    "operation_id": operation_id,
-                    "exit_code": exit_code,
-                    "status": status,
-                    "truncated": truncated,
-                    "managed_side_effects": False,
-                },
-            ),
+        content = rendered[:_MAX_DIRECT_ENTRY_CHARS]
+        metadata = cast(
+            dict[str, JsonValue],
+            {
+                "operation_id": operation_id,
+                "exit_code": exit_code,
+                "status": status,
+                "truncated": truncated,
+                "managed_side_effects": False,
+            },
+        )
+        try:
+            self._conversation.append_direct_command(
+                thread_id,
+                content,
+                metadata,
+            )
+        except (Exception, asyncio.CancelledError):
+            if not self._direct_entry_matches(
+                thread_id,
+                operation_id=operation_id,
+                content=content,
+                metadata=metadata,
+            ):
+                raise
+            logger.warning(
+                "Direct transcript write raised after its exact durable entry "
+                "committed.",
+                exc_info=True,
+            )
+
+    def _direct_entry_matches(
+        self,
+        thread_id: str,
+        *,
+        operation_id: str,
+        content: str,
+        metadata: dict[str, JsonValue],
+    ) -> bool:
+        try:
+            view = self._conversation.read_thread(thread_id)
+        except (Exception, asyncio.CancelledError):
+            return False
+        matches = [
+            entry
+            for entry in view.entries
+            if entry.kind is ThreadEntryKind.DIRECT_COMMAND
+            and entry.metadata.get("operation_id") == operation_id
+        ]
+        return (
+            len(matches) == 1
+            and matches[0].content == content
+            and matches[0].metadata == metadata
         )
 
 

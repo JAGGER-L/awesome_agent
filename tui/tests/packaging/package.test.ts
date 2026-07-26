@@ -97,11 +97,18 @@ describe("awesome package", () => {
         license: string;
       };
       expect(installedPackage).toMatchObject({
-        version: "1.2.1",
+        version: "1.3.0",
         type: "module",
         bin: { awesome: "dist/cli/index.js" },
-        license: "UNLICENSED",
+        license: "MIT",
       });
+      const installedLicense = await readFile(
+        join(prefix, "node_modules", "@awesome-agent", "tui", "LICENSE"),
+        "utf8",
+      );
+      expect(installedLicense).toBe(
+        await readFile(new URL("../../../LICENSE", import.meta.url), "utf8"),
+      );
 
       const bin =
         process.platform === "win32"
@@ -124,7 +131,7 @@ describe("awesome package", () => {
               timeoutMs: CLI_TIMEOUT_MS,
             });
       expect(version.status, version.stderr).toBe(0);
-      expect(version.stdout).toBe("1.2.1\n");
+      expect(version.stdout).toBe("1.3.0\n");
     },
     TEST_TIMEOUT_MS,
   );

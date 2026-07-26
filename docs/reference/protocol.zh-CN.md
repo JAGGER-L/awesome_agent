@@ -4,7 +4,7 @@ Awesome 的 Ink 进程与其唯一的 Python Core 子进程通过私有 stdio �
 JSON-RPC 2.0 通信。该 protocol 是内部组件边界，不是远程 API：它没有网络 listener、
 authentication scheme、compatibility proxy，也不承诺第三方客户端可以独立混用不同版本。
 
-Protocol 版本 **3** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.2.1**。Event
+Protocol 版本 **3** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.3.0**。Event
 envelope 有独立版本 **1**。
 
 ## 进程与传输
@@ -14,11 +14,13 @@ envelope 有独立版本 **1**。
 - Core log 发送到 stderr；stdout 专用于 protocol frame。
 - Core request reader 在换行前最多接受 1,048,576 字节。空行被忽略；无效 UTF-8、无效
   JSON 或超大 request 会返回 JSON-RPC parse error `-32700`，reader 随后继续。
-- TUI 编码 request 和解码 Core output 时采用相同的 1 MiB 限制。Core 的 `JsonLineWriter`
-  当前没有对应的 output-size 预检。因此，有效的聚合 response 可能超过 TUI 限制，导致 TUI
-  将 protocol 作为无效 frame 关闭。这是当前的跨进程契约缺口，不是受支持的更大 response
-  size。
-- Output serialization 是紧凑的 UTF-8 JSON，并保留非 ASCII 文本。
+- TUI 编码 request 和解码 Core output 时采用相同的 1 MiB 限制。Core 在写入 stdout 前按
+  紧凑 UTF-8 内容的实际字节数进行检查。超大的 request result 会被替换为有界、不可重试的
+  产品错误 `result_too_large`；超大的 event 会在写入任何字节前被拒绝。Core 不会发送随产品
+  发布的 TUI 必须因大小而拒绝的 frame。
+- Output serialization 是紧凑的 UTF-8 JSON，并保留非 ASCII 文本。非有限数字和无法表示
+  为 UTF-8 的文本永远不会写入。已经完成但结果不可表示的 request 会使用同一 request ID
+  替换为一个脱敏的 `internal_error` Application failure。
 - 有界 stdout queue 保存 64 个 frame；无人 drain/已满的 queue，或五秒内未完成的 write 会
   破坏 channel，而不是允许内存无限增长。
 - 如果显式 shutdown 尚未执行，EOF 或 fatal channel error 会关闭 Application。
@@ -33,13 +35,19 @@ Ink                     Protocol Host              Application
  |                            |                          |
  |------ turn.submit -------->|                          |
  |                            |-- atomically admit ----->|
+ |<---- event: operation.started ------------------------|
  |                            |<-- OperationAccepted ----|
  |<---- JSON-RPC response ----|                          |
- |<---- event: operation.started ------------------------|
  |<---- event: turn.started / deltas / tools ------------|
  |<---- event: turn.completed ---------------------------|
  |<---- event: operation.completed ----------------------|
 ```
+
+Application 返回 `OperationAccepted` 之前会先写入 `operation.started`，因此在共享 output
+stream 上，该 event 一定先于匹配的 JSON-RPC response。一旦 Operation task 被调度，后续
+Turn 或 Tool event 也可能与该 response 竞速。随产品发布的 TUI 会在提交工作前启动 event
+consumer，并通过 `operation_id`、`turn_id` 和 `client_message_id` 关联这些自带身份的 event；
+客户端不能仅仅因为 request promise 尚未 resolve 就丢弃 event。
 
 ## JSON-RPC request 形状
 
@@ -48,14 +56,15 @@ Ink                     Protocol Host              Application
 ```
 
 只允许 `jsonrpc`、`id`、`method` 和 `params`。`jsonrpc` 必须是 `"2.0"`；`method` 必须是非空
-字符串；`params` 默认为 `{}`，并且对已注册 method 必须是 object。ID 是 string 或 integer，
-绝不能是 boolean 或 `null`。Method 参数中有类型的 integer 字段限制在 JavaScript 可互操作的
-安全范围内，并且必须是整数 JSON number。
+字符串；`params` 默认为 `{}`，并且对已注册 method 必须是 object。ID 是 1–128 个 Unicode
+标量、且不含未配对 UTF-16 surrogate 的 string，或 JavaScript 可互操作的 safe integer；
+绝不能是 boolean 或 `null`。Core 与 TUI 执行同一契约。Method 参数中有类型的 integer 字段
+采用相同安全范围，并且必须是整数 JSON number。
 
-发布的 TUI 还要求 request ID 是 1–128 个字符的字符串或 safe integer。Core 的外层 JSON-RPC
-parser 当前不强制 ID 长度/范围；它接受任意 Python string 或 integer。这是跨语言契约缺口，
-不代表其他私有客户端可以发送更大的 ID，因为大整数无法安全地通过 TUI round-trip。Protocol
-加固应让 Core 拒绝 TUI 所拒绝的内容。
+Safe-integer 规则也覆盖 result、error 和 event 中所有表示整数的 number，包括 sequence、
+token counter、duration 和通用 diagnostic data。非整数 number 必须为有限值。Core 在写入
+frame 前会递归拒绝不安全整数、非 string object key、无效 Unicode、非 JSON container，以及
+深度超过 64 层的结构；TUI 解码时会执行对应的安全数值规则。
 
 Notification 省略 `id`，即使 method/parameter 失败也不接收 response。生产客户端应对生命周期/
 控制 method 使用 request，以便观察是否被接受。ID 在活动期间以及最近完成的 4,096 个 ID 中
@@ -76,7 +85,7 @@ Host 从 `UNINITIALIZED` 开始。`initialize` 必须使用：
   "params": {
     "protocol_version": 3,
     "client_name": "awesome",
-    "client_version": "1.2.1"
+    "client_version": "1.3.0"
   }
 }
 ```
@@ -116,7 +125,7 @@ Unicode string 长度。
 | `turn.submit` | `thread_id`；1–200,000 的 `content`；匹配 `client_[A-Za-z0-9_-]+` 且最多 128 的 `client_message_id` | Operation、Thread、Turn 和 client-message ID |
 | `direct.execute` | `thread_id`；transport 接受 1–30,000 的 `command`；委托的 `execute` 工具最多接受 8,000 | Operation 和 Thread ID |
 | `command.execute` | `name`；可选 string array `arguments` | 一个有类型的 `CommandOutcome` |
-| `provider.credential.set` | 见下文 | Provider、status、selected source、diagnostic code |
+| `provider.credential.set` | 见下文 | Provider、status、可选 selected source、diagnostic code |
 | `interaction.respond` | 1–128 的 `interaction_id`；`decision` enum | Accepted flag 和 status |
 | `operation.cancel` | 1–128 的 `operation_id` | Operation ID 以及是否请求了 cancellation |
 | `shutdown` | `{}` | `{ "stopped": true }` |
@@ -140,9 +149,8 @@ workspace-instruction diagnostic。Secret value 从来不属于 state。
 
 `thread.list` 使用不透明 cursor；客户端不得解码或合成它。`thread.read` 使用
 `before_sequence` 向后分页，并在存在更多条目时返回 `next_before_sequence`。显式 null 的
-pagination 字段无效，因此“不提供”只有一种无歧义 wire 表示。在 Core 强制或切分自己的
-output frame size 之前，客户端应请求较小的 `thread.read` page：schema 允许 500 个条目，
-而每个 transcript entry 都可能很大，使聚合 response 超过 1 MiB。
+pagination 字段无效，因此“不提供”只有一种无歧义 wire 表示。Application 会动态缩小请求的
+page，直到编码结果符合 900 KiB 预算，并为被省略的条目保留 `next_before_sequence`。
 
 ### Turn 与 direct 准入
 
@@ -168,8 +176,8 @@ Params 是封闭的 `CommandIntent`：
 `interaction` 或稳定的 command `error`。精确语法和 foreground snapshot 例外见
 [Slash Commands](commands.zh-CN.md)。
 
-`/tools` 结果不分页。因此，即使每个单独工具契约都有效，足够大的内置、Skill-support 与 MCP
-工具聚合也可能遇到上文所述的 Core-output frame 缺口。
+`/tools` 结果不分页。Catalog 准入会执行自己的聚合边界；如果其他 producer 仍破坏该不变量，
+transport 的最终字节检查会返回 `result_too_large`，而不是发送无效 frame。
 
 ### `provider.credential.set`
 
@@ -183,6 +191,10 @@ Params 是封闭的 `CommandIntent`：
 `mem0`，Core 当前不执行远程凭据验证，会保存任何本地有效输入；无效 key 只会在之后的 Mem0
 初始化或操作到达服务时失败。
 
+只有 Core 能报告已选择的 credential source 时，result 才包含 `source`。成功保存后通常为
+`awesome`；invalid、save-unverified confirmation 或 delete 结果可能没有已选择 source，此时
+会省略该字段。显式的 `"source": null` 不是合法的 v3 result。
+
 ### `interaction.respond`
 
 Decision 值为 `trust`、`reset_state`、`allow_once`、`allow_thread_writes`、
@@ -192,8 +204,11 @@ operation/permission binding。陈旧响应不会修改当前权限。
 
 ### `operation.cancel` 与 `shutdown`
 
-Cancel 是 best-effort 且针对特定 identity。True result 表示取消已经传递给活动 Operation；
-终态 completion 仍通过 event 观察。Handler/process/MCP cleanup 是有界的，随后继续传播原始
+Cancel 是 best-effort 且针对特定 identity。True result 表示取消在匹配 Operation 仍可取消
+时已经传递，其终态为 `operation.cancelled`。False 也包括未知 ID、已经进入 cancelling 的
+Operation，或 completed/failed outcome 已越过 commit point 的 Operation。Commit point 之后
+的取消不能重写持久化 outcome；系统会继续发布原来的 completed/failed terminal event。
+Handler/process/MCP cleanup 和 terminal publication 均有界，之后继续传播 commit 前的原始
 cancellation。
 
 Shutdown 是紧急操作。有效 request 会先取消其他 background request、阻止新 foreground
@@ -232,11 +247,16 @@ diagnostic。
 | Configuration/workspace | `configuration_invalid`、`workspace_not_trusted`、`model_not_configured`、`provider_not_configured` |
 | Conversation/foreground | `thread_not_found`、`turn_not_found`、`turn_busy`、`operation_busy`、`recovery_required` |
 | Input/commands | `invalid_arguments`、`command_not_available` |
+| Output bounds | `result_too_large` |
 | Checkpoints | `checkpoint_missing`、`checkpoint_corrupt` |
 | Compatibility/state | `client_version_incompatible`、`protocol_version_incompatible`、`state_created_by_newer_version`、`state_unknown`、`state_unavailable`、`state_reset_busy`、`state_reset_failed` |
 | Invariant failure | `internal_error` |
 
 客户端使用 `retryable` flag 和当前 state 判断是否适合重试，不会匹配 message 字符串。
+
+在 Protocol v3 中，Application 级 `state_unavailable` error 可重试，并携带有界的
+`state_directory` metadata。它与内置 Memory tool 的 `ToolOutput` 中不可重试的
+`state_unavailable` 不同；客户端不能仅按 code 字符串把两个 envelope 归一化。
 
 ## JSON-RPC 错误
 
@@ -298,6 +318,8 @@ event 要求 operation ID；Turn lifecycle event 要求 Thread 和 Turn ID。
 Emitter 会为指定 Operation 或 Turn 强制一次 start 和至多一次 terminal lifecycle event。Tool
 Executor 同样为每次调用终结一条 ToolActivity 和一个 terminal tool event。Consumer 应按
 sequence 和 correlation ID 渲染，而不能假定并发 request 之间 response/event 的到达顺序。
+尤其是，被接受的 Turn 或 Direct command 的 `operation.started` 会先于 acceptance response，
+后续 event 也可能在该 response 被处理前到达。
 
 ## 并发与背压
 

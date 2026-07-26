@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
+from pydantic import JsonValue
 
 from awesome_agent.application.direct import DirectCommandService
 from awesome_agent.application.operations import OperationController
 from awesome_agent.conversation import ConversationService, ThreadEntryKind
-from awesome_agent.core.events import CollectingEventSink, EventEmitter
+from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
     ToolActivityDraft,
     ToolExecutionContext,
@@ -82,6 +85,9 @@ class FailingExecutor(Executor):
 def _service(
     tmp_path: Path,
     executor: Executor,
+    *,
+    finalize_operation: Callable[[str], None] = lambda operation_id: None,
+    event_sink: CollectingEventSink | None = None,
 ) -> tuple[DirectCommandService, ConversationService, str]:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
@@ -92,7 +98,7 @@ def _service(
     emitter = EventEmitter(
         session_id="session_1",
         workspace_key=workspace.key,
-        sink=CollectingEventSink(),
+        sink=event_sink or CollectingEventSink(),
     )
 
     def context_factory(
@@ -118,6 +124,7 @@ def _service(
             executor=executor,
             operations=OperationController(emitter),
             context_factory=context_factory,
+            finalize_operation=finalize_operation,
         ),
         conversation,
         thread.id,
@@ -246,3 +253,201 @@ async def test_wait_still_propagates_direct_failure_and_releases_task(
     with pytest.raises(RuntimeError, match="executor failed"):
         await service.wait(accepted.operation_id)
     assert service._tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_cancel_preserves_cancellation_when_finalizer_fails(
+    tmp_path: Path,
+) -> None:
+    gate = asyncio.Event()
+    finalized: list[str] = []
+
+    def fail_finalizer(operation_id: str) -> None:
+        finalized.append(operation_id)
+        raise RuntimeError("finalizer failed")
+
+    service, _, thread_id = _service(
+        tmp_path,
+        Executor("unused", gate=gate),
+        finalize_operation=fail_finalizer,
+    )
+    accepted = await service.start(thread_id, "echo cancelled")
+
+    assert await service._operations.cancel(accepted.operation_id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await service.wait(accepted.operation_id)
+
+    assert finalized == [accepted.operation_id]
+    assert service._operations.active_operation_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["cancelled", "failed"])
+async def test_direct_primary_failure_survives_transcript_persistence_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminal: str,
+) -> None:
+    gate = asyncio.Event() if terminal == "cancelled" else None
+    executor = (
+        Executor("unused", gate=gate)
+        if terminal == "cancelled"
+        else FailingExecutor("unused")
+    )
+    service, conversation, thread_id = _service(tmp_path, executor)
+
+    def fail_persistence(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise OSError("persistence failed")
+
+    monkeypatch.setattr(conversation, "append_direct_command", fail_persistence)
+    accepted = await service.start(thread_id, "echo terminal")
+
+    if terminal == "cancelled":
+        assert await service._operations.cancel(accepted.operation_id) is True
+        with pytest.raises(asyncio.CancelledError):
+            await service.wait(accepted.operation_id)
+    else:
+        with pytest.raises(RuntimeError, match="executor failed"):
+            await service.wait(accepted.operation_id)
+
+    assert service._operations.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_direct_write_error_reconciles_one_exact_durable_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sink = CollectingEventSink()
+    service, conversation, thread_id = _service(
+        tmp_path,
+        Executor("done"),
+        event_sink=sink,
+    )
+    persist = conversation.append_direct_command
+
+    def commit_then_raise(*args: Any, **kwargs: Any) -> None:
+        persist(*args, **kwargs)
+        raise RuntimeError("connection close failed after commit")
+
+    monkeypatch.setattr(conversation, "append_direct_command", commit_then_raise)
+    accepted = await service.start(thread_id, "echo done")
+
+    await service.wait(accepted.operation_id)
+
+    entries = conversation.read_thread(thread_id).entries
+    assert len(entries) == 1
+    assert entries[0].metadata["operation_id"] == accepted.operation_id
+    assert [event.event_type for event in sink.events][
+        -1
+    ] is EventType.OPERATION_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_direct_write_error_before_commit_fails_without_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sink = CollectingEventSink()
+    service, conversation, thread_id = _service(
+        tmp_path,
+        Executor("done"),
+        event_sink=sink,
+    )
+
+    def fail_before_commit(
+        target_thread_id: str,
+        content: str,
+        metadata: dict[str, JsonValue],
+    ) -> None:
+        del target_thread_id, content, metadata
+        raise RuntimeError("write failed before commit")
+
+    monkeypatch.setattr(conversation, "append_direct_command", fail_before_commit)
+    accepted = await service.start(thread_id, "echo done")
+
+    with pytest.raises(RuntimeError, match="write failed before commit"):
+        await service.wait(accepted.operation_id)
+
+    assert conversation.read_thread(thread_id).entries == ()
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.OPERATION_COMPLETED) == 0
+    assert event_types.count(EventType.OPERATION_FAILED) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable_state", ["conflict", "duplicate"])
+async def test_direct_write_error_requires_one_exact_durable_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    durable_state: str,
+) -> None:
+    sink = CollectingEventSink()
+    service, conversation, thread_id = _service(
+        tmp_path,
+        Executor("done"),
+        event_sink=sink,
+    )
+    persist = conversation.append_direct_command
+
+    def persist_invalid_state_then_raise(
+        target_thread_id: str,
+        content: str,
+        metadata: dict[str, JsonValue],
+    ) -> None:
+        if durable_state == "conflict":
+            persist(target_thread_id, f"{content} conflict", metadata)
+        else:
+            persist(target_thread_id, content, metadata)
+            persist(target_thread_id, content, metadata)
+        raise RuntimeError("ambiguous write outcome")
+
+    monkeypatch.setattr(
+        conversation,
+        "append_direct_command",
+        persist_invalid_state_then_raise,
+    )
+    accepted = await service.start(thread_id, "echo done")
+
+    with pytest.raises(RuntimeError, match="ambiguous write outcome"):
+        await service.wait(accepted.operation_id)
+
+    entries = conversation.read_thread(thread_id).entries
+    assert len(entries) == (1 if durable_state == "conflict" else 2)
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.OPERATION_COMPLETED) == 0
+    assert event_types.count(EventType.OPERATION_FAILED) == 1
+
+
+@pytest.mark.asyncio
+async def test_direct_finalizer_failure_keeps_success_entry_but_fails_operation(
+    tmp_path: Path,
+) -> None:
+    sink = CollectingEventSink()
+
+    def fail_finalizer(operation_id: str) -> None:
+        del operation_id
+        raise RuntimeError("journal seal failed")
+
+    service, conversation, thread_id = _service(
+        tmp_path,
+        Executor("done"),
+        finalize_operation=fail_finalizer,
+        event_sink=sink,
+    )
+    accepted = await service.start(thread_id, "echo done")
+
+    with pytest.raises(RuntimeError, match="journal seal failed"):
+        await service.wait(accepted.operation_id)
+
+    entries = conversation.read_thread(thread_id).entries
+    assert len(entries) == 1
+    assert entries[0].metadata == {
+        "operation_id": accepted.operation_id,
+        "exit_code": 0,
+        "status": "success",
+        "truncated": False,
+        "managed_side_effects": False,
+    }
+    assert [event.event_type for event in sink.events][-1] is EventType.OPERATION_FAILED

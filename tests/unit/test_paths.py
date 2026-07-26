@@ -19,6 +19,15 @@ def test_windows_default_home_uses_localappdata(tmp_path: Path) -> None:
     assert paths.skills_dir == paths.home / "skills"
     assert paths.state_dir == paths.home / "state"
     assert paths.change_journal_dir == paths.state_dir / "change-journal"
+    assert paths.provider_model_transaction_file == (
+        paths.state_dir / "provider-model-transaction.json"
+    )
+    assert paths.provider_credential_transaction_file == (
+        paths.home / ".provider-credential-transaction.json"
+    )
+    assert paths.provider_credential_backup_file == (
+        paths.home / ".provider-credential-transaction.env"
+    )
     assert paths.ui_file == paths.home / "ui.json"
 
 
@@ -60,6 +69,12 @@ def test_state_databases_have_separate_paths(tmp_path: Path) -> None:
     assert paths.checkpoint_db == paths.state_dir / "checkpoints.db"
     assert paths.application_db != paths.checkpoint_db
     assert paths.change_journal_dir == paths.state_dir / "change-journal"
+    assert paths.provider_model_transaction_file == (
+        paths.state_dir / "provider-model-transaction.json"
+    )
+    assert paths.provider_credential_transaction_file.parent == paths.home
+    assert paths.provider_credential_backup_file.parent == paths.home
+    assert paths.provider_credential_transaction_file.parent != paths.state_dir
     assert paths.ui_file == paths.home / "ui.json"
     assert paths.user_memory_file == paths.memory_dir / "USER.md"
     assert paths.workspace_config_file(tmp_path / "workspace") == (

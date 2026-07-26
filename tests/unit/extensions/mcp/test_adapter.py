@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -7,7 +8,7 @@ from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations
 from pydantic import JsonValue
 
 import awesome_agent.extensions.mcp.adapter as mcp_adapter
-from awesome_agent.core.events import CollectingEventSink, EventEmitter
+from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
     PermissionMode,
     PermissionSession,
@@ -30,8 +31,11 @@ from awesome_agent.extensions.mcp.catalog import McpCatalog, compile_mcp_catalog
 
 
 class ActivityWriter(ToolActivityWriter):
+    def __init__(self) -> None:
+        self.activities: list[ToolActivityDraft] = []
+
     def finalize(self, activity: ToolActivityDraft) -> None:
-        pass
+        self.activities.append(activity)
 
 
 class FakeManager:
@@ -41,20 +45,13 @@ class FakeManager:
             content=[TextContent(type="text", text="hello")],
         )
         self.uncertain = False
-        self._catalog = compile_mcp_catalog((echo_tool(),), generation=1)
-        self._invalidator: object | None = None
+        self._catalog = compile_mcp_catalog(
+            (echo_tool(),), server_id="fixture", generation=1
+        )
 
     def catalog(self, server_id: str) -> McpCatalog:
         assert server_id == "fixture"
         return self._catalog
-
-    def bind_catalog_invalidator(
-        self,
-        server_id: str,
-        invalidator: object,
-    ) -> None:
-        assert server_id == "fixture"
-        self._invalidator = invalidator
 
     async def call_tool(
         self,
@@ -74,16 +71,17 @@ class FakeManager:
     def replace_catalog(self, catalog: McpCatalog) -> None:
         self._catalog = catalog
 
-    def invalidate(self) -> None:
-        assert callable(self._invalidator)
-        self._invalidator()
-
 
 async def approve(_: ToolApprovalRequest) -> ToolApprovalDecision:
     return ToolApprovalDecision.ALLOW_ONCE
 
 
-def context(tmp_path: Path) -> ToolExecutionContext:
+def context(
+    tmp_path: Path,
+    *,
+    sink: CollectingEventSink | None = None,
+    activity_writer: ActivityWriter | None = None,
+) -> ToolExecutionContext:
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
     identity = resolve_workspace(workspace)
@@ -97,12 +95,22 @@ def context(tmp_path: Path) -> ToolExecutionContext:
         emitter=EventEmitter(
             session_id="session",
             workspace_key=identity.key,
-            sink=CollectingEventSink(),
+            sink=CollectingEventSink() if sink is None else sink,
         ),
-        activity_writer=ActivityWriter(),
+        activity_writer=(
+            ActivityWriter() if activity_writer is None else activity_writer
+        ),
         monotonic=lambda: next(ticks),
         permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
         approval_resolver=approve,
+    )
+
+
+def publish_catalog(manager: FakeManager, registry: ToolRegistry) -> None:
+    adapter = McpToolAdapter(manager, "fixture")
+    registry.replace_namespace(
+        "mcp.fixture",
+        adapter.registered_tools(manager.catalog("fixture")),
     )
 
 
@@ -126,10 +134,7 @@ async def test_adapter_registers_and_executes_only_through_shared_executor(
 ) -> None:
     manager = FakeManager()
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (echo_tool(),),
-    )
+    publish_catalog(manager, registry)
     registered = registry.resolve("mcp.fixture.echo")
     assert registered is not None
     assert registered.spec.read_only is False
@@ -163,10 +168,7 @@ async def test_adapter_validates_arguments_and_normalizes_error_results(
 ) -> None:
     manager = FakeManager()
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (echo_tool(),),
-    )
+    publish_catalog(manager, registry)
     executor = ToolExecutor(registry)
 
     invalid = await executor.execute(
@@ -198,14 +200,79 @@ async def test_adapter_validates_arguments_and_normalizes_error_results(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"value": float("nan")},
+        {"value": [float("inf")]},
+        {"value": {"nested": float("-inf")}},
+    ],
+    ids=("nan", "positive-infinity", "nested-negative-infinity"),
+)
+async def test_adapter_rejects_non_strict_json_before_approval_or_remote_call(
+    tmp_path: Path,
+    arguments: dict[str, JsonValue],
+) -> None:
+    permissive_tool = Tool(
+        name="echo",
+        description="Accept any JSON object",
+        inputSchema={"type": "object"},
+    )
+    manager = FakeManager()
+    manager.replace_catalog(
+        compile_mcp_catalog(
+            (permissive_tool,),
+            server_id="fixture",
+            generation=1,
+        )
+    )
+    registry = ToolRegistry()
+    publish_catalog(manager, registry)
+    approvals: list[ToolApprovalRequest] = []
+    sink = CollectingEventSink()
+    activity_writer = ActivityWriter()
+
+    async def record_approval(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        approvals.append(request)
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    execution_context = replace(
+        context(
+            tmp_path,
+            sink=sink,
+            activity_writer=activity_writer,
+        ),
+        approval_resolver=record_approval,
+    )
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="non-strict-json",
+            tool_name="mcp.fixture.echo",
+            arguments=arguments,
+        ),
+        context=execution_context,
+    )
+
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.INVALID_ARGUMENTS
+    assert result.error.message == "Tool arguments did not match the schema."
+    assert approvals == []
+    assert manager.calls == []
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    assert len(activity_writer.activities) == 1
+    assert activity_writer.activities[0].outcome == "error"
+    assert activity_writer.activities[0].error_code == ToolErrorCode.INVALID_ARGUMENTS
+
+
+@pytest.mark.asyncio
 async def test_adapter_never_replays_an_uncertain_external_call(tmp_path: Path) -> None:
     manager = FakeManager()
     manager.uncertain = True
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (echo_tool(),),
-    )
+    publish_catalog(manager, registry)
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -246,12 +313,11 @@ async def test_adapter_uses_compiled_composition_and_reference_validator(
         },
     )
     manager = FakeManager()
-    manager.replace_catalog(compile_mcp_catalog((schema_tool,), generation=4))
-    registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (schema_tool,),
+    manager.replace_catalog(
+        compile_mcp_catalog((schema_tool,), server_id="fixture", generation=4)
     )
+    registry = ToolRegistry()
+    publish_catalog(manager, registry)
     executor = ToolExecutor(registry)
 
     invalid = await executor.execute(
@@ -284,16 +350,15 @@ async def test_adapter_validates_and_renders_structured_only_output(
         },
     )
     manager = FakeManager()
-    manager.replace_catalog(compile_mcp_catalog((structured_tool,), generation=5))
+    manager.replace_catalog(
+        compile_mcp_catalog((structured_tool,), server_id="fixture", generation=5)
+    )
     manager.result = CallToolResult(
         content=[],
         structuredContent={"answer": "yes"},
     )
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (structured_tool,),
-    )
+    publish_catalog(manager, registry)
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -324,16 +389,15 @@ async def test_adapter_rejects_invalid_structured_output_without_schema_leak(
         },
     )
     manager = FakeManager()
-    manager.replace_catalog(compile_mcp_catalog((structured_tool,), generation=5))
+    manager.replace_catalog(
+        compile_mcp_catalog((structured_tool,), server_id="fixture", generation=5)
+    )
     manager.result = CallToolResult(
         content=[],
         structuredContent={"secret_field": 42},
     )
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (structured_tool,),
-    )
+    publish_catalog(manager, registry)
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -377,10 +441,7 @@ async def test_adapter_bounds_large_output_while_preserving_head_and_tail(
         ]
     )
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (echo_tool(),),
-    )
+    publish_catalog(manager, registry)
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -410,10 +471,7 @@ async def test_adapter_rejects_excessive_content_blocks_before_render(
         ]
     )
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (echo_tool(),),
-    )
+    publish_catalog(manager, registry)
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -433,6 +491,64 @@ async def test_adapter_rejects_excessive_content_blocks_before_render(
 
 
 @pytest.mark.asyncio
+async def test_adapter_rejects_non_utf8_text_before_render_with_one_terminal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeManager()
+    manager.result = CallToolResult(
+        content=[
+            TextContent(type="text", text="safe"),
+            TextContent(type="text", text="sensitive\ud800payload"),
+        ]
+    )
+    registry = ToolRegistry()
+    publish_catalog(manager, registry)
+    sink = CollectingEventSink()
+    activity_writer = ActivityWriter()
+
+    def reject_render(_: CallToolResult) -> tuple[str, bool]:
+        raise AssertionError("unsafe content reached MCP rendering")
+
+    monkeypatch.setattr(mcp_adapter, "_bounded_content", reject_render)
+
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="unsafe-text",
+            tool_name="mcp.fixture.echo",
+            arguments={"text": "hello"},
+        ),
+        context=context(
+            tmp_path,
+            sink=sink,
+            activity_writer=activity_writer,
+        ),
+    )
+
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.EXECUTION_FAILED
+    assert result.error.retryable is False
+    assert result.error.message == (
+        "MCP tool returned content outside safe resource limits."
+    )
+    assert "sensitive" not in result.model_dump_json()
+    assert len(manager.calls) == 1
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    assert len(activity_writer.activities) == 1
+    assert activity_writer.activities[0].outcome == "error"
+    assert activity_writer.activities[0].error_code == ToolErrorCode.EXECUTION_FAILED
+
+
+def test_content_preflight_accepts_well_formed_supplementary_unicode() -> None:
+    mcp_adapter._preflight_content(
+        CallToolResult(content=[TextContent(type="text", text="emoji: \U0001f600")])
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "boundary",
     ("wire_bytes", "array", "nodes", "depth", "cycle", "non_json"),
@@ -448,7 +564,9 @@ async def test_adapter_rejects_unsafe_structured_output_before_validation_or_ren
         outputSchema={},
     )
     manager = FakeManager()
-    manager.replace_catalog(compile_mcp_catalog((structured_tool,), generation=6))
+    manager.replace_catalog(
+        compile_mcp_catalog((structured_tool,), server_id="fixture", generation=6)
+    )
     compiled = manager.catalog("fixture").compiled_tools[0]
     output_validator = compiled.output_validator
     assert output_validator is not None
@@ -501,10 +619,7 @@ async def test_adapter_rejects_unsafe_structured_output_before_validation_or_ren
     monkeypatch.setattr(validator_type, "validate", validate_without_unsafe_output)
     monkeypatch.setattr(mcp_adapter, "_bounded_content", reject_render)
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (structured_tool,),
-    )
+    publish_catalog(manager, registry)
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -533,11 +648,10 @@ async def test_adapter_rejects_stale_generation_without_external_call(
 ) -> None:
     manager = FakeManager()
     registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (echo_tool(),),
+    publish_catalog(manager, registry)
+    manager.replace_catalog(
+        compile_mcp_catalog((echo_tool(),), server_id="fixture", generation=2)
     )
-    manager.replace_catalog(compile_mcp_catalog((echo_tool(),), generation=2))
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -551,16 +665,3 @@ async def test_adapter_rejects_stale_generation_without_external_call(
     assert result.error is not None
     assert result.error.code is ToolErrorCode.EXECUTION_FAILED
     assert manager.calls == []
-
-
-def test_adapter_removes_registry_namespace_when_catalog_is_invalidated() -> None:
-    manager = FakeManager()
-    registry = ToolRegistry()
-    McpToolAdapter(manager, "fixture").replace_registry_tools(
-        registry,
-        (echo_tool(),),
-    )
-
-    manager.invalidate()
-
-    assert registry.resolve("mcp.fixture.echo") is None

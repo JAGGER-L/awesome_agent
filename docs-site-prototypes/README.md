@@ -1,7 +1,9 @@
 # Awesome Docs Site Prototypes
 
-This folder is a disposable design exploration for the future Awesome documentation
-site. It does not replace the Markdown documentation under `docs/`.
+This folder preserves the disposable design exploration that preceded the Awesome
+documentation site. It is not a product or documentation contract. The production
+implementation under `site/` and the paired Markdown sources under `docs/` are
+authoritative whenever a prototype or planning note differs from them.
 
 Open `index.html` through a local static server to compare three directions:
 
@@ -19,5 +21,5 @@ active shortlist, and adds three A/C hybrids:
 - **F — Margin Notes:** A's usability with a softer annotated-manual reading
   experience.
 
-The recommended production stack and information architecture are documented in
-`SITE_PLAN.md`.
+The historical stack and information-architecture proposal is recorded in
+`SITE_PLAN.md`; it is retained as design context, not current implementation guidance.

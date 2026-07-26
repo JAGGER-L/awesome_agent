@@ -24,6 +24,9 @@ class AwesomePaths:
     application_db: Path
     checkpoint_db: Path
     change_journal_dir: Path
+    provider_model_transaction_file: Path
+    provider_credential_transaction_file: Path
+    provider_credential_backup_file: Path
     ui_file: Path
 
     @classmethod
@@ -80,6 +83,15 @@ class AwesomePaths:
             application_db=state_dir / "application.db",
             checkpoint_db=state_dir / "checkpoints.db",
             change_journal_dir=state_dir / "change-journal",
+            provider_model_transaction_file=(
+                state_dir / "provider-model-transaction.json"
+            ),
+            provider_credential_transaction_file=(
+                resolved_home / ".provider-credential-transaction.json"
+            ),
+            provider_credential_backup_file=(
+                resolved_home / ".provider-credential-transaction.env"
+            ),
             ui_file=resolved_home / "ui.json",
         )
 

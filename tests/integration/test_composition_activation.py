@@ -2,21 +2,44 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import ClassVar, cast
 
 import pytest
+from pydantic import SecretStr
 
 from awesome_agent.application import composition
-from awesome_agent.application.contracts import ProductErrorCode
+from awesome_agent.application.commands import CommandIntent, CommandName
+from awesome_agent.application.contracts import (
+    ProductErrorCode,
+    ProviderCredentialSetRequest,
+)
 from awesome_agent.application.facade import LocalApplication
+from awesome_agent.application.provider_configuration import (
+    ProviderConfigurationRecoveryRequired,
+    reconcile_provider_credential_transaction,
+)
 from awesome_agent.application.turns import TurnCoordinator
-from awesome_agent.config import BudgetConfig, TurnConfig
+from awesome_agent.config import (
+    BudgetConfig,
+    CredentialSource,
+    LoadedConfigSources,
+    ProviderCredentialTransactionJournal,
+    ProviderCredentialTransactionPhase,
+    ProviderCredentialTransactionRecord,
+    SecretFileSnapshot,
+    TurnConfig,
+    UserConfigWriter,
+    UserSecretStore,
+    load_config_sources,
+)
 from awesome_agent.conversation import TurnStatus
 from awesome_agent.core.events import CollectingEventSink
 from awesome_agent.core.workspace import WorkspaceTrustService, resolve_workspace
 from awesome_agent.extensions.mcp import McpServerConfig, McpServerStatus
 from awesome_agent.extensions.skills import SkillCatalog, discover_skills
+from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage import StateLease, StateLeaseMode, StateLeaseUnavailable
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
@@ -40,6 +63,264 @@ async def _trusted_application(
     )
     backend = cast(composition._LocalApplicationBackend, application._backend)
     return application, backend
+
+
+@pytest.mark.asyncio
+async def test_invalid_provider_model_journal_fails_activation_closed(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    journal = backend._paths.provider_model_transaction_file
+    journal.write_bytes(b'{"version":1,"phase":"prepared","unknown":true}')
+
+    initialized = await application.initialize()
+
+    assert initialized.ok is False
+    assert initialized.error is not None
+    assert initialized.error.code is ProductErrorCode.RECOVERY_REQUIRED
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_invalid_provider_credential_journal_fails_before_activation(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    journal = backend._paths.provider_credential_transaction_file
+    journal.write_bytes(b'{"version":1,"phase":"prepared","unknown":true}')
+
+    initialized = await application.initialize()
+
+    assert initialized.ok is False
+    assert initialized.error is not None
+    assert initialized.error.code is ProductErrorCode.RECOVERY_REQUIRED
+    assert backend._initialized is False
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_credential_recovery_precedes_the_first_real_config_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    home.mkdir()
+    workspace.mkdir()
+    resolved_paths = AwesomePaths.from_home(home)
+    previous_env = SecretFileSnapshot(
+        existed=True,
+        content=b"# preserve\nDEEPSEEK_API_KEY=old-secret\nOTHER=value\n",
+    )
+    resolved_paths.env_file.write_bytes(previous_env.content)
+    store = UserSecretStore(resolved_paths.env_file)
+    target_env = store.plan_set("DEEPSEEK_API_KEY", SecretStr("new-secret"))
+    writer = UserConfigWriter(resolved_paths.config_file)
+    writer.update(
+        lambda current: current.model_copy(
+            update={
+                "credentials": current.credentials.model_copy(
+                    update={"deepseek": CredentialSource.ENVIRONMENT}
+                )
+            }
+        )
+    )
+    journal = ProviderCredentialTransactionJournal(
+        resolved_paths.provider_credential_transaction_file,
+        resolved_paths.provider_credential_backup_file,
+    )
+    record = ProviderCredentialTransactionRecord(
+        phase=ProviderCredentialTransactionPhase.PREPARED,
+        service="deepseek",
+        environment_variable="DEEPSEEK_API_KEY",
+        action="replace",
+        previous_source=CredentialSource.ENVIRONMENT,
+        target_source=CredentialSource.AWESOME,
+        previous_env_existed=previous_env.existed,
+        previous_env_sha256=previous_env.content_hash,
+        target_env_existed=target_env.existed,
+        target_env_sha256=target_env.content_hash,
+    )
+    journal.stage_backup(previous_env)
+    journal.prepare(record)
+    store.restore(target_env)
+    WorkspaceTrustService(
+        SQLiteWorkspaceTrustStore(resolved_paths.application_db)
+    ).accept(resolve_workspace(workspace))
+    real_load = load_config_sources
+    observed_env_at_load: list[bytes] = []
+
+    def observe_load(
+        *,
+        paths: AwesomePaths,
+        workspace: Path,
+        workspace_trusted: bool,
+        environ: Mapping[str, str] | None = None,
+    ) -> LoadedConfigSources:
+        observed_env_at_load.append(resolved_paths.env_file.read_bytes())
+        return real_load(
+            paths=paths,
+            workspace=workspace,
+            workspace_trusted=workspace_trusted,
+            environ=environ,
+        )
+
+    monkeypatch.setattr(
+        "awesome_agent.application.composition.load_config_sources",
+        observe_load,
+    )
+
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+    )
+    assert observed_env_at_load == []
+
+    before_initialize = await application.get_state()
+    assert before_initialize.ok is True
+    assert before_initialize.value is not None
+    assert before_initialize.value.initialized is False
+    assert before_initialize.value.workspace_trusted is False
+    assert before_initialize.value.secret_status.deepseek_api_key is False
+    assert before_initialize.value.provider_credentials.deepseek.configured is False
+    assert observed_env_at_load == []
+
+    initialized = await application.initialize()
+
+    assert initialized.ok is True
+    assert observed_env_at_load
+    assert all(content == previous_env.content for content in observed_env_at_load)
+    assert writer.read().credentials.deepseek is CredentialSource.ENVIRONMENT
+    journal.require_clean()
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_failed_credential_recovery_can_be_retried_without_publishing_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    home.mkdir()
+    workspace.mkdir()
+    paths = AwesomePaths.from_home(home)
+    WorkspaceTrustService(SQLiteWorkspaceTrustStore(paths.application_db)).accept(
+        resolve_workspace(workspace)
+    )
+    attempts = 0
+
+    def fail_once(
+        *,
+        journal: ProviderCredentialTransactionJournal,
+        config_writer: UserConfigWriter,
+        secret_store: UserSecretStore,
+    ) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            failure = RuntimeError("synthetic recovery failure")
+            raise ProviderConfigurationRecoveryRequired(
+                failure,
+                (("startup_reconcile", failure),),
+            )
+        return reconcile_provider_credential_transaction(
+            journal=journal,
+            config_writer=config_writer,
+            secret_store=secret_store,
+        )
+
+    monkeypatch.setattr(
+        "awesome_agent.application.composition.reconcile_provider_credential_transaction",
+        fail_once,
+    )
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"DEEPSEEK_API_KEY": "environment-secret"},
+    )
+
+    first = await application.initialize()
+
+    assert first.ok is False
+    assert first.error is not None
+    assert first.error.code is ProductErrorCode.RECOVERY_REQUIRED
+    failed_state = await application.get_state()
+    assert failed_state.ok is True
+    assert failed_state.value is not None
+    assert failed_state.value.initialized is False
+    assert failed_state.value.workspace_trusted is False
+    assert failed_state.value.secret_status.deepseek_api_key is False
+
+    second = await application.initialize()
+
+    assert second.ok is True
+    assert second.value is not None
+    assert second.value.status.value == "ready"
+    assert attempts == 2
+    recovered_state = await application.get_state()
+    assert recovered_state.ok is True
+    assert recovered_state.value is not None
+    assert recovered_state.value.initialized is True
+    assert recovered_state.value.workspace_trusted is True
+    assert recovered_state.value.secret_status.deepseek_api_key is True
+    await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_runtime_provider_recovery_fence_blocks_all_mutations_but_not_snapshots(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(
+        tmp_path,
+        environ={"DEEPSEEK_API_KEY": "test-key"},
+    )
+    initialized = await application.initialize()
+    assert initialized.ok is True
+    created = await application.execute_command(
+        CommandIntent(name=CommandName.NEW, arguments=())
+    )
+    assert created.ok is True
+    assert backend._commands is not None
+    thread_id = backend._commands.current_thread_id
+    assert thread_id is not None
+    journal = backend._paths.provider_model_transaction_file
+    journal.write_bytes(b'{"version":1,"phase":"prepared","unknown":true}')
+
+    credential = await application.set_provider_credential(
+        ProviderCredentialSetRequest(provider="mem0", action="delete")
+    )
+    turn = await application.submit_turn(
+        thread_id,
+        "blocked by recovery fence",
+        "client_recovery_fence",
+    )
+    new_thread = await application.execute_command(
+        CommandIntent(name=CommandName.NEW, arguments=())
+    )
+    direct = await application.execute_direct(thread_id, "echo must-not-run")
+    status = await application.execute_command(
+        CommandIntent(name=CommandName.STATUS, arguments=())
+    )
+    state = await application.get_state()
+    cancel = await application.cancel_operation("operation_not_running")
+
+    for blocked in (credential, turn, new_thread, direct):
+        assert blocked.ok is False
+        assert blocked.error is not None
+        assert blocked.error.code is ProductErrorCode.RECOVERY_REQUIRED
+    assert status.ok is True
+    assert state.ok is True
+    assert state.value is not None
+    assert state.value.active_operation_id is None
+    assert cancel.ok is True
+    assert cancel.value is not None
+    assert cancel.value.cancelled is False
+    shutdown = await application.shutdown()
+    assert shutdown.ok is True
 
 
 @pytest.mark.asyncio

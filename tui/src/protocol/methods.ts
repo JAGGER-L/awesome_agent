@@ -77,7 +77,7 @@ const shutdownResultSchema = z.strictObject({ stopped: z.literal(true) });
 export const providerCredentialSetResultSchema = z.strictObject({
   provider: z.enum(["deepseek", "kimi", "mem0"]),
   status: z.enum(["configured", "deleted", "invalid", "confirm_unverified"]),
-  source: credentialSourceSchema.nullable(),
+  source: credentialSourceSchema.optional(),
   code: boundedText(1, 128),
 });
 

@@ -14,10 +14,14 @@ def test_shell_installer_has_safe_supported_host_contract() -> None:
 
     assert source.startswith("#!/bin/sh\nset -eu\n")
     for required in {
-        'VERSION="1.2.1"',
+        'VERSION="1.3.0"',
         'UV_VERSION="0.11.28"',
         'NODE_VERSION="22.23.1"',
-        "releases/latest/download",
+        "releases/download/v$VERSION",
+        "AWESOME_INSTALL_CANDIDATE",
+        "AWESOME_INSTALL_CANDIDATE_ASSET_BASE",
+        "http://127.0.0.1:",
+        "candidate asset base must be loopback HTTP",
         "awesome-$VERSION.zip",
         "SHA256SUMS",
         'UV_DARWIN_SHA256="33540eb7c883ab857eff79bd5ac2aa31fe27b595abecb4a9c003a2c998447232"',
@@ -52,9 +56,20 @@ def test_shell_installer_has_safe_supported_host_contract() -> None:
         "git-scm.com/downloads",
         ".zprofile",
         ".profile",
+        'INSTALL_ROLLBACK="$INSTALL_ROOT/app.rollback"',
+        'INSTALL_TRANSACTION="$INSTALL_ROOT/.install-transaction"',
+        'INSTALL_LOCK="$INSTALL_ROOT/.install.lock"',
+        "acquire_install_lock",
+        "reconcile_install_transaction",
+        "commit_staged_install",
+        'mktemp -d "$INSTALL_ROOT/.install-stage.XXXXXX"',
     }:
         assert required in source
-    assert source.index('echo "validated"') < source.index('rm -rf "$INSTALL_ROOT/app"')
+    assert "releases/latest/download" not in source
+    assert source.index("acquire_install_lock ||") < source.index(
+        'mktemp -d "$INSTALL_ROOT/.install-stage.XXXXXX"'
+    )
+    assert 'rm -rf "$INSTALL_ROOT/app"' not in source
     assert source.count('export PATH="$HOME/.local/bin:$PATH"') == 1
     assert "uv-install.sh" not in source
 
@@ -70,13 +85,21 @@ def test_windows_installer_has_safe_supported_host_contract() -> None:
     source = (ROOT / "install.ps1").read_text(encoding="utf-8")
 
     for required in {
-        '$Version = "1.2.1"',
+        '$Version = "1.3.0"',
         '$UvVersion = "0.11.28"',
         '$NodeVersion = "22.23.1"',
-        "releases/latest/download",
+        "releases/download/v$Version",
+        "AWESOME_INSTALL_CANDIDATE",
+        "AWESOME_INSTALL_CANDIDATE_ASSET_BASE",
+        "http",
+        "127.0.0.1",
+        "Candidate asset base must be loopback HTTP",
         "Is64BitOperatingSystem",
-        "PROCESSOR_ARCHITECTURE",
+        "Win32_Processor",
+        "Architecture",
+        "BuildNumber",
         "22000",
+        "ProductType",
         "LOCALAPPDATA",
         '"Programs\\Awesome"',
         "Invoke-WebRequest",
@@ -108,15 +131,26 @@ def test_windows_installer_has_safe_supported_host_contract() -> None:
         "awesome.cmd",
         'SetEnvironmentVariable("Path", $UpdatedPath, "User")',
         "git-scm.com/downloads",
+        "Enter-InstallerLock",
+        "Reconcile-InstallTransaction",
+        "Invoke-InstallTransaction",
+        "app.rollback",
+        ".install-transaction",
+        ".install-stage-",
+        "[IO.FileShare]::None",
+        "[IO.File]::Replace",
     }:
         assert required in source
+    assert "releases/latest/download" not in source
     assert source.index("Is64BitOperatingSystem") < source.index("$Stage = Join-Path")
-    assert source.index('Write-Output "validated"') < source.index(
-        "Remove-Item -LiteralPath $InstalledApp"
+    assert source.index("$InstallLock = Enter-InstallerLock") < source.index(
+        "$Stage = Join-Path"
     )
     assert "\"$LauncherDir;$($UserPath.TrimStart(';'))\"" in source
     assert source.count("Get-FileHash") >= 2
     assert source.count("Assert-FileSha256") >= 3
+    assert "PROCESSOR_ARCHITECTURE" not in source
+    assert "[Environment]::OSVersion" not in source
     assert "uv-install.ps1" not in source
 
 

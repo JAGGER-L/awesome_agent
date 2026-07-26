@@ -28,7 +28,8 @@ from awesome_agent.config import (
     UserConfigWriter,
 )
 from awesome_agent.conversation import ConversationService
-from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.tools.registry import ToolRegistry, ToolRegistryLimitError
 from awesome_agent.extensions.mcp import (
     McpConnectionState,
     McpManager,
@@ -36,7 +37,6 @@ from awesome_agent.extensions.mcp import (
     McpSource,
     McpUnavailable,
 )
-from awesome_agent.extensions.mcp.adapter import McpToolAdapter
 from awesome_agent.extensions.mcp.models import mcp_config_hash
 from awesome_agent.extensions.skills import SkillCatalog, SkillNotFound
 from awesome_agent.memory import (
@@ -49,8 +49,9 @@ from awesome_agent.memory import (
     MemoryMutationResult,
     MemoryMutationStatus,
     MemoryScope,
-    ensure_mem0_user_id,
+    new_mem0_user_id,
     refresh_local_memory_tools,
+    validate_local_memory_tools,
 )
 from awesome_agent.storage.mcp import SQLiteMcpEnablementStore
 
@@ -100,7 +101,6 @@ class ApplicationExtensionService:
 
     async def prepare_turn_extensions(self) -> None:
         await self._manager.start_enabled()
-        self._synchronize_registry()
 
     async def skills(self, intent: CommandIntent) -> CommandOutcome:
         thread_id = self._current_thread_id()
@@ -171,12 +171,8 @@ class ApplicationExtensionService:
         elif action == "disable":
             self._enablements.disable(self._workspace_key, config.id)
             status = await self._manager.refresh_enablement(config.id)
-            McpToolAdapter(self._manager, config.id).remove_registry_tools(
-                self._registry
-            )
         else:
             status = await self._manager.restart(config.id)
-            self._synchronize_server(config.id)
         if status.state is McpConnectionState.ERROR:
             return error("mcp_server_error", status.detail or "MCP server failed.")
         return result(McpCommandPayload(servers=(self._mcp_item(status),)))
@@ -223,7 +219,8 @@ class ApplicationExtensionService:
             return error("command_not_available", "Local memory is not available.")
         action = arguments[0]
         if action == "local" and len(arguments) == 2 and arguments[1] in {"on", "off"}:
-            if self._config_writer is None:
+            writer = self._config_writer
+            if writer is None:
                 return error(
                     "command_not_available", "User configuration is not writable."
                 )
@@ -233,21 +230,45 @@ class ApplicationExtensionService:
                 )
             enabled = arguments[1] == "on"
 
+            try:
+                validate_local_memory_tools(
+                    self._registry,
+                    service,
+                    enabled=enabled,
+                )
+            except ToolRegistryLimitError:
+                return error(
+                    "tool_registry_limit",
+                    "Local memory tools do not fit safely in the current tool catalog.",
+                )
+
             def update(document: UserConfigDocument) -> UserConfigDocument:
                 memory = document.memory.model_copy(
                     update={"local_file_memory": enabled}
                 )
                 return document.model_copy(update={"memory": memory})
 
-            self._config_writer.update(update)
-            service.set_enabled(enabled)
-            refresh_local_memory_tools(self._registry, service)
+            def commit_local_state(_: object) -> None:
+                refresh_local_memory_tools(
+                    self._registry,
+                    service,
+                    enabled=enabled,
+                )
+                service.set_enabled(enabled)
+
+            await run_cancellation_safe_blocking_call(
+                lambda: writer.update(update),
+                on_completed=commit_local_state,
+            )
             return result(self._memory_status())
         if action == "list" and len(arguments) == 2:
             scope = _memory_scope(arguments[1])
             if scope is None:
                 return self._memory_usage_error()
-            document = service.snapshot(scope)
+            selected_scope = scope
+            document = await run_cancellation_safe_blocking_call(
+                lambda: service.snapshot(selected_scope)
+            )
             return result(
                 MemoryDocumentCommandPayload(
                     scope=scope.value,
@@ -262,38 +283,43 @@ class ApplicationExtensionService:
             scope = _memory_scope(arguments[1])
             if scope is None:
                 return self._memory_usage_error()
-            observed = service.snapshot(scope)
-            return _memory_mutation_result(
-                service.add(
-                    scope, " ".join(arguments[2:]), expected_hash=observed.content_hash
+            selected_scope = scope
+            mutation = await run_cancellation_safe_blocking_call(
+                lambda: _add_observed_memory(
+                    service,
+                    selected_scope,
+                    " ".join(arguments[2:]),
                 )
             )
+            return _memory_mutation_result(mutation)
         if action == "replace" and len(arguments) >= 4:
             scope = _memory_scope(arguments[1])
             if scope is None:
                 return self._memory_usage_error()
-            observed = service.snapshot(scope)
-            return _memory_mutation_result(
-                service.replace(
-                    scope,
+            selected_scope = scope
+            mutation = await run_cancellation_safe_blocking_call(
+                lambda: _replace_observed_memory(
+                    service,
+                    selected_scope,
                     arguments[2],
                     " ".join(arguments[3:]),
-                    expected_hash=observed.content_hash,
                 )
             )
+            return _memory_mutation_result(mutation)
         if action == "remove" and len(arguments) == 3:
             scope = _memory_scope(arguments[1])
             if scope is None:
                 return self._memory_usage_error()
-            observed = service.snapshot(scope)
-            return _memory_mutation_result(
-                service.remove(scope, arguments[2], expected_hash=observed.content_hash)
+            mutation = await run_cancellation_safe_blocking_call(
+                lambda: _remove_observed_memory(service, scope, arguments[2])
             )
+            return _memory_mutation_result(mutation)
         return self._memory_usage_error()
 
     async def _mem0_command(self, arguments: tuple[str, ...]) -> CommandOutcome:
         if arguments in {("on",), ("off",)}:
-            if self._config_writer is None:
+            writer = self._config_writer
+            if writer is None:
                 return error(
                     "command_not_available", "User configuration is not writable."
                 )
@@ -313,20 +339,33 @@ class ApplicationExtensionService:
                     code="mem0_unavailable", operation="initialize"
                 )
                 return error(diagnostic.code, "Mem0 Cloud is not available.")
-            if enabled:
-                user_id = ensure_mem0_user_id(self._config_writer)
-                self._mem0_identity = Mem0Identity(
-                    user_id=user_id, workspace_key=self._workspace_key
-                )
-                self._mem0_user_id = user_id
 
             def update(document: UserConfigDocument) -> UserConfigDocument:
-                memory = document.memory.model_copy(update={"mem0_cloud": enabled})
+                user_id = document.memory.mem0_user_id
+                if enabled and user_id is None:
+                    user_id = new_mem0_user_id()
+                memory = document.memory.model_copy(
+                    update={"mem0_cloud": enabled, "mem0_user_id": user_id}
+                )
                 return document.model_copy(update={"memory": memory})
 
-            self._config_writer.update(update)
-            self._mem0_enabled = enabled
-            self._mem0_state_changed(enabled, self._mem0_identity)
+            def commit_mem0_state(updated: UserConfigDocument) -> None:
+                if enabled:
+                    user_id = updated.memory.mem0_user_id
+                    if user_id is None:
+                        raise RuntimeError("Mem0 identity persistence failed")
+                    self._mem0_identity = Mem0Identity(
+                        user_id=user_id,
+                        workspace_key=self._workspace_key,
+                    )
+                    self._mem0_user_id = user_id
+                self._mem0_enabled = enabled
+                self._mem0_state_changed(enabled, self._mem0_identity)
+
+            await run_cancellation_safe_blocking_call(
+                lambda: writer.update(update),
+                on_completed=commit_mem0_state,
+            )
             return result(self._memory_status())
         if not self._mem0_enabled:
             return error("memory_disabled", "Mem0 Cloud memory is disabled.")
@@ -458,25 +497,45 @@ class ApplicationExtensionService:
             "search <query>|remove <id>]",
         )
 
-    def _synchronize_registry(self) -> None:
-        for config in self._manager.configs():
-            self._synchronize_server(config.id)
-
-    def _synchronize_server(self, server_id: str) -> None:
-        adapter = McpToolAdapter(self._manager, server_id)
-        if self._manager.status(server_id).connected:
-            adapter.replace_registry_tools(
-                self._registry, self._manager.tools(server_id)
-            )
-        else:
-            adapter.remove_registry_tools(self._registry)
-
 
 def _memory_scope(value: str) -> MemoryScope | None:
     try:
         return MemoryScope(value)
     except ValueError:
         return None
+
+
+def _add_observed_memory(
+    service: LocalMemoryService,
+    scope: MemoryScope,
+    content: str,
+) -> MemoryMutationResult:
+    observed = service.snapshot(scope)
+    return service.add(scope, content, expected_hash=observed.content_hash)
+
+
+def _replace_observed_memory(
+    service: LocalMemoryService,
+    scope: MemoryScope,
+    entry_id: str,
+    content: str,
+) -> MemoryMutationResult:
+    observed = service.snapshot(scope)
+    return service.replace(
+        scope,
+        entry_id,
+        content,
+        expected_hash=observed.content_hash,
+    )
+
+
+def _remove_observed_memory(
+    service: LocalMemoryService,
+    scope: MemoryScope,
+    entry_id: str,
+) -> MemoryMutationResult:
+    observed = service.snapshot(scope)
+    return service.remove(scope, entry_id, expected_hash=observed.content_hash)
 
 
 def _memory_mutation_result(mutation: MemoryMutationResult) -> CommandOutcome:

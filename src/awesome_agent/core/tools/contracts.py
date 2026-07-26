@@ -30,6 +30,7 @@ class ToolErrorCode(StrEnum):
     PERMISSION_DENIED = "permission_denied"
     CONFLICT = "conflict"
     TIMEOUT = "timeout"
+    STATE_UNAVAILABLE = "state_unavailable"
     EXECUTION_FAILED = "execution_failed"
     UNCERTAIN_OUTCOME = "uncertain_outcome"
     MEMORY_DISABLED = "memory_disabled"

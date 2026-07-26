@@ -287,7 +287,10 @@ class ToolExecutor:
         except asyncio.CancelledError:
             await ToolExecutor._cancel_handler_task(
                 handler_task,
-                grace_seconds=_HANDLER_CANCELLATION_GRACE_SECONDS,
+                grace_seconds=(
+                    registered.cancellation_grace_seconds
+                    or _HANDLER_CANCELLATION_GRACE_SECONDS
+                ),
                 propagate_caller_cancellation=False,
             )
             raise

@@ -26,6 +26,7 @@ from awesome_agent.core.events import (
     EventEnvelope,
     EventType,
 )
+from awesome_agent.memory import MemoryDocumentInvalid
 from awesome_agent.modeling import (
     AssistantMessage,
     ModelMessage,
@@ -147,11 +148,25 @@ class BlockingTurnCompletedSink(CollectingEventSink):
     def __init__(self) -> None:
         super().__init__()
         self.entered = asyncio.Event()
+        self.release = asyncio.Event()
 
     async def emit(self, event: EventEnvelope) -> None:
         if event.event_type is EventType.TURN_COMPLETED:
             self.entered.set()
-            await asyncio.Event().wait()
+            await self.release.wait()
+        await super().emit(event)
+
+
+class BlockingTurnFailedSink(CollectingEventSink):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.TURN_FAILED:
+            self.entered.set()
+            await self.release.wait()
         await super().emit(event)
 
 
@@ -269,6 +284,7 @@ def _coordinator(
     tmp_path: Path,
     graph: FakeGraph,
     *,
+    turn_input_preparer: Callable[[Turn, str], None] | None = None,
     turn_extension_preparer: Callable[[], Awaitable[None]] | None = None,
     event_sink: CollectingEventSink | None = None,
     context_snapshot_validator: ContextSnapshotValidator = (
@@ -324,6 +340,7 @@ def _coordinator(
         emitter=emitter,
         checkpoints=checkpoints,
         seal_changes=lambda turn_id: None,
+        turn_input_preparer=(turn_input_preparer or (lambda turn, content: None)),
         turn_extension_preparer=(turn_extension_preparer or default_extension_preparer),
         context_snapshot_validator=context_snapshot_validator,
     )
@@ -435,7 +452,7 @@ async def test_turn_started_delivery_failure_terminalizes_before_graph_execution
 
 
 @pytest.mark.asyncio
-async def test_cancel_after_durable_turn_commit_preserves_completed_operation(
+async def test_cancel_after_durable_turn_commit_is_rejected(
     tmp_path: Path,
 ) -> None:
     sink = BlockingTurnCompletedSink()
@@ -451,15 +468,193 @@ async def test_cancel_after_durable_turn_commit_preserves_completed_operation(
     )
     await sink.entered.wait()
 
-    assert await coordinator.cancel_operation(accepted.operation_id) is True
+    assert await coordinator.cancel_operation(accepted.operation_id) is False
+    sink.release.set()
     await coordinator.wait(accepted.operation_id)
 
     turn = conversation.read_thread(thread_id).turns[0]
     assert turn.status is TurnStatus.COMPLETED
     event_types = [event.event_type for event in sink.events]
-    assert EventType.OPERATION_COMPLETED in event_types
-    assert EventType.OPERATION_CANCELLED not in event_types
+    assert event_types.count(EventType.TURN_COMPLETED) == 1
+    assert event_types.count(EventType.OPERATION_COMPLETED) == 1
+    assert event_types.count(EventType.TURN_CANCELLED) == 0
+    assert event_types.count(EventType.OPERATION_CANCELLED) == 0
     assert coordinator.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_durable_turn_failure_is_rejected(
+    tmp_path: Path,
+) -> None:
+    sink = BlockingTurnFailedSink()
+    coordinator, conversation, _, _, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer=None, reason="model_failed")),
+        event_sink=sink,
+    )
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_cancel_after_failure",
+    )
+    await sink.entered.wait()
+
+    assert await coordinator.cancel_operation(accepted.operation_id) is False
+    sink.release.set()
+    with pytest.raises(TurnExecutionFailed, match="model_failed"):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert (turn.status, turn.error_code) == (TurnStatus.FAILED, "model_failed")
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.TURN_FAILED) == 1
+    assert event_types.count(EventType.OPERATION_FAILED) == 1
+    assert event_types.count(EventType.TURN_CANCELLED) == 0
+    assert event_types.count(EventType.OPERATION_CANCELLED) == 0
+    assert coordinator.active_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_write_error_reconciles_exact_durable_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = asyncio.Event()
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="done", reason="completed"), gate),
+    )
+    persist = conversation.complete_turn
+
+    def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
+        persist(*args, **kwargs)
+        raise RuntimeError("connection close failed after commit")
+
+    monkeypatch.setattr(conversation, "complete_turn", commit_then_raise)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_completed_commit_reconcile",
+    )
+    assert accepted.turn_id is not None
+    manifest: tuple[dict[str, JsonValue], ...] = (
+        {"kind": "history", "estimated_tokens": 11},
+    )
+    conversation.store_context_manifest(accepted.turn_id, manifest)
+    gate.set()
+
+    await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.COMPLETED
+    assert turn.context_manifest == manifest
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_COMPLETED,
+        EventType.OPERATION_COMPLETED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_write_error_is_not_reconciled_without_exact_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, conversation, sink, _, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="done", reason="completed")),
+    )
+
+    def fail_before_commit(*args: Any, **kwargs: Any) -> Turn:
+        del args, kwargs
+        raise RuntimeError("write failed before commit")
+
+    monkeypatch.setattr(conversation, "complete_turn", fail_before_commit)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_completed_commit_conflict",
+    )
+
+    with pytest.raises(RuntimeError, match="write failed before commit"):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.IN_PROGRESS
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.TURN_COMPLETED) == 0
+    assert event_types.count(EventType.OPERATION_COMPLETED) == 0
+    assert event_types.count(EventType.OPERATION_FAILED) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_write_error_reconciles_exact_durable_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer=None, reason="model_failed")),
+    )
+    persist = conversation.fail_turn
+
+    def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
+        persist(*args, **kwargs)
+        raise RuntimeError("connection close failed after commit")
+
+    monkeypatch.setattr(conversation, "fail_turn", commit_then_raise)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_failed_commit_reconcile",
+    )
+
+    with pytest.raises(TurnExecutionFailed, match="model_failed"):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert (turn.status, turn.error_code) == (TurnStatus.FAILED, "model_failed")
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_FAILED,
+        EventType.OPERATION_FAILED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_turn_write_error_reconciles_exact_durable_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = asyncio.Event()
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="unused", reason="completed"), gate),
+    )
+    persist = conversation.cancel_turn
+
+    def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
+        persist(*args, **kwargs)
+        raise RuntimeError("connection close failed after commit")
+
+    monkeypatch.setattr(conversation, "cancel_turn", commit_then_raise)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_cancelled_commit_reconcile",
+    )
+
+    assert await coordinator.cancel_operation(accepted.operation_id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.CANCELLED
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_CANCELLED,
+        EventType.OPERATION_CANCELLED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -649,6 +844,136 @@ async def test_model_failure_persists_failed_turn_and_failed_operation(
 
 
 @pytest.mark.asyncio
+async def test_preprocessing_failure_terminalizes_turn_and_allows_next_turn(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+
+    def prepare_input(turn: Turn, content: str) -> None:
+        nonlocal attempts
+        del turn, content
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("preprocessing fault")
+
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="done", reason="completed")),
+        turn_input_preparer=prepare_input,
+    )
+
+    failed = await coordinator.submit_turn(
+        thread_id,
+        "first",
+        client_message_id="client_preprocessing_failure",
+    )
+    with pytest.raises(RuntimeError, match="preprocessing fault"):
+        await coordinator.wait(failed.operation_id)
+
+    first = conversation.read_thread(thread_id).turns[0]
+    assert first.status is TurnStatus.FAILED
+    assert first.error_code == "turn_preparation_failed"
+    assert checkpoints.deleted == [failed.turn_id]
+    assert coordinator.active_operation_id is None
+
+    succeeded = await coordinator.submit_turn(
+        thread_id,
+        "second",
+        client_message_id="client_after_preprocessing_failure",
+    )
+    await coordinator.wait(succeeded.operation_id)
+
+    turns = conversation.read_thread(thread_id).turns
+    assert [turn.status for turn in turns] == [
+        TurnStatus.FAILED,
+        TurnStatus.COMPLETED,
+    ]
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.TURN_FAILED) == 1
+    assert event_types.count(EventType.OPERATION_FAILED) == 1
+    assert event_types.count(EventType.TURN_COMPLETED) == 1
+    assert event_types.count(EventType.OPERATION_COMPLETED) == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_local_memory_preparation_terminalizes_the_created_turn(
+    tmp_path: Path,
+) -> None:
+    def prepare_input(turn: Turn, content: str) -> None:
+        del turn, content
+        raise MemoryDocumentInvalid("memory_document_invalid")
+
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="must not run", reason="completed")),
+        turn_input_preparer=prepare_input,
+    )
+
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect memory",
+        client_message_id="client_invalid_local_memory",
+    )
+    with pytest.raises(MemoryDocumentInvalid, match="memory_document_invalid"):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.FAILED
+    assert turn.error_code == "turn_preparation_failed"
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_FAILED,
+        EventType.OPERATION_FAILED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_preprocessing_cancellation_persists_one_cancelled_terminal(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+
+    def prepare_input(turn: Turn, content: str) -> None:
+        nonlocal attempts
+        del turn, content
+        attempts += 1
+        if attempts == 1:
+            raise asyncio.CancelledError
+
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="done", reason="completed")),
+        turn_input_preparer=prepare_input,
+    )
+
+    cancelled = await coordinator.submit_turn(
+        thread_id,
+        "first",
+        client_message_id="client_preprocessing_cancelled",
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.wait(cancelled.operation_id)
+
+    first = conversation.read_thread(thread_id).turns[0]
+    assert first.status is TurnStatus.CANCELLED
+    assert checkpoints.deleted == [cancelled.turn_id]
+    assert coordinator.active_operation_id is None
+
+    succeeded = await coordinator.submit_turn(
+        thread_id,
+        "second",
+        client_message_id="client_after_preprocessing_cancelled",
+    )
+    await coordinator.wait(succeeded.operation_id)
+
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.TURN_CANCELLED) == 1
+    assert event_types.count(EventType.OPERATION_CANCELLED) == 1
+    assert event_types.count(EventType.TURN_FAILED) == 0
+    assert event_types.count(EventType.OPERATION_FAILED) == 0
+
+
+@pytest.mark.asyncio
 async def test_graph_exception_persists_last_stable_checkpoint_facts(
     tmp_path: Path,
 ) -> None:
@@ -672,6 +997,214 @@ async def test_graph_exception_persists_last_stable_checkpoint_facts(
     assert turn.error_code == "agent_execution_failed"
     assert turn.usage.tool_calls == 2
     assert turn.context_manifest == ({"kind": "tool_result", "estimated_tokens": 7},)
+
+
+@pytest.mark.asyncio
+async def test_graph_exception_preserves_primary_error_when_fact_read_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        RaisingGraph(_result(final_answer=None, reason="waiting")),
+    )
+
+    async def fail_latest_state(turn_id: str) -> AgentState | None:
+        del turn_id
+        raise RuntimeError("checkpoint read failed")
+
+    monkeypatch.setattr(checkpoints, "latest_state", fail_latest_state)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_graph_fact_failure",
+    )
+
+    with pytest.raises(RuntimeError, match="graph failed"):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.FAILED
+    assert turn.error_code == "agent_execution_failed"
+    assert turn.usage.tool_calls == 0
+    assert turn.context_manifest == ()
+    assert checkpoints.deleted == [accepted.turn_id]
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.TURN_FAILED) == 1
+    assert event_types.count(EventType.OPERATION_FAILED) == 1
+
+
+@pytest.mark.asyncio
+async def test_graph_exception_commits_before_bounded_fact_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        RaisingGraph(_result(final_answer=None, reason="waiting")),
+    )
+    facts_entered = asyncio.Event()
+    release_facts = asyncio.Event()
+
+    async def block_latest_state(turn_id: str) -> AgentState | None:
+        del turn_id
+        facts_entered.set()
+        await release_facts.wait()
+        return None
+
+    monkeypatch.setattr(checkpoints, "latest_state", block_latest_state)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_graph_fact_cancel",
+    )
+    await facts_entered.wait()
+
+    assert await coordinator.cancel_operation(accepted.operation_id) is False
+    release_facts.set()
+    with pytest.raises(RuntimeError, match="graph failed"):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.FAILED
+    assert turn.error_code == "agent_execution_failed"
+    assert checkpoints.deleted == [accepted.turn_id]
+    event_types = [event.event_type for event in sink.events]
+    assert event_types.count(EventType.TURN_FAILED) == 1
+    assert event_types.count(EventType.OPERATION_FAILED) == 1
+    assert event_types.count(EventType.TURN_CANCELLED) == 0
+    assert event_types.count(EventType.OPERATION_CANCELLED) == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_state_construction_failure_terminalizes_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="unused", reason="completed")),
+    )
+
+    def fail_state(**kwargs: object) -> AgentState:
+        del kwargs
+        raise ValueError("invalid initial state")
+
+    monkeypatch.setattr("awesome_agent.application.turns.new_agent_state", fail_state)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_invalid_initial_state",
+    )
+
+    with pytest.raises(ValueError, match="invalid initial state"):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.FAILED
+    assert turn.error_code == "agent_initialization_failed"
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_FAILED,
+        EventType.OPERATION_FAILED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_graph_result_terminalizes_turn(
+    tmp_path: Path,
+) -> None:
+    graph = FakeGraph(cast(AgentState, {}))
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        graph,
+    )
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_invalid_graph_result",
+    )
+
+    with pytest.raises(KeyError):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.FAILED
+    assert turn.error_code == "agent_execution_failed"
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_FAILED,
+        EventType.OPERATION_FAILED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_graph_result_normalization_cancellation_terminalizes_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="unused", reason="completed")),
+    )
+
+    def cancel_normalization(state: AgentState) -> object:
+        del state
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(
+        "awesome_agent.application.turns.observed_turn_facts",
+        cancel_normalization,
+    )
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_result_normalization_cancelled",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.CANCELLED
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_CANCELLED,
+        EventType.OPERATION_CANCELLED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_context_cancellation_terminalizes_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="unused", reason="completed")),
+    )
+
+    def cancel_runtime(*args: object, **kwargs: object) -> AgentRuntimeContext:
+        del args, kwargs
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(coordinator, "_runtime_context_factory", cancel_runtime)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_runtime_cancelled",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.CANCELLED
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_CANCELLED,
+        EventType.OPERATION_CANCELLED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -699,6 +1232,41 @@ async def test_cancel_persists_cancelled_turn_before_operation_terminal(
     assert turn.usage.input_tokens == 10
     assert turn.usage.output_tokens == 3
     assert turn.context_manifest == ({"kind": "history", "estimated_tokens": 13},)
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_CANCELLED,
+        EventType.OPERATION_CANCELLED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_falls_back_when_checkpoint_reader_self_cancels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate = asyncio.Event()
+    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+        tmp_path,
+        FakeGraph(_result(final_answer="unused", reason="completed"), gate),
+    )
+
+    async def cancel_latest_state(turn_id: str) -> AgentState | None:
+        del turn_id
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(checkpoints, "latest_state", cancel_latest_state)
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_checkpoint_self_cancel",
+    )
+
+    assert await coordinator.cancel_operation(accepted.operation_id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = conversation.read_thread(thread_id).turns[0]
+    assert turn.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
         EventType.TURN_CANCELLED,

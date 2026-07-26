@@ -18,7 +18,7 @@ TUI 把这些事实转换为临时状态和渲染状态。两个边界都不接�
 
 该协议不是公共网络 API。它假设本地只有一个由 launcher 管理的对等端，但仍会校验
 每个请求并施加明确的输入/背压边界，因为畸形或不匹配的本地组件也不能破坏状态。
-Frame 限制目前并不对称，具体见下文。
+入站与出站 frame 都执行相同的严格 1 MiB UTF-8 JSON 边界，具体见下文。
 
 ## Protocol v3 契约
 
@@ -26,9 +26,15 @@ Frame 限制目前并不对称，具体见下文。
 版本。即使产品版本相同，v2 客户端也会明确失败。协议版本与产品版本回答不同问题：
 线缆兼容性与发布身份。
 
-请求 ID 是 JSON/JavaScript 安全的整数或 JSON-RPC parser 允许的字符串。数字 ID 必须
-是整数、有限值、非 Boolean，并位于 `-(2^53 - 1)..2^53 - 1`。可选字段不存在时应省略；
-只有 schema 明确声明可为 null 时才接受显式 `null`。
+请求 ID 是 JSON/JavaScript 安全的整数，或由 1–128 个 Unicode 标量组成且不含未配对
+UTF-16 surrogate 的字符串。数字 ID 必须是整数、有限值、非 Boolean，并位于
+`-(2^53 - 1)..2^53 - 1`。可选字段不存在时应省略；只有 schema 明确声明可为 null 时才
+接受显式 `null`。
+
+相同 safe-integer 边界会递归作用于所有 result、error、event 和通用 JSON value 中表示整数的
+number。Core writer 还会在序列化前拒绝非有限数字、无效 Unicode、非 string object key、
+非 JSON container，以及超过 64 层的 output nesting。即使上游 producer 返回了未约束的
+Python object，这里仍是最终不变量边界。
 
 当前请求方法如下：
 
@@ -95,15 +101,16 @@ Application。
 ## Frame 与调度边界
 
 Core 把每条请求行限制为 1 MiB。TUI 对编码后的请求和解码后的 Core frame 施加相同限制。
-Core output writer 会将一整行串行写出，但目前不会拒绝超过 1 MiB 的输出 frame。Core
-读取一条顺序字节流，而准入的普通请求在独立 task 中运行。这样，缓慢的提供商或命令
-不会阻塞紧急控制请求的解析。
+Core output writer 会将一整行串行化，并在写入前检查紧凑 UTF-8 的实际字节数。Core 读取
+一条顺序字节流，而准入的普通请求在独立 task 中运行。这样，缓慢的提供商或命令不会
+阻塞紧急控制请求的解析。
 
 | 资源 | 上限 |
 | --- | ---: |
 | Core 请求行 | 1 MiB |
 | TUI 编码/解码 frame | 1 MiB |
-| Core 输出 frame | 无显式预检上限 |
+| Core 输出 frame | 1 MiB 紧凑 UTF-8 内容 |
+| Core output JSON depth | 64 层 |
 | 普通 in-flight 请求 | 128 |
 | 后台控制请求 | 16 |
 | 活动/近期请求 ID | 4,096 |
@@ -121,11 +128,16 @@ Core output writer 会将一整行串行写出，但目前不会拒绝超过 1 M
 序列化，所以并发完成的请求不会交错 JSON 字节。消费端阻塞或写入失败时，系统会关闭
 传输路径，而不是积累无界内存。
 
-不对称的 frame 上限可以被用户观察到：schema 有效的 `thread.read` 页面可以包含最多
-500 个大条目，而 `/tools` 没有总量分页。任一 response 都可能超过 1 MiB，被 Core 写出
-后又被随产品发布的 TUI 当作致命超大 frame。调用方应使用较小的 transcript 页面；
-`/tools` 目前没有调用方缓解措施。运行时修复需要明确的 Core 输出策略——拒绝、分页或
-分块——以及跨语言回归 fixture，而不是只在文档里给出承诺。
+对于 Turn 和 Direct 准入，Application 能返回 `OperationAccepted` 之前，
+`operation.started` 已进入 queue；后续 lifecycle event 随后可能与匹配 response 竞速。TUI
+会在发出 request 前安装 event consumer，并把 event correlation ID 视为权威，因此 early
+event 不依赖 response-first buffering。
+
+`thread.read` 会先按 Application 字节预算缩小 page。Writer 是所有 method 与 event 的最终
+不变量边界：如果任一 request result 仍超过 1 MiB，Core 会使用相同 request ID 返回有界的
+`result_too_large` Application failure。该错误不可重试，因为 method 可能已经产生外部效果；
+protocol 绝不会透明重放。Event schema 另有独立边界，超大的 event 会在 stdout 收到任何
+部分或无效 frame 前被拒绝。
 
 线缆并发不等于 mutation 并发。Application foreground arbiter 仍决定哪些 Turn、直接
 命令、状态变更、interaction 或 shutdown 可以运行。

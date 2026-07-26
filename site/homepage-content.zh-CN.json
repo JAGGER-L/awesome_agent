@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "locale": "zh-CN",
-  "kicker": "终端原生 · 单一 Python Core · 修改可恢复",
-  "title": "把开发意图，变成经过验证的修改。",
-  "lead": "Awesome 是面向审慎软件开发的 AI 编程助手。它理解代码库、规划修改、通过受控工具执行并验证结果，让每一步都保持可见、有边界且可以恢复。",
+  "kicker": "终端原生 · 单一 Python Core · 受控执行",
+  "title": "把开发意图，变成可审查的修改。",
+  "lead": "Awesome 是面向审慎软件开发的 AI 编程助手。它理解代码库、规划修改、通过受控工具执行，也可以运行相关检查，让执行过程保持可见且有边界。Change Journal 只恢复受支持的文件修改，不能恢复任意 Shell 或外部副作用。",
   "primaryAction": "五分钟快速开始",
   "secondaryAction": "了解工作方式",
   "copy": "复制",
@@ -44,14 +44,14 @@
     {
       "id": "verify",
       "eyebrow": "03 / VERIFY",
-      "title": "验证不是附加项",
-      "description": "按风险运行最小充分检查，并记录真实结果。"
+      "title": "验证过程保持明确",
+      "description": "Awesome 可按需运行相关检查并记录实际执行项，但不保证每个结果都已经验证。"
     },
     {
       "id": "recover",
       "eyebrow": "04 / RECOVER",
-      "title": "修改可以恢复",
-      "description": "Change Journal 为受控修改提供明确的撤销语义。"
+      "title": "受控文件修改可以恢复",
+      "description": "Change Journal 为受控文件修改提供明确的撤销语义；Shell 与外部副作用不可撤销。"
     }
   ],
   "loopEyebrow": "01 / PRODUCT LOOP",
@@ -80,7 +80,7 @@
       "id": "verify",
       "number": "04",
       "title": "验证",
-      "description": "运行相关检查，解释结果，并保留恢复路径。"
+      "description": "运行用户要求或确有必要的检查，报告实际执行项，并区分可撤销的文件修改与其他副作用。"
     }
   ],
   "resourcesEyebrow": "02 / START HERE",

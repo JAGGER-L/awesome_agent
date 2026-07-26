@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib
+import json
+import os
+import queue
 import shutil
-import sqlite3
 import stat
 import subprocess
 import sys
-from collections.abc import Sequence
-from contextlib import closing
+import threading
+import time
+from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from types import ModuleType
 from zipfile import ZipFile
 
 if __package__ in {None, ""}:
@@ -31,6 +33,14 @@ class BundleVerificationError(RuntimeError):
 
 
 _MAX_CHECKSUM_MANIFEST_BYTES = 4 * 1024
+_MAX_PROTOCOL_FRAME_BYTES = 1024 * 1024
+_PROTOCOL_RESPONSE_TIMEOUT_SECONDS = 20.0
+_CORE_EXIT_TIMEOUT_SECONDS = 10.0
+
+
+def _reject_non_json_constant(value: str) -> None:
+    del value
+    raise ValueError("Non-finite numbers are not valid JSON.")
 
 
 def _is_plain_file(path: Path) -> bool:
@@ -105,6 +115,7 @@ def find_payload(archive: ZipFile, expected_version: str) -> str:
     infos = archive.infolist()
     names = tuple(info.filename for info in infos)
     required = {
+        "LICENSE",
         "VERSION",
         f"core/awesome_agent-{expected_version}-py3-none-any.whl",
         "core/requirements.lock",
@@ -140,158 +151,6 @@ def find_payload(archive: ZipFile, expected_version: str) -> str:
     return prefix
 
 
-def _file_inventory(directory: Path) -> dict[str, bytes]:
-    return {
-        path.name: path.read_bytes()
-        for path in sorted(directory.iterdir())
-        if path.is_file()
-    }
-
-
-def _write_versioned_database(path: Path, version: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(path)) as connection:
-        connection.execute(f"PRAGMA user_version = {version}")
-
-
-def _read_schema(path: Path) -> int:
-    with closing(sqlite3.connect(path)) as connection:
-        return int(connection.execute("PRAGMA user_version").fetchone()[0])
-
-
-def verify_storage_contract(
-    storage_module: ModuleType,
-    paths_module: ModuleType,
-    root: Path,
-) -> None:
-    expected_schema = 7
-    if expected_schema != storage_module.APPLICATION_SCHEMA_VERSION:
-        raise BundleVerificationError("wheel schema version is invalid")
-
-    fresh = root / "fresh-state" / "application.db"
-    storage_module.initialize_application_database(fresh)
-    with closing(sqlite3.connect(fresh)) as connection:
-        observed_schema = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        tables = {
-            str(row[0])
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
-        }
-    if observed_schema != expected_schema:
-        raise BundleVerificationError("fresh database schema is invalid")
-    required_tables = {"trusted_workspaces", "threads", "turns", "tool_activities"}
-    if not required_tables.issubset(tables):
-        raise BundleVerificationError("fresh database tables are incomplete")
-
-    for found_schema, expected_direction in ((2, "older"), (6, "older"), (8, "newer")):
-        incompatible = root / f"schema-{found_schema}" / "application.db"
-        _write_versioned_database(incompatible, found_schema)
-        before = _file_inventory(incompatible.parent)
-        preflight = storage_module.inspect_application_state(incompatible)
-        if (
-            preflight.found_schema != found_schema
-            or preflight.expected_schema != expected_schema
-            or preflight.compatibility.value != expected_direction
-        ):
-            raise BundleVerificationError(
-                "incompatible schema classification is invalid"
-            )
-        try:
-            storage_module.initialize_application_database(incompatible)
-        except storage_module.ApplicationSchemaMismatch as error:
-            if (
-                error.found != found_schema
-                or error.expected != expected_schema
-                or error.direction.value != expected_direction
-            ):
-                raise BundleVerificationError(
-                    "incompatible schema diagnostic is invalid"
-                ) from error
-        else:
-            raise BundleVerificationError("incompatible schema was not rejected")
-        if _file_inventory(incompatible.parent) != before:
-            raise BundleVerificationError("incompatible state was mutated")
-
-    home = root / "reset-home"
-    paths = paths_module.AwesomePaths.from_home(home)
-    preserved = {
-        paths.config_file: b"version: 1\n",
-        paths.env_file: b"DEEPSEEK_API_KEY=preserved\n",
-        paths.skills_dir / "review" / "SKILL.md": b"# Review\n",
-        paths.user_memory_file: b"# User memory\n",
-        paths.workspaces_dir / "workspace" / "MEMORY.md": b"# Workspace memory\n",
-        paths.ui_file: b'{"theme":"aurora"}\n',
-    }
-    for path, content in preserved.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
-    _write_versioned_database(paths.application_db, 6)
-    paths.checkpoint_db.write_bytes(b"discarded checkpoint")
-    paths.change_journal_dir.mkdir(parents=True)
-    (paths.change_journal_dir / "discarded").write_bytes(b"discarded change")
-
-    with storage_module.StateLease.acquire(
-        paths.home,
-        storage_module.StateLeaseMode.EXCLUSIVE,
-    ) as lease:
-        storage_module.reset_local_state(lease)
-
-    if _read_schema(paths.application_db) != expected_schema:
-        raise BundleVerificationError("reset did not create the current schema")
-    if paths.checkpoint_db.exists() or paths.change_journal_dir.exists():
-        raise BundleVerificationError("reset retained discarded state")
-    if any(path.read_bytes() != content for path, content in preserved.items()):
-        raise BundleVerificationError("reset mutated preserved user data")
-
-
-def _load_wheel_modules(
-    wheel: Path,
-    import_root: Path,
-) -> tuple[ModuleType, ModuleType, ModuleType]:
-    with ZipFile(wheel) as archive:
-        archive.extractall(import_root)
-    previous_modules = {
-        name: module
-        for name, module in sys.modules.items()
-        if name == "awesome_agent" or name.startswith("awesome_agent.")
-    }
-    for name in previous_modules:
-        del sys.modules[name]
-    sys.path.insert(0, str(import_root))
-    try:
-        version_module = importlib.import_module("awesome_agent.version")
-        storage_module = importlib.import_module("awesome_agent.storage")
-        paths_module = importlib.import_module("awesome_agent.paths")
-        expected_origins = {
-            version_module: import_root / "awesome_agent" / "version.py",
-            storage_module: import_root / "awesome_agent" / "storage" / "__init__.py",
-            paths_module: import_root / "awesome_agent" / "paths.py",
-        }
-        for module, expected_origin in expected_origins.items():
-            module_file = getattr(module, "__file__", None)
-            module_spec = getattr(module, "__spec__", None)
-            spec_origin = getattr(module_spec, "origin", None)
-            if not isinstance(module_file, str) or not isinstance(spec_origin, str):
-                raise BundleVerificationError("wheel module origin is unavailable")
-            if (
-                Path(module_file).resolve() != expected_origin.resolve()
-                or Path(spec_origin).resolve() != expected_origin.resolve()
-            ):
-                raise BundleVerificationError("wheel module escaped extraction root")
-    except BundleVerificationError:
-        raise
-    except Exception as error:
-        raise BundleVerificationError("wheel import failed") from error
-    finally:
-        sys.path.remove(str(import_root))
-        for name in list(sys.modules):
-            if name == "awesome_agent" or name.startswith("awesome_agent."):
-                del sys.modules[name]
-        sys.modules.update(previous_modules)
-    return version_module, storage_module, paths_module
-
-
 def _run_core_check(command: list[str], cwd: Path, diagnostic: str) -> None:
     try:
         result = subprocess.run(
@@ -305,6 +164,251 @@ def _run_core_check(command: list[str], cwd: Path, diagnostic: str) -> None:
         raise BundleVerificationError(diagnostic) from error
     if result.returncode != 0:
         raise BundleVerificationError(diagnostic)
+
+
+def _protocol_request(
+    process: subprocess.Popen[bytes],
+    *,
+    identifier: int,
+    method: str,
+    params: Mapping[str, object],
+) -> None:
+    stream = process.stdin
+    if stream is None:
+        raise BundleVerificationError("installed Core protocol input is unavailable")
+    request = {
+        "jsonrpc": "2.0",
+        "id": identifier,
+        "method": method,
+        "params": dict(params),
+    }
+    try:
+        stream.write(
+            json.dumps(
+                request,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
+        stream.flush()
+    except (OSError, UnicodeEncodeError, ValueError) as error:
+        raise BundleVerificationError(
+            "installed Core protocol request failed"
+        ) from error
+
+
+def _protocol_response(
+    frames: queue.Queue[bytes | None],
+    *,
+    identifier: int,
+) -> Mapping[str, object]:
+    deadline = time.monotonic() + _PROTOCOL_RESPONSE_TIMEOUT_SECONDS
+    for _ in range(64):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BundleVerificationError("installed Core protocol response timed out")
+        try:
+            raw = frames.get(timeout=remaining)
+        except queue.Empty as error:
+            raise BundleVerificationError(
+                "installed Core protocol response timed out"
+            ) from error
+        if raw is None:
+            raise BundleVerificationError("installed Core protocol closed early")
+        if len(raw) > _MAX_PROTOCOL_FRAME_BYTES + 1 or not raw.endswith(b"\n"):
+            raise BundleVerificationError("installed Core protocol frame is invalid")
+        try:
+            decoded = json.loads(raw, parse_constant=_reject_non_json_constant)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+            raise BundleVerificationError(
+                "installed Core protocol frame is invalid"
+            ) from error
+        if not isinstance(decoded, dict) or decoded.get("jsonrpc") != "2.0":
+            raise BundleVerificationError("installed Core protocol frame is invalid")
+        if decoded.get("method") == "event":
+            continue
+        if decoded.get("id") != identifier:
+            raise BundleVerificationError("installed Core protocol response is invalid")
+        return decoded
+    raise BundleVerificationError("installed Core emitted too many unsolicited frames")
+
+
+def _successful_protocol_value(
+    response: Mapping[str, object],
+) -> Mapping[str, object]:
+    result = response.get("result")
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        raise BundleVerificationError("installed Core protocol request was rejected")
+    value = result.get("value")
+    if not isinstance(value, dict):
+        raise BundleVerificationError("installed Core protocol response is invalid")
+    return value
+
+
+def _pump_protocol_frames(
+    stream: object,
+    frames: queue.Queue[bytes | None],
+) -> None:
+    reader = getattr(stream, "readline", None)
+    if not callable(reader):
+        frames.put(None)
+        return
+    try:
+        while True:
+            line = reader(_MAX_PROTOCOL_FRAME_BYTES + 2)
+            if not isinstance(line, bytes) or not line:
+                break
+            frames.put(line)
+    finally:
+        frames.put(None)
+
+
+def _stop_protocol_process(process: subprocess.Popen[bytes]) -> None:
+    if process.stdin is not None:
+        with suppress(OSError):
+            process.stdin.close()
+    if process.poll() is not None:
+        return
+    with suppress(OSError):
+        process.terminate()
+    try:
+        process.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        with suppress(OSError):
+            process.kill()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=2.0)
+
+
+def _verify_core_protocol_handshake(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    home: Path,
+    expected_version: str,
+) -> None:
+    cwd.mkdir(parents=True, exist_ok=False)
+    home.mkdir(parents=True, exist_ok=False)
+    excluded = {
+        "DEEPSEEK_API_KEY",
+        "MOONSHOT_API_KEY",
+        "MEM0_API_KEY",
+        "PYTHONHOME",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+    }
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name not in excluded and not name.startswith("AWESOME_")
+    }
+    environment["AWESOME_HOME"] = str(home)
+    environment["PYTHONUTF8"] = "1"
+    try:
+        process = subprocess.Popen(
+            list(command),
+            cwd=cwd,
+            env=environment,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as error:
+        raise BundleVerificationError(
+            "installed Core protocol did not start"
+        ) from error
+
+    frames: queue.Queue[bytes | None] = queue.Queue()
+    output = process.stdout
+    if output is None:
+        _stop_protocol_process(process)
+        raise BundleVerificationError("installed Core protocol output is unavailable")
+    reader = threading.Thread(
+        target=_pump_protocol_frames,
+        args=(output, frames),
+        name="release-core-protocol-reader",
+        daemon=True,
+    )
+    reader.start()
+    completed = False
+    try:
+        _protocol_request(
+            process,
+            identifier=1,
+            method="initialize",
+            params={
+                "protocol_version": 3,
+                "client_name": "awesome",
+                "client_version": expected_version,
+            },
+        )
+        initialized = _successful_protocol_value(
+            _protocol_response(frames, identifier=1)
+        )
+        if (
+            initialized.get("protocol_version") != 3
+            or initialized.get("product_version") != expected_version
+            or initialized.get("status") != "trust_required"
+        ):
+            raise BundleVerificationError("installed Core protocol identity is invalid")
+        interaction_id = initialized.get("interaction_id")
+        if not isinstance(interaction_id, str) or not interaction_id:
+            raise BundleVerificationError("installed Core trust interaction is invalid")
+
+        _protocol_request(
+            process,
+            identifier=2,
+            method="interaction.respond",
+            params={"interaction_id": interaction_id, "decision": "trust"},
+        )
+        trusted = _successful_protocol_value(_protocol_response(frames, identifier=2))
+        if trusted.get("accepted") is not True or trusted.get("status") != "resolved":
+            raise BundleVerificationError(
+                "installed Core trust interaction was not resolved"
+            )
+
+        _protocol_request(
+            process,
+            identifier=3,
+            method="application.getState",
+            params={},
+        )
+        state = _successful_protocol_value(_protocol_response(frames, identifier=3))
+        if (
+            state.get("initialized") is not True
+            or state.get("workspace_trusted") is not True
+        ):
+            raise BundleVerificationError("installed Core state is not ready")
+
+        _protocol_request(
+            process,
+            identifier=4,
+            method="shutdown",
+            params={},
+        )
+        stopped = _successful_protocol_value(_protocol_response(frames, identifier=4))
+        if stopped.get("stopped") is not True:
+            raise BundleVerificationError(
+                "installed Core shutdown was not acknowledged"
+            )
+        if process.stdin is not None:
+            with suppress(OSError):
+                process.stdin.close()
+        try:
+            return_code = process.wait(timeout=_CORE_EXIT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as error:
+            raise BundleVerificationError(
+                "installed Core did not exit after shutdown"
+            ) from error
+        if return_code != 0:
+            raise BundleVerificationError("installed Core exited unsuccessfully")
+        completed = True
+    finally:
+        if not completed:
+            _stop_protocol_process(process)
+        reader.join(timeout=2.0)
 
 
 def _verify_core_install(
@@ -381,7 +485,7 @@ scripts_by_name = {
 }
 assert scripts_by_name["awesome-core"] == "awesome_agent.protocol.stdio:main"
 assert scripts_by_name["awesome-dev"] == "awesome_agent.development.launcher:main"
-scripts = Path(sys.executable).resolve().parent
+scripts = root / ("Scripts" if sys.platform == "win32" else "bin")
 entrypoints = ("awesome-core", "awesome-core.exe", "awesome-core.cmd")
 assert any((scripts / name).is_file() for name in entrypoints)
 """
@@ -397,6 +501,39 @@ assert any((scripts / name).is_file() for name in entrypoints)
         core,
         "installed Core smoke check failed",
     )
+    storage_contract = Path(__file__).with_name("storage_contract.py").resolve()
+    _run_core_check(
+        [
+            str(python),
+            "-I",
+            str(storage_contract),
+            expected_version,
+            str(environment),
+            str(core / ".storage-contract"),
+        ],
+        core,
+        "installed Core storage contract failed",
+    )
+    scripts = _environment_scripts_directory(environment)
+    entrypoint = scripts / (
+        "awesome-core.exe" if sys.platform == "win32" else "awesome-core"
+    )
+    _verify_core_protocol_handshake(
+        [str(entrypoint)],
+        cwd=core / ".protocol-workspace",
+        home=core / ".protocol-home",
+        expected_version=expected_version,
+    )
+
+
+def _environment_scripts_directory(
+    environment: Path,
+    *,
+    platform: str = sys.platform,
+) -> Path:
+    """Locate venv scripts from its root without following the Python symlink."""
+
+    return environment / ("Scripts" if platform == "win32" else "bin")
 
 
 def resolve_executable(name: str) -> str:
@@ -460,7 +597,10 @@ def verify_release_bundle(bundle: Path, expected_version: str) -> None:
             if requirements.stat().st_size > MAX_RELEASE_REQUIREMENTS_BYTES:
                 raise BundleVerificationError("bundle requirements are too large")
             validate_locked_requirements(requirements.read_bytes())
-            validate_release_wheel(wheels[0], expected_version)
+            license_content = (payload / "LICENSE").read_bytes()
+            if (payload / "tui" / "LICENSE").read_bytes() != license_content:
+                raise BundleVerificationError("bundle license files do not match")
+            validate_release_wheel(wheels[0], expected_version, license_content)
         except ReleaseContractError as error:
             subject = "requirements" if "requirement" in str(error) else "wheel"
             raise BundleVerificationError(
@@ -485,17 +625,6 @@ def verify_release_bundle(bundle: Path, expected_version: str) -> None:
             wheels[0],
             requirements,
             expected_version,
-        )
-
-        version_module, storage_module, paths_module = _load_wheel_modules(
-            wheels[0], root / "wheel-import"
-        )
-        if expected_version != version_module.PRODUCT_VERSION:
-            raise BundleVerificationError("wheel product version is invalid")
-        verify_storage_contract(
-            storage_module,
-            paths_module,
-            root / "storage-contract",
         )
         _verify_tui(payload / "tui", expected_version)
 

@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from awesome_agent.config.resource_lock import (
+    ResourceLockTimeout,
+    ResourceLockUnavailable,
+)
+from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
     ToolErrorCode,
@@ -12,7 +18,7 @@ from awesome_agent.core.tools.contracts import (
     ToolSpec,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure
-from awesome_agent.core.tools.registry import ToolRegistry
+from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
 from awesome_agent.memory.models import (
     MemoryMutationResult,
     MemoryMutationStatus,
@@ -26,6 +32,7 @@ MEMORY_TOOL_NAMES = (
     "memory_remove",
     "memory_replace",
 )
+_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS = 23.0
 
 
 class MemoryListArguments(BaseModel):
@@ -57,67 +64,96 @@ class MemoryRemoveArguments(BaseModel):
 def refresh_local_memory_tools(
     registry: ToolRegistry,
     service: LocalMemoryService,
+    *,
+    enabled: bool | None = None,
 ) -> None:
-    for name in MEMORY_TOOL_NAMES:
-        registry.unregister(name)
-    if not service.enabled:
-        return
-    registry.register(
-        spec=ToolSpec(
-            name="memory_list",
-            description="List visible local memory entries and their current hash.",
-            input_schema=MemoryListArguments.model_json_schema(),
-            capability="memory.read",
-            read_only=True,
-            display_metadata={"category": "agent_core"},
-        ),
-        input_model=MemoryListArguments,
-        handler=_list_handler(service),
+    selected_enabled = service.enabled if enabled is None else enabled
+    registry.replace_exact_set(
+        MEMORY_TOOL_NAMES,
+        _registered_local_memory_tools(service) if selected_enabled else (),
     )
-    registry.register(
-        spec=ToolSpec(
-            name="memory_add",
-            description=(
-                "Add local memory only when the current user explicitly asks "
-                "to remember it. Requires the last observed hash."
-            ),
-            input_schema=MemoryAddArguments.model_json_schema(),
-            capability="memory.write",
-            read_only=False,
-            display_metadata={"category": "agent_core"},
-        ),
-        input_model=MemoryAddArguments,
-        handler=_add_handler(service),
+
+
+def validate_local_memory_tools(
+    registry: ToolRegistry,
+    service: LocalMemoryService,
+    *,
+    enabled: bool,
+) -> None:
+    """Preflight one local-memory visibility change without publishing it."""
+
+    registry.validate_exact_set(
+        MEMORY_TOOL_NAMES,
+        _registered_local_memory_tools(service) if enabled else (),
     )
-    registry.register(
-        spec=ToolSpec(
-            name="memory_replace",
-            description=(
-                "Replace a local memory entry only on an explicit current-user "
-                "request. Requires its ID and last observed hash."
+
+
+def _registered_local_memory_tools(
+    service: LocalMemoryService,
+) -> tuple[RegisteredTool, ...]:
+    return (
+        RegisteredTool(
+            spec=ToolSpec(
+                name="memory_list",
+                description=(
+                    "List visible local memory entries and their current hash."
+                ),
+                input_schema=MemoryListArguments.model_json_schema(),
+                capability="memory.read",
+                read_only=True,
+                display_metadata={"category": "agent_core"},
             ),
-            input_schema=MemoryReplaceArguments.model_json_schema(),
-            capability="memory.write",
-            read_only=False,
-            display_metadata={"category": "agent_core"},
+            input_model=MemoryListArguments,
+            handler=_list_handler(service),
         ),
-        input_model=MemoryReplaceArguments,
-        handler=_replace_handler(service),
-    )
-    registry.register(
-        spec=ToolSpec(
-            name="memory_remove",
-            description=(
-                "Remove a local memory entry only on an explicit current-user "
-                "request. Requires its ID and last observed hash."
+        RegisteredTool(
+            spec=ToolSpec(
+                name="memory_add",
+                description=(
+                    "Add local memory only when the current user explicitly asks "
+                    "to remember it. Requires the last observed hash."
+                ),
+                input_schema=MemoryAddArguments.model_json_schema(),
+                capability="memory.write",
+                read_only=False,
+                display_metadata={"category": "agent_core"},
             ),
-            input_schema=MemoryRemoveArguments.model_json_schema(),
-            capability="memory.write",
-            read_only=False,
-            display_metadata={"category": "agent_core"},
+            input_model=MemoryAddArguments,
+            handler=_add_handler(service),
+            cancellation_grace_seconds=_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS,
         ),
-        input_model=MemoryRemoveArguments,
-        handler=_remove_handler(service),
+        RegisteredTool(
+            spec=ToolSpec(
+                name="memory_replace",
+                description=(
+                    "Replace a local memory entry only on an explicit current-user "
+                    "request. Requires its ID and last observed hash."
+                ),
+                input_schema=MemoryReplaceArguments.model_json_schema(),
+                capability="memory.write",
+                read_only=False,
+                display_metadata={"category": "agent_core"},
+            ),
+            input_model=MemoryReplaceArguments,
+            handler=_replace_handler(service),
+            cancellation_grace_seconds=_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS,
+        ),
+        RegisteredTool(
+            spec=ToolSpec(
+                name="memory_remove",
+                description=(
+                    "Remove a local memory entry only on an explicit current-user "
+                    "request. Requires its ID and last observed hash."
+                ),
+                input_schema=MemoryRemoveArguments.model_json_schema(),
+                capability="memory.write",
+                read_only=False,
+                display_metadata={"category": "agent_core"},
+            ),
+            input_model=MemoryRemoveArguments,
+            handler=_remove_handler(service),
+            cancellation_grace_seconds=_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS,
+        ),
     )
 
 
@@ -128,7 +164,7 @@ def _list_handler(service: LocalMemoryService) -> ToolHandler:
     ) -> ToolOutput:
         assert isinstance(arguments, MemoryListArguments)
         _require_workspace(service, context)
-        document = service.snapshot(arguments.scope)
+        document = await _run_memory_call(lambda: service.snapshot(arguments.scope))
         content = json.dumps(
             {
                 "scope": arguments.scope.value,
@@ -153,10 +189,12 @@ def _add_handler(service: LocalMemoryService) -> ToolHandler:
     ) -> ToolOutput:
         assert isinstance(arguments, MemoryAddArguments)
         _require_mutation_context(service, context)
-        result = service.add(
-            arguments.scope,
-            arguments.content,
-            expected_hash=arguments.expected_hash,
+        result = await _run_memory_call(
+            lambda: service.add(
+                arguments.scope,
+                arguments.content,
+                expected_hash=arguments.expected_hash,
+            )
         )
         return _mutation_output(result)
 
@@ -170,11 +208,13 @@ def _replace_handler(service: LocalMemoryService) -> ToolHandler:
     ) -> ToolOutput:
         assert isinstance(arguments, MemoryReplaceArguments)
         _require_mutation_context(service, context)
-        result = service.replace(
-            arguments.scope,
-            arguments.entry_id,
-            arguments.content,
-            expected_hash=arguments.expected_hash,
+        result = await _run_memory_call(
+            lambda: service.replace(
+                arguments.scope,
+                arguments.entry_id,
+                arguments.content,
+                expected_hash=arguments.expected_hash,
+            )
         )
         return _mutation_output(result)
 
@@ -188,14 +228,33 @@ def _remove_handler(service: LocalMemoryService) -> ToolHandler:
     ) -> ToolOutput:
         assert isinstance(arguments, MemoryRemoveArguments)
         _require_mutation_context(service, context)
-        result = service.remove(
-            arguments.scope,
-            arguments.entry_id,
-            expected_hash=arguments.expected_hash,
+        result = await _run_memory_call(
+            lambda: service.remove(
+                arguments.scope,
+                arguments.entry_id,
+                expected_hash=arguments.expected_hash,
+            )
         )
         return _mutation_output(result)
 
     return handler
+
+
+async def _run_memory_call[ResultT](call: Callable[[], ResultT]) -> ResultT:
+    try:
+        return await run_cancellation_safe_blocking_call(call)
+    except ResourceLockTimeout as error:
+        raise ExpectedToolFailure(
+            ToolErrorCode.TIMEOUT,
+            "Local memory is being changed by another Awesome process.",
+            retryable=True,
+        ) from error
+    except ResourceLockUnavailable as error:
+        raise ExpectedToolFailure(
+            ToolErrorCode.STATE_UNAVAILABLE,
+            "Local memory cannot be accessed safely.",
+            retryable=False,
+        ) from error
 
 
 def _require_workspace(

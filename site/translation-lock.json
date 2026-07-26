@@ -6,14 +6,14 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "b0d894246938b951caa0448e35191c2bcb6011df2c3b1d5b73f57cc82c8e7a84",
-      "chinese_sha256": "3af8510bdccac9a2fc57605afa0239612eff9a5a2d91223d315d1a47028adb10"
+      "english_sha256": "c5d7a31d4faf8cbf7e17f655cd8820b4cfd39bf83ec40136e0399699d82109d1",
+      "chinese_sha256": "ad670a7c5b5bf14d24964c7f2a22214fb04cbe9adf493eb6e743601bba548545"
     },
     {
       "english_source": "README.md",
       "chinese_source": "README.zh-CN.md",
-      "english_sha256": "0bcfc30d83dc7ab1c93a87ffa4146a64a21546c922758395840b82613208748a",
-      "chinese_sha256": "b992c81c92c2f582720f267c9638a30d353d84cc5ee1e7f5e3e4a665f556e8b3"
+      "english_sha256": "c9411627cf3ae29f3e1ba9adb335ba037bd64c525ecfd7da57f97fd0e6b0de83",
+      "chinese_sha256": "df6947a536209eeabacdca843f85d82107067d6f94c9fc63bfb91eeef2caa5e3"
     },
     {
       "english_source": "docs/README.md",
@@ -30,38 +30,38 @@
     {
       "english_source": "docs/architecture/application-and-agent.md",
       "chinese_source": "docs/architecture/application-and-agent.zh-CN.md",
-      "english_sha256": "c9716a371468ec08213085b2790c6196c8f12280f8839a2bfb85e096a8108681",
-      "chinese_sha256": "1bd645c65ec34ea00e791b63a340fb9e26981ab164ba4686d5795a78accb4de4"
+      "english_sha256": "8d252cbe727c21807ccefaa5b83029047da5b18a10a2fd575330d16c4bee7253",
+      "chinese_sha256": "2069083223b62e743eafc6c7c30f07d094c09f6e9e870972da26c17c1f6e644f"
     },
     {
       "english_source": "docs/architecture/context-model-and-extensions.md",
       "chinese_source": "docs/architecture/context-model-and-extensions.zh-CN.md",
-      "english_sha256": "195c807805aa59e319d1a8126dd4aec912638f5745bcfe9fd1815019aeba9f6f",
-      "chinese_sha256": "be4ae06fe9be1a2fade24b205380cb5dcb5507eeb2710e370106342e0e379aa2"
+      "english_sha256": "366a6e58a3121750fb5d6c0c120a649cf624a22d0813e653c5a0326b66d0bcce",
+      "chinese_sha256": "dbd54155ab247f15791ecc7272cee7b4e5d3272159059155312b54de87d86a7d"
     },
     {
       "english_source": "docs/architecture/protocol-and-tui.md",
       "chinese_source": "docs/architecture/protocol-and-tui.zh-CN.md",
-      "english_sha256": "2288c8f81261cfd7e1a2e2092f4e6b1d33d881d191af9b85ea99dc35b77adcd5",
-      "chinese_sha256": "14d31aa967e1df9131b44b3555c592399623c39ecec0204f59126c8636ea70a3"
+      "english_sha256": "1ce04d2bf9f21685aa0bc3bbef00bc25ad300f17de3bae59b69db2b9da77ccb3",
+      "chinese_sha256": "b48a9fba952ad9de1690d97aeaad608ab607c621882486ad7a8bfb4c423d22e4"
     },
     {
       "english_source": "docs/architecture/request-lifecycles.md",
       "chinese_source": "docs/architecture/request-lifecycles.zh-CN.md",
-      "english_sha256": "b3594f455d827d49e13f6609e30c1577924b100784de4f89ba660c210ae172fc",
-      "chinese_sha256": "78371fd0534a92f2918df888f7f82615e85520e494215b77b195d8fa10a4acec"
+      "english_sha256": "bcc780410f24d9f4e66b27ebd997cd33480af6e26c224e27e8d4230251610552",
+      "chinese_sha256": "91bc2b68fd4c7819f55a0de882695a3d7ff96b2f390a6edad48778bc09cd2a31"
     },
     {
       "english_source": "docs/architecture/security-and-dependencies.md",
       "chinese_source": "docs/architecture/security-and-dependencies.zh-CN.md",
-      "english_sha256": "14a1b74496caa128657583e387fb1977168c3d932be26cc64119b6a55ce17268",
-      "chinese_sha256": "efc901ca1b6c9e5032aab11bdca035c38ef53203bd1965579d747dc91de71f1b"
+      "english_sha256": "8e2094c8d48a0c62fa3b9252506d99e28d3cbddbd8a0c4b173b6df30b5c00171",
+      "chinese_sha256": "1552c4b615caf27e60f48e51f68df5b95b500ff283cb719877049ccbed25a871"
     },
     {
       "english_source": "docs/architecture/storage-and-recovery.md",
       "chinese_source": "docs/architecture/storage-and-recovery.zh-CN.md",
-      "english_sha256": "f7045a92d96f984e5b2b88bebb1ced9a33236792bc30cb36ad57382ab0a8a693",
-      "chinese_sha256": "4a7b311f26e8a4e9012c8a46fb1dccb3ed9dfb8e671cf6b3e6ef94989b6aead0"
+      "english_sha256": "04d79e66701dc5f89bdce9827e7d44c58c7172e01058ed11895ca67c4c5cbac2",
+      "chinese_sha256": "be4dec24ba9a000b2ad39c82b950b2bff79aeff5e9513a2b3154660c6b606144"
     },
     {
       "english_source": "docs/architecture/tools-and-changes.md",
@@ -108,14 +108,14 @@
     {
       "english_source": "docs/development/extending-awesome.md",
       "chinese_source": "docs/development/extending-awesome.zh-CN.md",
-      "english_sha256": "16b934c1ce3bfb5f20ca24432eaa6d22a67db7353ae69af3e9283d8f603bc7da",
-      "chinese_sha256": "df8cdf9e05a444b1e93e86ed86b27681ac77f36283c13ad268e1ae1fcae56334"
+      "english_sha256": "972cfec415617a544a0c29ded25b7b65f44b3dc676e07d660514a04d5ba0cba1",
+      "chinese_sha256": "be46a1e164a1dccb9cec53432e7847b567659ecdba61ff6e578cf8408c6cd99d"
     },
     {
       "english_source": "docs/development/release.md",
       "chinese_source": "docs/development/release.zh-CN.md",
-      "english_sha256": "dbd4a80e5a40e2bb283ba872d33a6daf80fab1fac55bd3f829382f30e521d3f1",
-      "chinese_sha256": "f7e90da33d5bd19489d46d4679b9c0d646f96e2a76077d34c4e154916a49c7fe"
+      "english_sha256": "dcc690b0538e327fae03adc05c00e7d9c05d8312afe9375117334a69a5d7ae62",
+      "chinese_sha256": "e0a312817aaf01da851242ccfe1ec2756632647e3232d555136c103c8e3809a6"
     },
     {
       "english_source": "docs/development/setup.md",
@@ -126,32 +126,32 @@
     {
       "english_source": "docs/development/testing.md",
       "chinese_source": "docs/development/testing.zh-CN.md",
-      "english_sha256": "9b960da1163f23dcabbdaaa853ce2252fff5bf908de26517bb1d39574b4df13a",
-      "chinese_sha256": "1b757b204147e008119aa78f35b153afb40899e8b6963bdf72f4a246d735f41d"
+      "english_sha256": "b4ba0effcf89d5ac7aad2fe9f47c8ef25220842caf5e9072e540e1b155bcbcd9",
+      "chinese_sha256": "c8e3ed877d3436f32018e0ad115844220968338e28bcea4b8b38f44541950ce4"
     },
     {
       "english_source": "docs/extensions/README.md",
       "chinese_source": "docs/extensions/README.zh-CN.md",
-      "english_sha256": "ae37cfb9f85e7e554772084f09f54ac3cc95716a85bdb959f58b29e10cad370d",
-      "chinese_sha256": "84f1458fec80ce465aa6dda40852456969351f7aacb9ae50693f424ba08822f9"
+      "english_sha256": "cd812e6de1e2fef223313e32faa6e48891c994a8a1c1c0f69b14f2dc0e713ca2",
+      "chinese_sha256": "ca84adf842338456671647e777bbda4ab8bc92bd440d20a25b5a4ed0761d3965"
     },
     {
       "english_source": "docs/extensions/mcp.md",
       "chinese_source": "docs/extensions/mcp.zh-CN.md",
-      "english_sha256": "b42c5be49c5c46a5f0081d18703a712708e3bccdf5c4c52d31d5169ac5b2285c",
-      "chinese_sha256": "d0fec68874ad82b289e0bcf246b9f98e73d0e08636e0a993535ae6e4676ff2c5"
+      "english_sha256": "71c8acaf51d34ab22ffcc6c5c2d9a6b03a614647c953932d39ed779fd8b171f5",
+      "chinese_sha256": "c2619de6b10bcaff90ab29946da26978723683e9846a1d4b73567b3d3fd05aeb"
     },
     {
       "english_source": "docs/extensions/memory.md",
       "chinese_source": "docs/extensions/memory.zh-CN.md",
-      "english_sha256": "68c007ed4a0745149a27450b7a82b65bad18d0e538142264310c1c6d29901ab9",
-      "chinese_sha256": "39e0f406875004367ccd89267e1b63f0c98e1264e10085dfbb92c2d4f4e266bf"
+      "english_sha256": "ebdb326366f7afac72564f12a8ac74c9081ab257c8e3f230e1ce2213118d5c33",
+      "chinese_sha256": "ab77f4717a2d7505dddd92e82ba2558dd61243daa358f78448d568f39d7b38a5"
     },
     {
       "english_source": "docs/extensions/skills.md",
       "chinese_source": "docs/extensions/skills.zh-CN.md",
-      "english_sha256": "d6c8b195b4893d141f2cb732e77e46f153a999bcb06b1e252e07e6952e2ee4e9",
-      "chinese_sha256": "d2d992bbcb60e194e4d16c2337be4b50308352367cc372ef621bfb46c7b8fa2c"
+      "english_sha256": "08ec683dbfebea1fc56fc0f48d226f9964811fe3b4a6c3d0a8348d80237f2963",
+      "chinese_sha256": "bd3489a21422dcd8c9341c5015a81b4b7a88c9c8d6f60dfd692153a43ffca86b"
     },
     {
       "english_source": "docs/getting-started/README.md",
@@ -162,8 +162,8 @@
     {
       "english_source": "docs/getting-started/installation.md",
       "chinese_source": "docs/getting-started/installation.zh-CN.md",
-      "english_sha256": "9f608b2e60f73678a90bc519ceac49cf32ac97b260d0ebcc632271554d7bd4c0",
-      "chinese_sha256": "eef6a40fad9767f2d3664f52046c6a58350c50b9f07f2a2122039703e9d6ea2a"
+      "english_sha256": "1f62cdc2f2103b74c4f098fc62ca8a2c60f67bce18d75bf06b405e8f53e3970f",
+      "chinese_sha256": "3c24af8aed32408da36265d62abf0c8f447ed9521430aa0e64031f1f31dfb26f"
     },
     {
       "english_source": "docs/getting-started/quickstart.md",
@@ -180,8 +180,8 @@
     {
       "english_source": "docs/reference/built-in-tools.md",
       "chinese_source": "docs/reference/built-in-tools.zh-CN.md",
-      "english_sha256": "bdbe58b7158a776ee879220e40920a0a55172613eaef18414f81478616c55f35",
-      "chinese_sha256": "af2f7ade05ecee14025bc4fd95dfe57553b7baf0a29a45d943e2ac1a244fedb1"
+      "english_sha256": "1262d139ec1029b98cf017a1d7c03cc41973809bf76556436567765bfa6797b4",
+      "chinese_sha256": "a458c79159c9c154941a2701d6362e6059cdc136414cd2b799f3a7a5336029fc"
     },
     {
       "english_source": "docs/reference/cli.md",
@@ -204,8 +204,8 @@
     {
       "english_source": "docs/reference/files-and-state.md",
       "chinese_source": "docs/reference/files-and-state.zh-CN.md",
-      "english_sha256": "3120dec9d941e86397b50298e9c4f3c1be7c7d97c606ec7fdc2db7bd7ee6cecc",
-      "chinese_sha256": "75857fb5b671352d409166b2793837ae96ad89d0cda83a661c81056c9d4bd7ac"
+      "english_sha256": "67bfe966aa8aefda3dae61b0916dd083487468c18b194b3f9027bdf46caf30b9",
+      "chinese_sha256": "ac6b1663c61a10bc98ac7372caf505b2bb94938ee35b2769643389fbd1deea44"
     },
     {
       "english_source": "docs/reference/permission-modes.md",
@@ -216,14 +216,14 @@
     {
       "english_source": "docs/reference/protocol.md",
       "chinese_source": "docs/reference/protocol.zh-CN.md",
-      "english_sha256": "de683a605b8f72f1bdab9c9518a10336da1d525ca565715ceaea7afc8811f65d",
-      "chinese_sha256": "7b6fa158f2b5254dede7104308f546d20821a617800b105cd9e1978995d4d698"
+      "english_sha256": "c363d4787c33d43032904aad7d91c94460b6b23979771811c45434d8317d33ab",
+      "chinese_sha256": "7b17bbde4fbd6cd139398f4355f36f012c9e044732fc5c6ff94b808011dbb8c9"
     },
     {
       "english_source": "docs/roadmap.md",
       "chinese_source": "docs/roadmap.zh-CN.md",
-      "english_sha256": "5501c543346b833fc6054a9b1b9cf242416f169e7e7ade7ba1cef56a2bbcb7bd",
-      "chinese_sha256": "fc92f65070885346bed82bc4e3b110ca1f4ad8ec40b4c53582e120eade5e9959"
+      "english_sha256": "2a384cd14002ae2f07058d59ec89607a3a755f362bbd5ca77a2ed3e7e72fb38b",
+      "chinese_sha256": "ca36e4cc107d69d00369c19188939276162be2feded5e3bf4ac1ec507778a70e"
     },
     {
       "english_source": "docs/user-guide/README.md",
@@ -246,8 +246,8 @@
     {
       "english_source": "docs/user-guide/configuration.md",
       "chinese_source": "docs/user-guide/configuration.zh-CN.md",
-      "english_sha256": "e8f126d06d24494c8050d139d6aeb50cfa7cd03f35769ff322387d8cfcf44ffd",
-      "chinese_sha256": "4db5d1d8f9ebe3981a41491a59cac2ee19bff559969a228f3f2cbec570de46a9"
+      "english_sha256": "b054186adb252365153208ebe96989521e5572c03af14c021dc8bc0251c5a029",
+      "chinese_sha256": "e3b67559d82acbf5b1bf214d2a634de7ec447e766c5532f4a03a941e012b382a"
     },
     {
       "english_source": "docs/user-guide/permissions.md",
@@ -264,20 +264,20 @@
     {
       "english_source": "docs/user-guide/troubleshooting.md",
       "chinese_source": "docs/user-guide/troubleshooting.zh-CN.md",
-      "english_sha256": "cf4f97023a3c707fd948acd46c0c796cc17e8b013ee94871f732f49c7da463d5",
-      "chinese_sha256": "ba7bc8b2f2a1b6519af9a51770c892458adfddf976dea9d8cd76914cbc71b922"
+      "english_sha256": "ff77213e2d3a37963eba9792a9672b96b1df24277a56a17d22219fa4b0cee280",
+      "chinese_sha256": "fc93d4988277020686531a8215e28e0b8f87f57c4b380dc15ed1d6b47cbadad4"
     },
     {
       "english_source": "site/content/index.mdx",
       "chinese_source": "site/content/index.zh-cn.mdx",
-      "english_sha256": "c6febc6342c2bc92664ac4b697394fbaedb1867fbf769a5e274abf2d2ecd51a7",
-      "chinese_sha256": "f6a6bf073faea4920004f2e1f8744eac3eccd179f0f39a30a24f8c75cb8ea309"
+      "english_sha256": "5593fd63e5d94e2cbcc12325099abe709bd0c1c266fdb0ca508ec3fbcee991d4",
+      "chinese_sha256": "229a3d3bcde74cd051eb8d4d128236ff174733ca2408fcda2f8d50ac04ef06e1"
     },
     {
       "english_source": "site/homepage-content.en.json",
       "chinese_source": "site/homepage-content.zh-CN.json",
-      "english_sha256": "41c15fb951507d81bffc89783671171be1762dfcde471a52b4c5ba810b6a5bfd",
-      "chinese_sha256": "28ff1a252d249e90f3295cd6f7466648e7165eabc32c28dd443cc24fcec683bf"
+      "english_sha256": "74b85f09f6365e89592b7107749cd54464b0a33122c0a1074fb897a516d4d813",
+      "chinese_sha256": "6a08c33ea08e28af3ed56c1e615698f1e42aa71ab07783b463f9c69de4e10c55"
     }
   ]
 }

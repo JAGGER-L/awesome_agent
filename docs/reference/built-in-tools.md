@@ -61,10 +61,13 @@ A result has:
 
 The stable built-in error codes are `invalid_arguments`, `not_found`,
 `workspace_not_trusted`, `workspace_escape`, `permission_denied`, `conflict`,
-`timeout`, `execution_failed`, `uncertain_outcome`, `memory_disabled`,
-`memory_conflict`, `memory_rejected`, and `cancelled`. `uncertain_outcome` is
-primarily an MCP boundary: it means an external side effect may have happened
-and must not be replayed automatically.
+`timeout`, `state_unavailable`, `execution_failed`, `uncertain_outcome`,
+`memory_disabled`, `memory_conflict`, `memory_rejected`, and `cancelled`.
+`timeout` is retryable when another process holds a local-Memory mutation lock;
+`state_unavailable` means the lock sidecar or platform locking boundary could
+not be used safely and is not retryable. `uncertain_outcome` is primarily an
+MCP boundary: it means an external side effect may have happened and must not
+be replayed automatically.
 
 Ordinary handlers have a 30-second outer deadline. `execute` supplies a dynamic
 deadline described below. Cancellation is propagated after bounded cleanup;

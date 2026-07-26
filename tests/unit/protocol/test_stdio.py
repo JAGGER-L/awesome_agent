@@ -7,6 +7,7 @@ import threading
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -37,6 +38,7 @@ from awesome_agent.application.contracts import (
 from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
 from awesome_agent.protocol import stdio
+from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
 from awesome_agent.protocol.stdio import (
     JsonLineWriter,
     ProtocolEventSink,
@@ -515,20 +517,50 @@ async def test_fragmented_ndjson_malformed_duplicate_and_shutdown() -> None:
         },
     )
     duplicate = _request(1, "application.getState", {})
+    non_json_number = (
+        b'{"jsonrpc":"2.0","id":9,"method":"application.getState",'
+        b'"params":{"value":NaN}}\n'
+    )
     shutdown = _request(2, "shutdown", {})
-    reader = Chunks(first[:7], first[7:] + b"not json\n" + duplicate + shutdown)
+    reader = Chunks(
+        first[:7],
+        first[7:] + b"not json\n" + non_json_number + duplicate + shutdown,
+    )
     output = Output()
     facade = Facade()
 
     await serve_stdio(facade, reader=reader, writer=JsonLineWriter(output))
 
     frames = [json.loads(frame) for frame in output.frames]
-    assert [frame.get("id") for frame in frames] == [1, None, 1, 2]
+    assert [frame.get("id") for frame in frames] == [1, None, None, 1, 2]
     assert frames[1]["error"]["code"] == -32700
-    assert frames[2]["error"]["code"] == -32600
-    assert frames[3]["result"] == {"ok": True, "value": {"stopped": True}}
+    assert frames[2]["error"]["code"] == -32700
+    assert frames[3]["error"]["code"] == -32600
+    assert frames[4]["result"] == {"ok": True, "value": {"stopped": True}}
     assert facade.shutdown_calls == 1
     assert all(frame.endswith(b"\n") for frame in output.frames)
+
+
+@pytest.mark.asyncio
+async def test_deeply_nested_json_is_rejected_without_stopping_host() -> None:
+    nested = b"[" * 100_000 + b"0" + b"]" * 100_000 + b"\n"
+    output = Output()
+    facade = Facade()
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(nested, _request(2, "shutdown", {})),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = [json.loads(frame) for frame in output.frames]
+    assert frames[0]["error"] == {
+        "code": -32700,
+        "message": "Parse error",
+    }
+    assert frames[1]["id"] == 2
+    assert frames[1]["result"] == {"ok": True, "value": {"stopped": True}}
+    assert facade.shutdown_calls == 1
 
 
 @pytest.mark.asyncio
@@ -554,6 +586,238 @@ async def test_event_and_response_share_one_serialized_protocol_writer() -> None
     assert frames[1]["params"]["event_id"] == "event_1"
     assert frames[2]["id"] == 1
     assert facade.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_oversized_response_is_replaced_before_reaching_transport() -> None:
+    class OversizedDispatcher(JsonRpcDispatcher):
+        def __init__(self) -> None:
+            pass
+
+        async def dispatch(self, value: object) -> dict[str, Any] | None:
+            del value
+            return {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "ok": True,
+                    "value": {"content": "x" * stdio.MAX_JSON_LINE_BYTES},
+                },
+            }
+
+    request = {"jsonrpc": "2.0", "id": 1, "method": "command.execute"}
+    request_ids = stdio._RequestIdTracker()
+    assert request_ids.accept(request) is None
+    output = Output()
+
+    response = await stdio._dispatch_request(
+        OversizedDispatcher(),
+        JsonLineWriter(output),
+        request_ids,
+        request,
+        1,
+    )
+
+    assert response is not None
+    assert response["result"] == {
+        "ok": False,
+        "error": {
+            "code": "result_too_large",
+            "message": "The result exceeds the protocol frame limit.",
+            "retryable": False,
+            "data": {"maximum_bytes": stdio.MAX_JSON_LINE_BYTES},
+        },
+    }
+    assert len(output.frames) == 1
+    assert len(output.frames[0].removesuffix(b"\n")) <= stdio.MAX_JSON_LINE_BYTES
+    assert request_ids.accept(request) == 1
+
+
+@pytest.mark.asyncio
+async def test_nonfinite_response_is_replaced_with_typed_internal_error() -> None:
+    class NonfiniteDispatcher(JsonRpcDispatcher):
+        def __init__(self) -> None:
+            pass
+
+        async def dispatch(self, value: object) -> dict[str, Any] | None:
+            del value
+            return {
+                "jsonrpc": "2.0",
+                "id": "finite_response",
+                "result": {"ok": True, "value": {"usage": float("inf")}},
+            }
+
+    request = {
+        "jsonrpc": "2.0",
+        "id": "finite_response",
+        "method": "application.getState",
+    }
+    request_ids = stdio._RequestIdTracker()
+    assert request_ids.accept(request) is None
+    output = Output()
+
+    response = await stdio._dispatch_request(
+        NonfiniteDispatcher(),
+        JsonLineWriter(output),
+        request_ids,
+        request,
+        "finite_response",
+    )
+
+    assert response is not None
+    assert response["result"] == {
+        "ok": False,
+        "error": {
+            "code": "internal_error",
+            "message": "The result could not be represented by the protocol.",
+            "retryable": False,
+            "data": {},
+        },
+    }
+    assert len(output.frames) == 1
+    assert b"Infinity" not in output.frames[0]
+    assert request_ids.accept(request) == "finite_response"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unsafe_number",
+    [
+        stdio.MAX_JSON_LINE_BYTES * 0 + 9_007_199_254_740_992,
+        float(9_007_199_254_740_992),
+    ],
+)
+async def test_unsafe_integer_response_is_replaced_with_typed_internal_error(
+    unsafe_number: int | float,
+) -> None:
+    class UnsafeIntegerDispatcher(JsonRpcDispatcher):
+        def __init__(self) -> None:
+            pass
+
+        async def dispatch(self, value: object) -> dict[str, Any] | None:
+            del value
+            return {
+                "jsonrpc": "2.0",
+                "id": "unsafe_integer",
+                "result": {"ok": True, "value": {"usage": unsafe_number}},
+            }
+
+    request = {
+        "jsonrpc": "2.0",
+        "id": "unsafe_integer",
+        "method": "application.getState",
+    }
+    request_ids = stdio._RequestIdTracker()
+    assert request_ids.accept(request) is None
+    output = Output()
+
+    response = await stdio._dispatch_request(
+        UnsafeIntegerDispatcher(),
+        JsonLineWriter(output),
+        request_ids,
+        request,
+        "unsafe_integer",
+    )
+
+    assert response is not None
+    assert response["result"] == {
+        "ok": False,
+        "error": {
+            "code": "internal_error",
+            "message": "The result could not be represented by the protocol.",
+            "retryable": False,
+            "data": {},
+        },
+    }
+    assert len(output.frames) == 1
+    assert request_ids.accept(request) == "unsafe_integer"
+
+
+@pytest.mark.asyncio
+async def test_protocol_writer_recursively_rejects_non_interoperable_json() -> None:
+    deep: object = 0
+    for _ in range(70):
+        deep = [deep]
+    cases = (
+        {"value": 9_007_199_254_740_992},
+        {"value": float(9_007_199_254_740_992)},
+        cast(dict[str, object], {1: "non-string key"}),
+        {"value": "\ud800"},
+        {"value": deep},
+        {"value": ("tuple",)},
+    )
+
+    for value in cases:
+        output = Output()
+        with pytest.raises(ValueError, match="Protocol frame"):
+            await JsonLineWriter(output).send(value)
+        assert output.frames == []
+
+
+@pytest.mark.asyncio
+async def test_protocol_writer_serializes_one_validated_plain_snapshot() -> None:
+    class MutatingFrame(dict[str, object]):
+        calls = 0
+
+        def items(self) -> Any:
+            self.calls += 1
+
+            def first_traversal() -> Any:
+                yield "value", 1
+                self["value"] = 9_007_199_254_740_992
+
+            return first_traversal()
+
+    value = MutatingFrame(value=1)
+    output = Output()
+
+    await JsonLineWriter(output).send(value)
+
+    assert value.calls == 1
+    assert value["value"] == 9_007_199_254_740_992
+    assert json.loads(output.frames[0]) == {"value": 1}
+
+
+@pytest.mark.asyncio
+async def test_protocol_writer_accepts_safe_integer_and_finite_float_boundaries() -> (
+    None
+):
+    output = Output()
+
+    await JsonLineWriter(output).send(
+        {
+            "minimum": -9_007_199_254_740_991,
+            "maximum": 9_007_199_254_740_991,
+            "integral_float": 1.0,
+            "fractional_float": 0.5,
+        }
+    )
+
+    assert json.loads(output.frames[0]) == {
+        "minimum": -9_007_199_254_740_991,
+        "maximum": 9_007_199_254_740_991,
+        "integral_float": 1.0,
+        "fractional_float": 0.5,
+    }
+
+
+@pytest.mark.asyncio
+async def test_protocol_writer_enforces_utf8_content_byte_limit_before_output() -> None:
+    output = Output()
+    writer = JsonLineWriter(output)
+    overhead = len(b'{"value":""}')
+    exact = "x" * (stdio.MAX_JSON_LINE_BYTES - overhead)
+
+    await writer.send({"value": exact})
+
+    assert len(output.frames[0].removesuffix(b"\n")) == stdio.MAX_JSON_LINE_BYTES
+    output.frames.clear()
+    multibyte = "\U0001f600" * ((stdio.MAX_JSON_LINE_BYTES - overhead) // 4 + 1)
+
+    with pytest.raises(ValueError, match="Protocol frame exceeds"):
+        await writer.send({"value": multibyte})
+
+    assert output.frames == []
 
 
 @pytest.mark.asyncio

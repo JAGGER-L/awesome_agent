@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from awesome_agent.config.resource_lock import exclusive_resource_lock
 from awesome_agent.memory.models import (
     MemoryDocument,
     MemoryEntry,
@@ -58,19 +59,20 @@ class LocalMemoryFile:
         return self._read().document
 
     def add(self, content: str, *, expected_hash: str) -> MemoryMutationResult:
-        parsed = self._read_for_mutation(expected_hash)
-        if isinstance(parsed, MemoryMutationResult):
-            return parsed
-        entry_id = self._id_factory()
-        entry = MemoryEntry(id=entry_id, content=content)
-        if any(item.id == entry.id for item in parsed.document.entries):
-            raise MemoryDocumentInvalid("duplicate_generated_id")
-        return self._write_entries(
-            parsed,
-            (*parsed.document.entries, entry),
-            status=MemoryMutationStatus.ADDED,
-            entry_id=entry.id,
-        )
+        with exclusive_resource_lock(self.path):
+            parsed = self._read_for_mutation(expected_hash)
+            if isinstance(parsed, MemoryMutationResult):
+                return parsed
+            entry_id = self._id_factory()
+            entry = MemoryEntry(id=entry_id, content=content)
+            if any(item.id == entry.id for item in parsed.document.entries):
+                raise MemoryDocumentInvalid("duplicate_generated_id")
+            return self._write_entries(
+                parsed,
+                (*parsed.document.entries, entry),
+                status=MemoryMutationStatus.ADDED,
+                entry_id=entry.id,
+            )
 
     def replace(
         self,
@@ -79,26 +81,27 @@ class LocalMemoryFile:
         *,
         expected_hash: str,
     ) -> MemoryMutationResult:
-        parsed = self._read_for_mutation(expected_hash)
-        if isinstance(parsed, MemoryMutationResult):
-            return parsed
-        existing = next(
-            (item for item in parsed.document.entries if item.id == entry_id),
-            None,
-        )
-        if existing is None:
-            return self._not_found(parsed, entry_id)
-        replacement = MemoryEntry(id=entry_id, content=content)
-        entries = tuple(
-            replacement if item.id == entry_id else item
-            for item in parsed.document.entries
-        )
-        return self._write_entries(
-            parsed,
-            entries,
-            status=MemoryMutationStatus.REPLACED,
-            entry_id=entry_id,
-        )
+        with exclusive_resource_lock(self.path):
+            parsed = self._read_for_mutation(expected_hash)
+            if isinstance(parsed, MemoryMutationResult):
+                return parsed
+            existing = next(
+                (item for item in parsed.document.entries if item.id == entry_id),
+                None,
+            )
+            if existing is None:
+                return self._not_found(parsed, entry_id)
+            replacement = MemoryEntry(id=entry_id, content=content)
+            entries = tuple(
+                replacement if item.id == entry_id else item
+                for item in parsed.document.entries
+            )
+            return self._write_entries(
+                parsed,
+                entries,
+                status=MemoryMutationStatus.REPLACED,
+                entry_id=entry_id,
+            )
 
     def remove(
         self,
@@ -106,18 +109,21 @@ class LocalMemoryFile:
         *,
         expected_hash: str,
     ) -> MemoryMutationResult:
-        parsed = self._read_for_mutation(expected_hash)
-        if isinstance(parsed, MemoryMutationResult):
-            return parsed
-        if all(item.id != entry_id for item in parsed.document.entries):
-            return self._not_found(parsed, entry_id)
-        entries = tuple(item for item in parsed.document.entries if item.id != entry_id)
-        return self._write_entries(
-            parsed,
-            entries,
-            status=MemoryMutationStatus.REMOVED,
-            entry_id=entry_id,
-        )
+        with exclusive_resource_lock(self.path):
+            parsed = self._read_for_mutation(expected_hash)
+            if isinstance(parsed, MemoryMutationResult):
+                return parsed
+            if all(item.id != entry_id for item in parsed.document.entries):
+                return self._not_found(parsed, entry_id)
+            entries = tuple(
+                item for item in parsed.document.entries if item.id != entry_id
+            )
+            return self._write_entries(
+                parsed,
+                entries,
+                status=MemoryMutationStatus.REMOVED,
+                entry_id=entry_id,
+            )
 
     def _read_for_mutation(
         self,

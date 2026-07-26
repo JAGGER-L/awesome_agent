@@ -47,6 +47,11 @@ Mem0 凭据。两种 Memory 后端默认都关闭，并且可以独立启用。
 启用或禁用任一后端都是状态变更；存在活动的前台 Operation 时会被拒绝。选择会写入用户
 配置，并在当前会话中生效。
 
+本地开关把配置值、内存中的 service 标志和四项 Memory 工具注册视为一次状态转换。Core
+会在写入配置前，依据 Registry 总计 128 项工具和 1 MiB catalog 上限校验完整候选集合。
+若集合无法容纳，命令会返回 `tool_registry_limit`，而配置、service 状态和现有 Registry
+均保持不变；系统不会暴露不完整的 Memory 工具集合。
+
 使用以下命令检查和修改本地条目：
 
 ```text
@@ -137,12 +142,11 @@ Workspace 权限模式弹出询问。
 
 本地与云端失败的处理刻意不同。启用本地 Memory 后，无效或不可读的 `USER.md` 或
 `MEMORY.md` 会从快照捕获阶段向上传播，并使 Turn 准备失败。Awesome 不会静默地只使用
-一个本地作用域继续，因为这会掩盖到底使用了哪些持久事实。当前在这个确切位置存在一个
-生命周期缺口：Turn 记录已经创建，但 Turn coordinator 不会将 `MemoryDocumentInvalid`
-终结化。Operation 会报告失败，而 Turn 可能一直保持 `in_progress`，直到启动恢复流程将其
-对账。请修复或禁用本地 Memory，然后重启；不要把失败的 Operation 当作没有遗留恢复记录
-的证明。相比之下，Mem0 搜索或初始化失败会变成有界诊断，Turn 会在没有云端来源的情况下
-继续。
+一个本地作用域继续，因为这会掩盖到底使用了哪些持久事实。Coordinator 会把已经创建的
+Turn 终结为 failed，发出唯一的 Operation failed 结果并尝试删除其 checkpoint。清理失败
+会被记录，但不会替换主要错误；启动 reconciliation 会重试删除 terminal Turn 遗留的
+checkpoint。修复文档或禁用本地 Memory 后，后续 Turn 可以正常开始。相比之下，Mem0
+搜索或初始化失败会变成有界诊断，Turn 会在没有云端来源的情况下继续。
 
 ```text
 USER.md -----\

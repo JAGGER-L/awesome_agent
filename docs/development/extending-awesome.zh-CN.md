@@ -1,9 +1,9 @@
 # 扩展 Awesome
 
 一个成功的扩展会进入现有 authority boundary。Provider 转换模型 I/O，tool 进入
-Registry/Policy/Executor 路径，Skill 提供有界指令，MCP server 提供先 all-or-none 编译的
-Manager catalog，再 all-or-none 替换 Registry namespace。这两个提交不是同一个事务。
-所有扩展都不会建立第二 Agent loop、command runtime、permission system 或 database owner。
+Registry/Policy/Executor 路径，Skill 提供有界指令，MCP server 提供一个通过 Manager 所有的
+Registry 临界区发布的完整候选项。所有扩展都不会建立第二 Agent loop、command runtime、
+permission system 或 database owner。
 
 ## 判断是否应该扩展
 
@@ -219,7 +219,15 @@ environment variable name、source 与 enabled state。Secret value 从 environm
 
 Client 必须完成并编译整个分页 catalog 后，才能发布任意 registry item。支持标准 JSON
 Schema constraint，但引用必须保持本地，禁止网络 retrieval。遵守 tool/page/schema/
-catalog/depth 上限。
+catalog/depth 的单服务器限制：最多 128 个工具和 128 页，每个 input 或 output schema
+256 KiB，每个 catalog 1 MiB，深度 64，并且最终 `mcp.<server>.<tool>` 名称最多 128 个字符。
+还必须计入共享 Registry 聚合预算：built-in 与所有 extension 合计最多 128 个工具，规范化、
+面向模型的定义合计最多 1 MiB。
+
+Manager 会在持有 server lock 时编译并发布候选项。Registry replacement 会先校验并替换
+完整 namespace；随后发布匹配的 generation、client、catalog 和 `CONNECTED`，中间没有
+`await`。失败必须关闭候选 client、设置 `ERROR`、移除该服务器 namespace，同时保留无关
+namespace。诊断绝不能暴露原始 catalog 数据。
 
 禁止：
 
@@ -229,7 +237,8 @@ catalog/depth 上限。
 - 审批或远程 I/O 后才校验参数；
 - 用旧 validator 配合新 catalog generation；
 - 在同一 Turn 重放超时或断线调用；
-- 强制 JSON Schema `format` 检查，却声称使用默认语义。
+- 强制 JSON Schema `format` 检查，却声称使用默认语义；
+- 在任一权限模式中把 MCP 分类为隐式允许。
 
 MCP input validation error 必须是通用错误，不能暴露原始 argument 或 schema。Output
 validation 与 JSON traversal 在各自 byte、node、depth 和 content-block 边界内执行。

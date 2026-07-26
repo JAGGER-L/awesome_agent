@@ -396,20 +396,20 @@ identity 的旧记录与被中断的 pending mutation 无法区分，恢复会�
 
 Workspace Skill path 与已打开 identity 会在不跟随 link 或 reparse point 的情况下重新
 校验；一个无效 package 仍是隔离诊断。MCP 会在 page、tool-count、byte 与 deadline 边界
-下消费完整分页 catalog，编译其中所有 JSON Schema，随后 Manager 原子发布 client、
-generation 和 `CONNECTED` 状态。接着 Application 构建整个 generation，并原子替换其
-Registry namespace。这是两个原子提交，不是一个 transaction：仅有 Manager `CONNECTED`
-不能证明 Registry 已安装。引用必须在同一个 schema 内保持本地。Input argument 在审批
-或远程 I/O 前校验；声明的 `outputSchema` 会校验 `structuredContent`，没有 text 的结构化
-输出会渲染为有界 JSON。Restart 会先移除旧 namespace；timeout、disconnect 或
-cancellation 会使 generation 失效；调用绝不会惰性重连，也不会在同一 Turn 重放结果
-不确定的外部 action。
+下消费完整分页 catalog，编译所有 JSON Schema 和完整 namespaced tool name，再构建全部
+generation-bound Registry entry。Manager 持有 server lock 时同步替换完整 Registry
+namespace，并且不经过新的 `await` 就发布相匹配的 client、catalog、generation 与
+`CONNECTED` 状态。因此发布是全有或全无：`CONNECTED` 能证明同一 generation 的完整
+namespace 已安装。引用必须在同一个 schema 内保持本地。Input argument 在审批或远程
+I/O 前校验；声明的 `outputSchema` 会校验 `structuredContent`，没有 text 的结构化输出会
+渲染为有界 JSON。Restart 会先移除旧 namespace；timeout、disconnect 或 cancellation
+会使 generation 失效；调用绝不会惰性重连，也不会在同一 Turn 重放结果不确定的外部
+action。
 
-当前 catalog-name regex 没有组件长度限制，但 `/tools` payload name 上限为 128 字符，
-model/event tool name 上限为 200。过长 namespaced name 可能成功编译并使 Manager state
-保持 connected，却在 Registry adaptation、model exposure 或 `/tools` presentation 中
-失败。这是已知运行时契约缺口；compiler 必须对照最严格的下游消费者校验完整
-`mcp.<server>.<tool>` 名称，之后才能把两个发布步骤描述为封闭的端到端 transaction。
+Compiler 会在 Registry 发布前，根据最严格的下游 128 字符限制校验完整
+`mcp.<server>.<tool>` 名称。无效名称、schema、重复名称或 Registry 聚合上限会关闭新
+client、使候选 generation 失效、移除该 server namespace，并发布脱敏的 `ERROR` 状态，
+不会暴露任何有效子集。
 
 ### Memory
 
@@ -525,6 +525,7 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | Agent graph channel | LangGraph | `state/checkpoints.db` | 仅未完成 Turn |
 | ChangeSet metadata | Change Journal + Storage | `state/application.db` | 持久本地历史 |
 | Change blob | Change Journal | `state/change-journal/` | 被引用期间 |
+| Provider model transaction intent | Application + Config | `state/provider-model-transaction.json` | 直到 reconciliation 验证完成 |
 | 用户 memory | Memory | `memory/USER.md` | 用户控制 |
 | 工作区 memory | Memory | `workspaces/<key>/MEMORY.md` | 工作区范围 |
 | 云端事实 | Mem0 Cloud | 外部账户 | 仅启用时 |

@@ -14,7 +14,7 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 命令，并协助你完成开发、调试、重构和测试。
 
 在项目目录中启动 `awesome`，用自然语言描述你的目标。Awesome 会阅读相关代码、
-执行必要的工具、完成修改并验证结果。
+执行必要的工具、完成修改，并协助验证结果。
 
 ## Awesome 能做什么
 
@@ -38,7 +38,7 @@ Local memory 与 Mem0 Cloud 相互独立，二者默认关闭。
 curl -fsSL https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.sh | sh
 ```
 
-### Windows
+### Windows 11 x64
 
 ```powershell
 irm https://github.com/JAGGER-L/awesome_agent/releases/latest/download/install.ps1 | iex
@@ -108,6 +108,10 @@ awesome --help
 [开发环境](docs/development/setup.zh-CN.md)。
 
 ## 安全
+
+请通过[安全策略](https://github.com/JAGGER-L/awesome_agent/blob/main/SECURITY.zh-CN.md)
+([English](https://github.com/JAGGER-L/awesome_agent/blob/main/SECURITY.md))
+私密报告漏洞；不要在公开 issue 中披露敏感细节。
 
 只信任你了解的项目，保留修改前先检查 `/diff`。只通过 Awesome 的
 `/model` 或 `/auth` 遮罩输入流程输入凭据。Full access 仅对当前 Thread 有效，

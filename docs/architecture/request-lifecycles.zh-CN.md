@@ -17,6 +17,9 @@ Awesome 只有一个产品界面，却有多种请求。它们共享身份、准
 
 Foreground arbiter 同一时刻只准入一个 Operation、exclusive action 或 interaction
 resolution。准入必须发生在 Turn 持久化之前；否则竞态失败方会留下从未运行的幽灵 Turn。
+决定性的 pending-interaction 检查会在取得 Operation lease 后、任何异步 preflight 之后执行。
+只有 recovery resume 可以携带 continuation，并且必须精确匹配当前 interaction ID、generation、
+Thread 和 Turn。
 
 ## 输入、输出与不变量
 
@@ -72,7 +75,7 @@ turn.submit(thread_id, content, client_message_id)
   -> validate input and selected Thread
   -> reject a pending interaction
   -> validate configured provider
-  -> reserve foreground Operation atomically
+  -> reserve foreground Operation and revalidate pending interaction atomically
   -> begin Turn + append user entry in Application SQLite
   -> prepare immutable per-Turn inputs
   -> start Operation task and emit operation.started
@@ -90,6 +93,11 @@ turn.submit(thread_id, content, client_message_id)
 
 主要终态事实之后的清理尝试是有界的。清理失败不会改写已完成、已取消或失败的 Turn；
 启动校正可以重试残留 checkpoint 的清理。
+
+同步的持久化 Turn transition 与 Operation phase 共同构成一个 commit point。在它之前，
+cancellation 胜出；在它之后，cancellation 会被拒绝，有界 terminal publication 会保留已经
+提交的 completed 或 failed outcome。Shutdown 观察同一 phase，只会等待而不会发出第二次
+cancellation。
 
 TUI 的 `client_message_id` 将乐观显示的消息与权威的已准入 Turn 关联。`operation_id`、
 `thread_id` 和 `turn_id` 把事件绑定到同一次执行。TUI 侧的 Thread generation 会防止
@@ -142,11 +150,10 @@ Operation 和打开的 ChangeSet：
 因此 Application 为该 Direct Operation 提供自己的 Full-access permission session，
 不会打开普通 shell 审批 interaction。Hard denial 和上文所有执行/清理边界仍然有效。
 
-Tool Executor 返回后存在一个已知的终结缺口。Direct 的 ChangeSet finalizer 从不受保护的
-`finally` 路径运行。如果一个本已取消的命令在封存时失败，后一个异常可能取代原始
-`CancelledError`，Operation Controller 可能发出 `operation.failed` 而不是
-`operation.cancelled`。当前测试套件没有覆盖这种组合。修复需要针对成功、失败和取消的
-Direct Operation 提供有界且保留主异常的终结测试。
+Transcript 持久化与 ChangeSet 封存都是保留主 outcome 的 finalizer。如果执行已经
+失败或取消，后续持久化或封存失败会被报告，但不会取代原始异常。因此即使两个
+finalizer 都失败，已取消的 Direct Operation 仍发出 `operation.cancelled`；针对成功、
+失败和取消路径都有聚焦回归测试。
 
 ## 斜杠命令
 
@@ -207,8 +214,13 @@ MCP 和未知扩展能力仍需逐次审批。
 Executor。对于 Turn，Application 随后记录取消事实、尝试有界封存 ChangeSet 和删除
 checkpoint、发出 `operation.cancelled`，并释放 lease。清理失败不会取代已取消这一终态
 事实，并可在启动校正期间重试。对于 shell 进程，Process Runner 执行有界进程树与 pipe
-清理，再重新抛出原始 `CancelledError`。上文所述 Direct-service 终结缺口发生在 runner
-保证之后，因此仍可能改变 Operation 层 outcome。
+清理，再重新抛出原始 `CancelledError`。Direct transcript 与 ChangeSet finalizer 会在
+该取消穿过 Application 边界时继续保留它作为主 outcome。
+
+True cancellation acknowledgement 表示匹配的 Operation 尚未越过 commit point；这包括
+`operation.started` 已可见但 acceptance response 尚未返回的窗口。在这个 starting 窗口中，
+cancellation 会阻止 factory 启动。Completion 或 failure 一旦 committed，cancellation 会返回
+false，且不能替换其 terminal event。
 
 取消不是回滚。Journal 已捕获的文件变更仍然可见，之后可以检查或撤销。外部 shell 或
 MCP 副作用可能已经发生。

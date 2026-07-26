@@ -181,7 +181,8 @@ Memory 工具有自己的 memory policy。启用 Memory 不会授予工作区、
 
 ## MCP catalog 与调用
 
-MCP 扩展共享工具 registry，而不是 Agent graph。发布包含两个完整快照边界：
+MCP 扩展共享工具 registry，而不是 Agent graph。一个 server-specific lock 覆盖 catalog
+加载、编译与发布：
 
 ```text
 start stdio client
@@ -189,9 +190,10 @@ start stdio client
   -> consume all tool pages within bounds
   -> compile every input/output JSON Schema without network retrieval
   -> assign generation
-  -> Manager atomically publishes client + catalog + CONNECTED
-  -> Application builds all generation-bound handlers
-  -> Registry atomically replaces that server namespace
+  -> validate the final namespaced names
+  -> build all generation-bound handlers
+  -> Registry validates aggregate bounds and atomically replaces namespace
+  -> without awaiting, Manager publishes generation + client + catalog + CONNECTED
 ```
 
 Catalog compiler 默认使用 JSON Schema Draft 2020-12，只接受受支持的显式 dialect
@@ -200,17 +202,18 @@ Catalog compiler 默认使用 JSON Schema Draft 2020-12，只接受受支持的�
 `$recursiveRef` 必须解析到同一个 schema resource 内；validator 能进行 I/O 之前，
 远程引用就会被拒绝。
 
-当前 catalog 上限为 128 个工具、128 页、每个 schema 256 KiB、完整 catalog 1 MiB、
-schema 深度 64。重复名称、无效契约、cursor 循环、超时或越界都会关闭新 client、清空
-Manager catalog，并报告一条有界诊断；随后 Registry 同步会移除该 namespace。两个边界
-都不会发布部分快照。
+单服务器 catalog 的上限为 128 个工具、128 页、每个 input 或 output schema 256 KiB、
+完整 catalog 1 MiB、schema 深度 64，并且最终 `mcp.<server>.<tool>` 名称最多 128 个字符。
+共享 Registry 还会单独限制 built-in 与所有 extension namespace 的有效聚合快照：最多
+128 个工具，规范化、面向模型的定义（`name`、`description` 与 `input_schema`）合计最多
+1 MiB。因此，满足单服务器限制的候选项仍可能无法通过共享预算。
 
-Manager 与 Registry 的提交并非同一个事务。Manager `CONNECTED` 表示 client 和已编译的
-catalog generation 存在，并不能证明稍后的 namespace 替换成功。当前 compiler 也没有
-限制上游工具名称的组件长度。下游限制更严格：模型/事件工具名称最长为 200 字符，
-`/tools` item 最长为 128。超过任一消费者限制的 namespace 名称
-`mcp.<server>.<tool>` 可能成功编译，使 Manager 保持 connected，却在稍后的 Registry
-适配、模型暴露或 `/tools` 展示中失败。这是已知的契约加固缺口，并非端到端原子保证。
+Registry replacement 会先校验完整聚合候选项，再以全有或全无的方式替换 namespace。
+这个同步调用成功后，Manager 为同一 generation 连续赋值并最终设置 `CONNECTED`，中间没有
+`await`。所以 `CONNECTED` 表示存活 client、已编译 catalog 和完整 Registry namespace
+均已发布。重复名称、无效契约、cursor 循环、超时或任一类越界都会关闭新 client、使
+generation 失效、移除该服务器 namespace，并只报告一条固定、有界的诊断。系统绝不会
+发布有效子集，也不会移除其他服务器已经提交的 namespace。
 
 Handler 会捕获 catalog generation。远程 I/O 之前，Pydantic 使用已编译 schema 校验
 参数；随后 manager 校验 server、tool 和 generation 仍是当前值。Restart 会在重连前
@@ -243,8 +246,8 @@ Turn 中重连或重放。取消会执行有界连接清理，并继续传播取
   静默改变规则或工具历史。
 - token 估算和预留余量牺牲一些容量，以换取提供商中立的可预测性。
 - 封闭模型 catalog 要求为新模型修改代码，却能使能力、限制、凭据和 UI 选择保持一致。
-- 完整快照 MCP 发布会延迟工具可用时点，直到 Manager catalog 有效，并防止发布部分
-  Manager catalog 或 Registry namespace；两个独立提交仍留下已有文档记录的下游名称缺口。
+- 完整快照 MCP 发布会延迟工具可用时点，直到 Manager catalog 和 Registry 聚合快照均
+  有效；这会防止部分 catalog、部分 namespace、过期 handler 和超长下游名称。
 - 不可变工作区指令与固定的 Skill package/`SKILL.md` lineage 要求编辑后启动新会话；
   惰性读取的 Skill 资源则是每次打开都安全，而不是整个 package 的内容快照。
 

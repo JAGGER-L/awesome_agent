@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Literal, Protocol, cast
 
@@ -24,6 +25,7 @@ from awesome_agent.application.contracts import (
 )
 from awesome_agent.config import (
     SUPPORTED_MODEL_IDS,
+    ApplicationConfig,
     CredentialService,
     CredentialSource,
     CredentialValidation,
@@ -31,12 +33,23 @@ from awesome_agent.config import (
     KimiRegion,
     LoadedConfigSources,
     ProviderCredentialStatus,
+    ProviderCredentialTransactionJournal,
+    ProviderCredentialTransactionPhase,
+    ProviderCredentialTransactionRecord,
     ProviderName,
+    UserConfigDocument,
     UserConfigWriter,
     UserSecretStore,
     provider_environment_variable,
 )
+from awesome_agent.config.model_transaction import (
+    ProviderModelTransactionJournal,
+    ProviderModelTransactionJournalError,
+    ProviderModelTransactionPhase,
+    ProviderModelTransactionRecord,
+)
 from awesome_agent.conversation import ConversationService, ThreadNotFound
+from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
 
 _PROVIDER_LABELS: dict[ProviderName, str] = {
     "deepseek": "DeepSeek",
@@ -52,6 +65,132 @@ _SERVICE_HELP_URLS: dict[CredentialService, str] = {
     "kimi": "https://platform.moonshot.cn/console/api-keys",
     "mem0": "https://app.mem0.ai/dashboard/api-keys",
 }
+
+type ProviderConfigurationSnapshot = tuple[LoadedConfigSources, ApplicationConfig]
+
+logger = logging.getLogger(__name__)
+
+
+class ProviderConfigurationRecoveryRequired(RuntimeError):
+    """A failed Provider mutation could not be restored to a verified state."""
+
+    def __init__(
+        self,
+        primary_error: Exception,
+        recovery_failures: tuple[tuple[str, Exception], ...],
+    ) -> None:
+        stages = ", ".join(stage for stage, _ in recovery_failures)
+        super().__init__(
+            "Provider configuration update failed and recovery could not be "
+            f"verified ({stages}). Restart Awesome before continuing."
+        )
+        self.primary_error = primary_error
+        self.recovery_failures = recovery_failures
+
+
+def reconcile_provider_model_transaction(
+    *,
+    journal: ProviderModelTransactionJournal,
+    config_writer: UserConfigWriter,
+    conversation: ConversationService,
+) -> bool:
+    """Reconcile one crash-interrupted model transaction before activation."""
+
+    with config_writer.transaction():
+        try:
+            record = journal.read()
+        except Exception as error:
+            raise ProviderConfigurationRecoveryRequired(
+                error,
+                (("journal_read", error),),
+            ) from error
+        if record is None:
+            return False
+        use_target = record.phase is ProviderModelTransactionPhase.COMMITTED
+        try:
+            default_model = (
+                record.target_default_model
+                if use_target
+                else record.previous_default_model
+            )
+            thread_model = (
+                record.target_thread_model
+                if use_target
+                else record.previous_thread_model
+            )
+            config_writer.update(
+                lambda current: current.model_copy(
+                    update={
+                        "providers": current.providers.model_copy(
+                            update={"default_model": default_model}
+                        )
+                    }
+                )
+            )
+            conversation.set_model(record.thread_id, thread_model)
+            _verify_model_transaction_state(
+                record=record,
+                config_writer=config_writer,
+                conversation=conversation,
+                use_target=use_target,
+            )
+            journal.clear(record)
+        except Exception as error:
+            raise ProviderConfigurationRecoveryRequired(
+                error,
+                (("startup_reconcile", error),),
+            ) from error
+        return True
+
+
+def reconcile_provider_credential_transaction(
+    *,
+    journal: ProviderCredentialTransactionJournal,
+    config_writer: UserConfigWriter,
+    secret_store: UserSecretStore,
+) -> bool:
+    """Reconcile one crash-interrupted credential transaction before config use."""
+
+    with config_writer.transaction(), secret_store.transaction():
+        try:
+            record = journal.read()
+            if record is None:
+                return journal.clear_orphan_backup()
+            use_target = record.phase is ProviderCredentialTransactionPhase.COMMITTED
+            current = secret_store.snapshot()
+            if use_target:
+                if not record.matches_target(current):
+                    raise RuntimeError(
+                        "Committed Provider credential state cannot be verified."
+                    )
+                source = record.target_source
+            else:
+                if not record.matches_previous(current):
+                    if not record.matches_target(current):
+                        raise RuntimeError(
+                            "Pending Provider credential state differs from both "
+                            "transaction endpoints."
+                        )
+                    secret_store.restore(journal.read_backup(record))
+                source = record.previous_source
+            _write_credential_source(
+                config_writer,
+                record.service,
+                source,
+            )
+            _verify_credential_transaction_state(
+                record=record,
+                config_writer=config_writer,
+                secret_store=secret_store,
+                use_target=use_target,
+            )
+            journal.clear(record)
+        except Exception as error:
+            raise ProviderConfigurationRecoveryRequired(
+                error,
+                (("credential_reconcile", error),),
+            ) from error
+        return True
 
 
 class CredentialValidator(Protocol):
@@ -73,14 +212,52 @@ class ProviderConfigurationService:
         secret_store: UserSecretStore,
         validator: CredentialValidator,
         sources: Callable[[], LoadedConfigSources],
-        reload_configuration: Callable[[], None],
+        load_configuration: Callable[[], ProviderConfigurationSnapshot],
+        apply_configuration: Callable[[ProviderConfigurationSnapshot], None],
+        model_transaction_journal: ProviderModelTransactionJournal,
+        credential_transaction_journal: ProviderCredentialTransactionJournal,
     ) -> None:
         self._conversation = conversation
         self._config_writer = config_writer
         self._secret_store = secret_store
         self._validator = validator
         self._sources = sources
-        self._reload_configuration = reload_configuration
+        self._load_configuration = load_configuration
+        self._apply_configuration = apply_configuration
+        self._model_transaction_journal = model_transaction_journal
+        self._credential_transaction_journal = credential_transaction_journal
+        self._recovery_required: ProviderConfigurationRecoveryRequired | None = None
+
+    def require_consistent(self) -> None:
+        with self._config_writer.transaction():
+            self._require_consistent_locked()
+
+    async def ensure_consistent(self) -> None:
+        await run_cancellation_safe_blocking_call(self.require_consistent)
+
+    def _require_consistent_locked(self) -> None:
+        if self._recovery_required is not None:
+            raise self._recovery_required
+        try:
+            pending = self._model_transaction_journal.read()
+            self._credential_transaction_journal.require_clean()
+        except Exception as error:
+            failure = ProviderConfigurationRecoveryRequired(
+                error,
+                (("journal_read", error),),
+            )
+            self._recovery_required = failure
+            raise failure from error
+        if pending is not None:
+            primary = ProviderModelTransactionJournalError(
+                "A Provider model transaction requires startup recovery."
+            )
+            failure = ProviderConfigurationRecoveryRequired(
+                primary,
+                (("startup_reconcile_required", primary),),
+            )
+            self._recovery_required = failure
+            raise failure from primary
 
     async def auth_command(self, intent: CommandIntent) -> CommandOutcome:
         arguments = intent.arguments
@@ -132,7 +309,10 @@ class ProviderConfigurationService:
                     "selected_credential_unavailable",
                     f"{status.environment_variable} is not available in this process.",
                 )
-            self._select_source(service, CredentialSource.ENVIRONMENT)
+            blocked = self._mutation_blocked()
+            if blocked is not None:
+                return blocked
+            await self._select_source(service, CredentialSource.ENVIRONMENT)
             return result(
                 NoticeCommandPayload(
                     message=f"{_SERVICE_LABELS[service]} now uses Environment."
@@ -155,7 +335,10 @@ class ProviderConfigurationService:
             )
         action = arguments[2]
         if len(arguments) == 3 and action == "use":
-            self._select_source(service, CredentialSource.AWESOME)
+            blocked = self._mutation_blocked()
+            if blocked is not None:
+                return blocked
+            await self._select_source(service, CredentialSource.AWESOME)
             return result(
                 NoticeCommandPayload(
                     message=f"{_SERVICE_LABELS[service]} now uses Awesome API key."
@@ -228,25 +411,107 @@ class ProviderConfigurationService:
                 "provider_not_configured",
                 f"{_PROVIDER_LABELS[provider]} is not configured.",
             )
+        blocked = self._mutation_blocked()
+        if blocked is not None:
+            return blocked
         try:
             self._conversation.read_thread(thread_id)
         except ThreadNotFound:
             return _error("thread_not_found", "Thread was not found.")
-        self._config_writer.update(
-            lambda current: current.model_copy(
-                update={
-                    "providers": current.providers.model_copy(
-                        update={"default_model": model}
+
+        updated_model: str | None = None
+
+        def persist_model() -> tuple[ProviderConfigurationSnapshot, str]:
+            # YAML and Application SQLite cannot share one storage transaction.
+            # The config lock is therefore the provider-configuration ordering
+            # boundary: every successful model change writes the user default,
+            # reloads that exact commit, and updates its Thread before a peer may
+            # begin another provider configuration transaction.
+            with self._config_writer.transaction():
+                self._require_consistent_locked()
+                previous_document = self._config_writer.read()
+                previous_model = self._conversation.read_thread(
+                    thread_id
+                ).thread.current_model
+                try:
+                    prepared = self._model_transaction_journal.prepare(
+                        ProviderModelTransactionRecord(
+                            phase=ProviderModelTransactionPhase.PREPARED,
+                            thread_id=thread_id,
+                            previous_default_model=(
+                                previous_document.providers.default_model
+                            ),
+                            target_default_model=model,
+                            previous_thread_model=previous_model,
+                            target_thread_model=model,
+                        )
                     )
-                }
-            )
+                except Exception as primary_error:
+                    failure = ProviderConfigurationRecoveryRequired(
+                        primary_error,
+                        (("journal_prepare", primary_error),),
+                    )
+                    self._fence(failure)
+                    raise failure from primary_error
+                try:
+                    self._config_writer.update(
+                        lambda current: current.model_copy(
+                            update={
+                                "providers": current.providers.model_copy(
+                                    update={"default_model": model}
+                                )
+                            }
+                        )
+                    )
+                    snapshot = self._load_configuration()
+                    self._conversation.set_model(thread_id, model)
+                    _verify_model_transaction_state(
+                        record=prepared,
+                        config_writer=self._config_writer,
+                        conversation=self._conversation,
+                        use_target=True,
+                    )
+                except Exception as primary_error:
+                    recovery_failures = self._restore_model_change(
+                        record=prepared,
+                        previous_document=previous_document,
+                    )
+                    if recovery_failures:
+                        failure = ProviderConfigurationRecoveryRequired(
+                            primary_error,
+                            recovery_failures,
+                        )
+                        self._fence(failure)
+                        raise failure from primary_error
+                    raise
+                try:
+                    committed = self._model_transaction_journal.mark_committed(prepared)
+                    self._model_transaction_journal.clear(committed)
+                except Exception as primary_error:
+                    failure = ProviderConfigurationRecoveryRequired(
+                        primary_error,
+                        (("journal_finalize", primary_error),),
+                    )
+                    self._fence(failure)
+                    raise failure from primary_error
+                return snapshot, model
+
+        def commit_model(
+            persisted: tuple[ProviderConfigurationSnapshot, str],
+        ) -> None:
+            nonlocal updated_model
+            snapshot, updated_model = persisted
+            self._apply_configuration(snapshot)
+
+        await run_cancellation_safe_blocking_call(
+            persist_model,
+            on_completed=commit_model,
+            on_abandoned=self._fence_abandoned_transaction,
         )
-        self._reload_configuration()
-        updated = self._conversation.set_model(thread_id, model)
-        assert updated.current_model is not None
+        assert updated_model is not None
         return result(
             ModelCommandPayload(
-                model=updated.current_model,
+                model=updated_model,
                 default_model_updated=True,
             )
         )
@@ -257,15 +522,19 @@ class ProviderConfigurationService:
     ) -> ProviderCredentialSetResult:
         status = _status(self._sources(), request.provider)
         if request.action == "delete":
-            self._secret_store.delete(status.environment_variable)
-            self._reload_configuration()
+            await run_cancellation_safe_blocking_call(
+                lambda: self._persist_credential_transaction(request, None),
+                on_completed=self._apply_configuration,
+                on_abandoned=self._fence_abandoned_transaction,
+            )
             return ProviderCredentialSetResult(
                 provider=request.provider,
                 status=ProviderCredentialSetStatus.DELETED,
                 source=status.selected_source,
                 code="credential_deleted",
             )
-        assert request.api_key is not None
+        api_key = request.api_key
+        assert api_key is not None
         result = (
             CredentialValidation(
                 status=CredentialValidationStatus.VALID, code="credential_valid"
@@ -273,7 +542,7 @@ class ProviderConfigurationService:
             if request.provider == "mem0"
             else await self._validator.validate(
                 request.provider,
-                request.api_key,
+                api_key,
                 kimi_region=self._sources().user.providers.kimi_region,
             )
         )
@@ -294,9 +563,12 @@ class ProviderConfigurationService:
                 source=status.selected_source,
                 code=result.code,
             )
-        self._secret_store.set(status.environment_variable, request.api_key)
-        self._select_source(request.provider, CredentialSource.AWESOME)
-        self._reload_configuration()
+
+        await run_cancellation_safe_blocking_call(
+            lambda: self._persist_credential_transaction(request, api_key),
+            on_completed=self._apply_configuration,
+            on_abandoned=self._fence_abandoned_transaction,
+        )
         return ProviderCredentialSetResult(
             provider=request.provider,
             status=ProviderCredentialSetStatus.CONFIGURED,
@@ -358,21 +630,201 @@ class ProviderConfigurationService:
             option for option in self._service_options() if option.value != "mem0"
         )
 
-    def _select_source(
+    async def _select_source(
         self,
         service: CredentialService,
         source: CredentialSource,
     ) -> None:
-        self._config_writer.update(
-            lambda current: current.model_copy(
-                update={
-                    "credentials": current.credentials.model_copy(
-                        update={service: source}
+        def persist_source() -> ProviderConfigurationSnapshot:
+            with self._config_writer.transaction():
+                self._require_consistent_locked()
+                self._write_source(service, source)
+                return self._load_configuration()
+
+        await run_cancellation_safe_blocking_call(
+            persist_source,
+            on_completed=self._apply_configuration,
+            on_abandoned=self._fence_abandoned_transaction,
+        )
+
+    def _write_source(
+        self,
+        service: CredentialService,
+        source: CredentialSource,
+    ) -> None:
+        _write_credential_source(self._config_writer, service, source)
+
+    def _persist_credential_transaction(
+        self,
+        request: ProviderCredentialSetRequest,
+        api_key: SecretStr | None,
+    ) -> ProviderConfigurationSnapshot:
+        with self._config_writer.transaction(), self._secret_store.transaction():
+            self._require_consistent_locked()
+            previous_document = self._config_writer.read()
+            previous_source = getattr(
+                previous_document.credentials,
+                request.provider,
+            )
+            previous_env = self._secret_store.snapshot()
+            environment_variable = provider_environment_variable(request.provider)
+            if request.action == "delete":
+                target_env, changed = self._secret_store.plan_delete(
+                    environment_variable
+                )
+                if not changed:
+                    return self._load_configuration()
+                target_source = previous_source
+            else:
+                if api_key is None:
+                    raise ValueError("Credential content is required.")
+                target_env = self._secret_store.plan_set(
+                    environment_variable,
+                    api_key,
+                )
+                target_source = CredentialSource.AWESOME
+            prepared = ProviderCredentialTransactionRecord(
+                phase=ProviderCredentialTransactionPhase.PREPARED,
+                service=request.provider,
+                environment_variable=environment_variable,
+                action=request.action,
+                previous_source=previous_source,
+                target_source=target_source,
+                previous_env_existed=previous_env.existed,
+                previous_env_sha256=previous_env.content_hash,
+                target_env_existed=target_env.existed,
+                target_env_sha256=target_env.content_hash,
+            )
+            reached_commit = False
+            try:
+                self._credential_transaction_journal.stage_backup(previous_env)
+                prepared = self._credential_transaction_journal.prepare(prepared)
+                if request.action == "delete":
+                    if not self._secret_store.delete(environment_variable):
+                        raise RuntimeError(
+                            "Provider credential disappeared before deletion."
+                        )
+                else:
+                    assert api_key is not None
+                    self._secret_store.set(environment_variable, api_key)
+                if self._secret_store.snapshot() != target_env:
+                    raise RuntimeError("Provider credential write verification failed.")
+                secret_committed = (
+                    self._credential_transaction_journal.mark_secret_committed(prepared)
+                )
+                self._write_source(request.provider, target_source)
+                snapshot = self._load_configuration()
+                _verify_credential_transaction_state(
+                    record=secret_committed,
+                    config_writer=self._config_writer,
+                    secret_store=self._secret_store,
+                    use_target=True,
+                )
+                committed = self._credential_transaction_journal.mark_committed(
+                    secret_committed
+                )
+                reached_commit = True
+                self._credential_transaction_journal.clear(committed)
+                return snapshot
+            except Exception as primary_error:
+                try:
+                    current = self._credential_transaction_journal.read()
+                    durable_commit = reached_commit or (
+                        current is not None
+                        and current.phase
+                        is ProviderCredentialTransactionPhase.COMMITTED
                     )
-                }
+                    reconcile_provider_credential_transaction(
+                        journal=self._credential_transaction_journal,
+                        config_writer=self._config_writer,
+                        secret_store=self._secret_store,
+                    )
+                    if durable_commit:
+                        _verify_credential_transaction_state(
+                            record=prepared,
+                            config_writer=self._config_writer,
+                            secret_store=self._secret_store,
+                            use_target=True,
+                        )
+                        return self._load_configuration()
+                except Exception as recovery_error:
+                    failure = ProviderConfigurationRecoveryRequired(
+                        primary_error,
+                        (("credential_recovery", recovery_error),),
+                    )
+                    self._fence(failure)
+                    raise failure from primary_error
+                raise
+
+    def _restore_model_change(
+        self,
+        *,
+        record: ProviderModelTransactionRecord,
+        previous_document: UserConfigDocument,
+    ) -> tuple[tuple[str, Exception], ...]:
+        failures: list[tuple[str, Exception]] = []
+        try:
+            self._config_writer.replace(previous_document)
+        except Exception as error:
+            failures.append(("config_restore", error))
+
+        try:
+            current_model = self._conversation.read_thread(
+                record.thread_id
+            ).thread.current_model
+            if current_model != record.previous_thread_model:
+                self._conversation.set_model(
+                    record.thread_id,
+                    record.previous_thread_model,
+                )
+        except Exception as error:
+            failures.append(("thread_restore", error))
+
+        try:
+            if self._config_writer.read() != previous_document:
+                raise RuntimeError("User configuration rollback verification failed.")
+        except Exception as error:
+            failures.append(("config_verify", error))
+
+        try:
+            _verify_model_transaction_state(
+                record=record,
+                config_writer=self._config_writer,
+                conversation=self._conversation,
+                use_target=False,
+            )
+        except Exception as error:
+            failures.append(("state_verify", error))
+        if not failures:
+            try:
+                self._model_transaction_journal.clear(record)
+            except Exception as error:
+                failures.append(("journal_clear", error))
+        return tuple(failures)
+
+    def _mutation_blocked(self) -> CommandOutcome | None:
+        if self._recovery_required is not None:
+            return _error(
+                "recovery_required",
+                "Provider configuration recovery is required. Restart Awesome.",
+            )
+        return None
+
+    def _fence(self, failure: ProviderConfigurationRecoveryRequired) -> None:
+        self._recovery_required = failure
+        logger.critical(
+            "Provider configuration recovery requires restart; stages=%s",
+            ",".join(stage for stage, _ in failure.recovery_failures),
+        )
+
+    def _fence_abandoned_transaction(self) -> None:
+        primary = RuntimeError("Provider transaction outlived cancellation cleanup.")
+        self._fence(
+            ProviderConfigurationRecoveryRequired(
+                primary,
+                (("cancellation_cleanup_abandoned", primary),),
             )
         )
-        self._reload_configuration()
 
     def _secret_prompt(
         self,
@@ -414,6 +866,63 @@ def _status(
     if provider == "kimi":
         return sources.provider_credentials.kimi
     return sources.provider_credentials.mem0
+
+
+def _verify_model_transaction_state(
+    *,
+    record: ProviderModelTransactionRecord,
+    config_writer: UserConfigWriter,
+    conversation: ConversationService,
+    use_target: bool,
+) -> None:
+    expected_default = (
+        record.target_default_model if use_target else record.previous_default_model
+    )
+    expected_thread = (
+        record.target_thread_model if use_target else record.previous_thread_model
+    )
+    if config_writer.read().providers.default_model != expected_default:
+        raise RuntimeError("Provider default model transaction verification failed.")
+    if (
+        conversation.read_thread(record.thread_id).thread.current_model
+        != expected_thread
+    ):
+        raise RuntimeError("Thread model transaction verification failed.")
+
+
+def _write_credential_source(
+    config_writer: UserConfigWriter,
+    service: CredentialService,
+    source: CredentialSource | None,
+) -> None:
+    config_writer.update(
+        lambda current: current.model_copy(
+            update={
+                "credentials": current.credentials.model_copy(update={service: source})
+            }
+        )
+    )
+
+
+def _verify_credential_transaction_state(
+    *,
+    record: ProviderCredentialTransactionRecord,
+    config_writer: UserConfigWriter,
+    secret_store: UserSecretStore,
+    use_target: bool,
+) -> None:
+    expected_source = record.target_source if use_target else record.previous_source
+    current_source = getattr(config_writer.read().credentials, record.service)
+    if current_source is not expected_source:
+        raise RuntimeError("Provider credential source verification failed.")
+    current_secret_file = secret_store.snapshot()
+    matches = (
+        record.matches_target(current_secret_file)
+        if use_target
+        else record.matches_previous(current_secret_file)
+    )
+    if not matches:
+        raise RuntimeError("Provider credential file verification failed.")
 
 
 def _error(code: str, content: str) -> CommandOutcome:

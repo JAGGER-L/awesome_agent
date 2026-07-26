@@ -36,6 +36,9 @@ DOWNLOAD_ARTIFACT_V8 = (
     "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
 )
 ATTEST_V4 = "actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"
+WORKFLOW_PERMISSION_OVERRIDES = {
+    "release-gate.yml": {"checks": "read", "contents": "read"},
+}
 JOB_PERMISSION_OVERRIDES = {
     ("security.yml", "dependency-review"): {"contents": "read"},
     ("security.yml", "codeql"): {
@@ -92,6 +95,16 @@ def test_required_ci_covers_every_product_boundary() -> None:
     assert isinstance(quality, dict)
     steps = quality["steps"]
     assert isinstance(steps, list)
+    quality_by_name = {
+        step.get("name"): step for step in steps if isinstance(step, dict)
+    }
+    assert quality_by_name["Checkout"]["with"] == {
+        "fetch-depth": "0",
+        "persist-credentials": "false",
+    }
+    assert quality_by_name["Check release identity"]["run"] == (
+        "uv run python scripts/release/check_identity.py --tag-policy absent-or-current"
+    )
     assert any(
         isinstance(step, dict) and step.get("name") == "Lint GitHub Actions workflows"
         for step in steps
@@ -101,6 +114,14 @@ def test_required_ci_covers_every_product_boundary() -> None:
     assert isinstance(windows, dict)
     windows_steps = windows["steps"]
     assert isinstance(windows_steps, list)
+    windows_by_name = {
+        step.get("name"): step for step in windows_steps if isinstance(step, dict)
+    }
+    assert windows_by_name["Run Windows installer guard contracts"] == {
+        "name": "Run Windows installer guard contracts",
+        "shell": "pwsh",
+        "run": "./tests/packaging/install_windows_contract.ps1",
+    }
     windows_test = next(
         step
         for step in windows_steps
@@ -111,10 +132,28 @@ def test_required_ci_covers_every_product_boundary() -> None:
     assert isinstance(run, str)
     assert "tests/unit/core" in run
     assert "tests/unit/protocol" in run
+    assert "tests/unit/config/test_resource_lock.py" in run
+    assert "tests/unit/config/test_user_state_concurrency.py" in run
+    assert "tests/unit/memory/test_tools.py" in run
+    assert "tests/integration/test_local_memory.py" in run
     assert "tests/integration/test_read_tools.py" in run
     assert "tests/unit/context/test_workspace_instructions.py" in run
     assert "tests/unit/storage/test_state_recovery.py" in run
+    assert "tests/integration/test_change_journal.py" in run
     assert "tests/packaging/test_install_contract.py" in run
+
+    contracts = jobs["python-contracts"]
+    assert isinstance(contracts, dict)
+    contract_steps = contracts["steps"]
+    assert isinstance(contract_steps, list)
+    contract_by_name = {
+        step.get("name"): step for step in contract_steps if isinstance(step, dict)
+    }
+    assert contract_by_name["Run POSIX installer guard contracts"] == {
+        "name": "Run POSIX installer guard contracts",
+        "shell": "bash",
+        "run": "sh tests/packaging/install_shell_contract.sh",
+    }
 
     tui = jobs["tui"]
     assert isinstance(tui, dict)
@@ -129,6 +168,12 @@ def test_required_ci_covers_every_product_boundary() -> None:
     )
     assert any(
         isinstance(entry, dict) and entry.get("os") == "windows-latest"
+        for entry in included
+    )
+    assert any(
+        isinstance(entry, dict)
+        and entry.get("os") == "macos-latest"
+        and entry.get("node") == "22.23.1"
         for entry in included
     )
 
@@ -218,7 +263,9 @@ def test_tui_package_installation_runs_once_outside_the_parallel_suite() -> None
 def test_workflows_use_bounded_jobs_and_immutable_action_references() -> None:
     for path in WORKFLOWS:
         workflow = _workflow(path)
-        assert workflow["permissions"] == {"contents": "read"}
+        assert workflow["permissions"] == WORKFLOW_PERMISSION_OVERRIDES.get(
+            path.name, {"contents": "read"}
+        )
         jobs = workflow["jobs"]
         assert isinstance(jobs, dict)
         for job in jobs.values():
@@ -383,12 +430,38 @@ def test_release_gate_binds_artifacts_to_main_and_version_tag() -> None:
         step.get("name"): step for step in attest_steps if isinstance(step, dict)
     }
 
-    identity = build_by_name["Verify release identity"]
-    run = identity["run"]
-    assert isinstance(run, str)
-    assert "git merge-base --is-ancestor" in run
-    assert '"v${version}"' in run
-    assert "refs/heads/main" in run
+    revision = build_by_name["Verify release revision"]["run"]
+    identity_step = build_by_name["Verify release identity"]
+    identity = identity_step["run"]
+    assert isinstance(revision, str)
+    assert isinstance(identity, str)
+    assert "git merge-base --is-ancestor" in revision
+    assert '"v${version}"' in revision
+    assert "refs/heads/main" in revision
+    assert 'policy="current"' in identity
+    assert 'policy="absent"' in identity
+    assert "python scripts/release/check_identity.py" in identity
+    assert "uv run python scripts/release/check_identity.py" not in identity
+    assert "--require-check-runs" in identity
+    assert '--github-repository "${GITHUB_REPOSITORY}"' in identity
+    assert '--github-sha "${GITHUB_SHA}"' in identity
+    assert identity_step["env"] == {"GITHUB_TOKEN": "${{ github.token }}"}
+    assert workflow["permissions"] == {"checks": "read", "contents": "read"}
+    build_step_names = [
+        step.get("name") for step in build_steps if isinstance(step, dict)
+    ]
+    assert build_step_names.index("Verify release revision") < build_step_names.index(
+        "Setup Python"
+    )
+    assert build_step_names.index("Setup Python") < build_step_names.index(
+        "Verify release identity"
+    )
+    assert build_step_names.index("Verify release identity") < build_step_names.index(
+        "Setup uv"
+    )
+    assert build_step_names.index("Verify release identity") < build_step_names.index(
+        "Install locked dependencies"
+    )
 
     deterministic_gate = build_by_name["Re-run deterministic release gate"]["run"]
     assert isinstance(deterministic_gate, str)
@@ -487,6 +560,9 @@ def test_build_backend_and_toolchain_are_locked_to_release_inputs() -> None:
     build_bundle = (ROOT / "scripts" / "release" / "build_bundle.py").read_text(
         encoding="utf-8"
     )
-    assert '"build", "--wheel", "--no-build-isolation"' in build_bundle
+    assert re.search(
+        r'"uv",\s*"build",\s*"--wheel",\s*"--no-build-isolation",',
+        build_bundle,
+    )
     ci = PRIMARY_WORKFLOWS[0].read_text(encoding="utf-8")
     assert "uv build --wheel --no-build-isolation" in ci

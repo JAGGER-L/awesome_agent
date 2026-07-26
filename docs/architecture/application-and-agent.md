@@ -68,6 +68,14 @@ Turn coordinator can persist a new Turn. `start_reserved()` emits
 `operation.started`, starts one task, and owns terminal event delivery and
 lease release in `finally`.
 
+Admission is not a check performed before that lease. After acquiring it,
+`reserve()` synchronously revalidates the current pending interaction before it
+publishes an active Operation ID. Ordinary Turns and Direct commands require no
+pending interaction. Recovery resume is the only exception: it carries an
+internal continuation bound to the current recovery interaction ID,
+interaction generation, Thread, and Turn. A stale or partially matching token
+cannot degrade into a generic bypass.
+
 This in-process arbiter is different from storage leases:
 
 - the foreground lease serializes semantic work inside one Core session;
@@ -182,6 +190,16 @@ cancellation it records a stable terminal product fact and performs the same
 bounded finalization. Cleanup exceptions are deliberately suppressed after the
 primary terminal fact; startup reconciliation retries stale terminal
 checkpoints rather than changing the completed/cancelled/failed outcome.
+
+The Operation phase makes the cancellation boundary explicit. Before the
+commit point, a matching cancel changes `running` to `cancelling` and the sole
+terminal outcome is cancelled. Successful completion crosses the commit point
+only while synchronously persisting the completed Turn; primary failure closes
+the same boundary before bounded failure-fact recovery. Once committed,
+`operation.cancel` returns false, shutdown waits instead of cancelling again,
+and bounded shielded publication preserves the committed Turn and Operation
+terminal events even if the request task is cancelled or the event sink fails.
+There is no interval in which both cancellation and completion can win.
 
 Cancellation may arrive while a model stream, tool, or finalization step is
 active. Cleanup is shielded only for bounded fact preservation; it must not

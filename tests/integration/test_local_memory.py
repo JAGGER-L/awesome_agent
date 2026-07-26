@@ -1,8 +1,12 @@
+import asyncio
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pydantic import BaseModel
 
 from awesome_agent.agent import new_agent_state
 from awesome_agent.application.command_results import (
@@ -19,17 +23,21 @@ from awesome_agent.application.extension_commands import ApplicationExtensionSer
 from awesome_agent.config import (
     BudgetConfig,
     TurnConfig,
+    UserConfigDocument,
     UserConfigWriter,
     missing_provider_credential_statuses,
 )
 from awesome_agent.config.loader import read_user_config_document
+from awesome_agent.config.resource_lock import exclusive_resource_lock
 from awesome_agent.context import ContextBuilder
 from awesome_agent.conversation import ConversationService, UsageSummary
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
+    ToolOutput,
     ToolRequest,
+    ToolSpec,
     ToolStatus,
 )
 from awesome_agent.core.tools.builtins import register_read_tools
@@ -54,6 +62,281 @@ def _config() -> TurnConfig:
         model="deepseek/deepseek-v4-flash",
         budgets=BudgetConfig(),
     )
+
+
+def _hold_resource_lock(path: Path, entered: threading.Event, seconds: float) -> None:
+    with exclusive_resource_lock(path):
+        entered.set()
+        time.sleep(seconds)
+
+
+def _fill_registry(registry: ToolRegistry, count: int) -> None:
+    async def placeholder_handler(
+        _arguments: BaseModel,
+        _context: ToolExecutionContext,
+    ) -> ToolOutput:
+        return ToolOutput(content="unused")
+
+    for index in range(count):
+        registry.register(
+            spec=ToolSpec(
+                name=f"placeholder_{index}",
+                description="Reserved test tool.",
+                input_schema={},
+                capability="workspace.read",
+                read_only=True,
+            ),
+            input_model=BaseModel,
+            handler=placeholder_handler,
+        )
+
+
+@pytest.mark.asyncio
+async def test_local_memory_command_lock_wait_keeps_event_loop_schedulable(
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    paths = AwesomePaths.from_home(tmp_path / "home")
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(paths.application_db)
+    )
+    thread = conversation.create_thread(workspace.key)
+    registry = ToolRegistry()
+    memory = LocalMemoryService(
+        paths=paths,
+        workspace_key=workspace.key,
+        enabled=True,
+        id_factory=lambda: "memory_11111111111111111111111111111111",
+    )
+    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    extensions = ApplicationExtensionService(
+        conversation=conversation,
+        catalog=SkillCatalog((), ()),
+        manager=McpManager(
+            configs=(),
+            workspace_key=workspace.key,
+            workspace_trusted=True,
+            enablements=enablements,
+            registry=registry,
+        ),
+        enablements=enablements,
+        workspace_key=workspace.key,
+        registry=registry,
+        current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
+        local_memory=memory,
+    )
+    entered = threading.Event()
+    holder = threading.Thread(
+        target=_hold_resource_lock,
+        args=(paths.user_memory_file, entered, 0.4),
+        daemon=True,
+    )
+    holder.start()
+    assert await asyncio.to_thread(entered.wait, 1.0)
+
+    operation = asyncio.create_task(
+        extensions.memory(
+            CommandIntent(
+                name=CommandName.MEMORY,
+                arguments=("add", "user", "Remember", "this."),
+            )
+        )
+    )
+    heartbeat = asyncio.create_task(asyncio.sleep(0.05))
+    try:
+        await asyncio.wait_for(heartbeat, timeout=0.2)
+        assert not operation.done()
+        outcome = await operation
+    finally:
+        await asyncio.to_thread(holder.join, 1.0)
+
+    assert isinstance(outcome, CommandResult)
+    assert isinstance(outcome.payload, MemoryMutationCommandPayload)
+    assert outcome.payload.status == MemoryMutationStatus.ADDED.value
+
+
+@pytest.mark.asyncio
+async def test_local_memory_enable_capacity_failure_changes_no_state(
+    tmp_path: Path,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    paths = AwesomePaths.from_home(tmp_path / "home")
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(paths.application_db)
+    )
+    thread = conversation.create_thread(workspace.key)
+    registry = ToolRegistry()
+    _fill_registry(registry, 125)
+    before = registry.specifications()
+    local_memory = LocalMemoryService(paths=paths, workspace_key=workspace.key)
+    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    extensions = ApplicationExtensionService(
+        conversation=conversation,
+        catalog=SkillCatalog((), ()),
+        manager=McpManager(
+            configs=(),
+            workspace_key=workspace.key,
+            workspace_trusted=True,
+            enablements=enablements,
+            registry=registry,
+        ),
+        enablements=enablements,
+        workspace_key=workspace.key,
+        registry=registry,
+        current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
+        local_memory=local_memory,
+        config_writer=UserConfigWriter(paths.config_file),
+    )
+
+    outcome = await extensions.memory(
+        CommandIntent(name=CommandName.MEMORY, arguments=("local", "on")),
+    )
+
+    assert isinstance(outcome, CommandError)
+    assert outcome.code == "tool_registry_limit"
+    assert local_memory.enabled is False
+    assert (
+        read_user_config_document(paths.config_file).memory.local_file_memory is False
+    )
+    assert registry.specifications() == before
+
+
+@pytest.mark.asyncio
+async def test_local_memory_enable_config_failure_changes_no_runtime_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    paths = AwesomePaths.from_home(tmp_path / "home")
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(paths.application_db)
+    )
+    thread = conversation.create_thread(workspace.key)
+    registry = ToolRegistry()
+    _fill_registry(registry, 1)
+    before = registry.specifications()
+    local_memory = LocalMemoryService(paths=paths, workspace_key=workspace.key)
+    writer = UserConfigWriter(paths.config_file)
+    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    extensions = ApplicationExtensionService(
+        conversation=conversation,
+        catalog=SkillCatalog((), ()),
+        manager=McpManager(
+            configs=(),
+            workspace_key=workspace.key,
+            workspace_trusted=True,
+            enablements=enablements,
+            registry=registry,
+        ),
+        enablements=enablements,
+        workspace_key=workspace.key,
+        registry=registry,
+        current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
+        local_memory=local_memory,
+        config_writer=writer,
+    )
+
+    def fail_update(
+        _transform: Callable[[UserConfigDocument], UserConfigDocument],
+    ) -> UserConfigDocument:
+        raise OSError("simulated config persistence failure")
+
+    monkeypatch.setattr(writer, "update", fail_update)
+    with pytest.raises(OSError, match="simulated config persistence failure"):
+        await extensions.memory(
+            CommandIntent(name=CommandName.MEMORY, arguments=("local", "on")),
+        )
+
+    assert local_memory.enabled is False
+    assert (
+        read_user_config_document(paths.config_file).memory.local_file_memory is False
+    )
+    assert registry.specifications() == before
+
+
+@pytest.mark.asyncio
+async def test_cancelled_local_memory_disable_commits_one_coherent_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    paths = AwesomePaths.from_home(tmp_path / "home")
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(paths.application_db)
+    )
+    thread = conversation.create_thread(workspace.key)
+    registry = ToolRegistry()
+    _fill_registry(registry, 1)
+    local_memory = LocalMemoryService(paths=paths, workspace_key=workspace.key)
+    writer = UserConfigWriter(paths.config_file)
+    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    extensions = ApplicationExtensionService(
+        conversation=conversation,
+        catalog=SkillCatalog((), ()),
+        manager=McpManager(
+            configs=(),
+            workspace_key=workspace.key,
+            workspace_trusted=True,
+            enablements=enablements,
+            registry=registry,
+        ),
+        enablements=enablements,
+        workspace_key=workspace.key,
+        registry=registry,
+        current_thread_id=lambda: thread.id,
+        credential_statuses=missing_provider_credential_statuses,
+        local_memory=local_memory,
+        config_writer=writer,
+    )
+    enabled = await extensions.memory(
+        CommandIntent(name=CommandName.MEMORY, arguments=("local", "on")),
+    )
+    assert isinstance(enabled, CommandResult)
+    entered = threading.Event()
+    release = threading.Event()
+    original_update = writer.update
+
+    def delayed_update(
+        transform: Callable[[UserConfigDocument], UserConfigDocument],
+    ) -> UserConfigDocument:
+        entered.set()
+        if not release.wait(1.0):
+            raise RuntimeError("local memory disable release was not scheduled")
+        return original_update(transform)
+
+    monkeypatch.setattr(writer, "update", delayed_update)
+    task = asyncio.create_task(
+        extensions.memory(
+            CommandIntent(name=CommandName.MEMORY, arguments=("local", "off")),
+        )
+    )
+    assert await asyncio.to_thread(entered.wait, 1.0)
+
+    task.cancel("cancel local memory disable")
+    try:
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError, match="cancel local memory disable"):
+        await asyncio.wait_for(task, timeout=1.0)
+
+    assert local_memory.enabled is False
+    assert (
+        read_user_config_document(paths.config_file).memory.local_file_memory is False
+    )
+    assert {spec.name for spec in registry.specifications()} == {"placeholder_0"}
 
 
 @pytest.mark.asyncio
@@ -85,6 +368,7 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
             workspace_key=workspace.key,
             workspace_trusted=True,
             enablements=SQLiteMcpEnablementStore(paths.application_db),
+            registry=registry,
         ),
         enablements=SQLiteMcpEnablementStore(paths.application_db),
         workspace_key=workspace.key,
@@ -271,6 +555,7 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
     conversation = ConversationService(store=repositories)
     thread = conversation.create_thread(workspace.key)
     catalog = SkillCatalog((), ())
+    registry = ToolRegistry()
 
     service = ApplicationExtensionService(
         conversation=conversation,
@@ -280,10 +565,11 @@ async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> N
             workspace_key=workspace.key,
             workspace_trusted=True,
             enablements=SQLiteMcpEnablementStore(paths.application_db),
+            registry=registry,
         ),
         enablements=SQLiteMcpEnablementStore(paths.application_db),
         workspace_key=workspace.key,
-        registry=ToolRegistry(),
+        registry=registry,
         current_thread_id=lambda: thread.id,
         credential_statuses=missing_provider_credential_statuses,
         local_memory=LocalMemoryService(paths=paths, workspace_key=workspace.key),

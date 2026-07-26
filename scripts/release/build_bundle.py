@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tomllib
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
@@ -25,6 +29,27 @@ _ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 _FORBIDDEN_PARTS = {"__pycache__", "tests", ".env"}
 _FORBIDDEN_SUFFIXES = {".map", ".pyc", ".pyo", ".ts", ".tsx"}
 _RELEASE_REQUIREMENTS = "release-requirements.txt"
+_MIT_LICENSE_HEADER = "MIT License\n\n"
+_MIT_LICENSE_COPYRIGHT = re.compile(r"Copyright \(c\) [^\r\n\x00]{1,200}")
+_MIT_LICENSE_GRANT = (
+    "Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+    'of this software and associated documentation files (the "Software"), to deal\n'
+    "in the Software without restriction, including without limitation the rights\n"
+    "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+    "copies of the Software, and to permit persons to whom the Software is\n"
+    "furnished to do so, subject to the following conditions:\n"
+    "\n"
+    "The above copyright notice and this permission notice shall be included in all\n"
+    "copies or substantial portions of the Software.\n"
+    "\n"
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n'
+    "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+    "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+    "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+    "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+    "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+    "SOFTWARE.\n"
+)
 
 
 class BundleError(RuntimeError):
@@ -64,9 +89,55 @@ def validate_version_files(root: Path, version: str) -> None:
         raise BundleError("TUI source version does not match VERSION")
 
 
-def _validate_wheel(path: Path, version: str) -> None:
+def validate_license_files(root: Path) -> bytes:
     try:
-        validate_release_wheel(path, version)
+        license_content = (root / "LICENSE").read_bytes()
+        rendered_license = license_content.decode("utf-8")
+        tui_license = (root / "tui" / "LICENSE").read_bytes()
+        project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        package = json.loads(
+            (root / "tui" / "package.json").read_text(encoding="utf-8")
+        )
+        lock = json.loads(
+            (root / "tui" / "package-lock.json").read_text(encoding="utf-8")
+        )
+    except (
+        OSError,
+        UnicodeDecodeError,
+        tomllib.TOMLDecodeError,
+        json.JSONDecodeError,
+    ) as error:
+        raise BundleError("release license files are missing or invalid") from error
+
+    if not rendered_license.startswith(_MIT_LICENSE_HEADER):
+        raise BundleError("root license is not the canonical MIT grant")
+    copyright_line, separator, grant = rendered_license.removeprefix(
+        _MIT_LICENSE_HEADER
+    ).partition("\n\n")
+    if (
+        separator != "\n\n"
+        or _MIT_LICENSE_COPYRIGHT.fullmatch(copyright_line) is None
+        or grant != _MIT_LICENSE_GRANT
+    ):
+        raise BundleError("root license is not the canonical MIT grant")
+    if tui_license != license_content:
+        raise BundleError("TUI license does not match the root license")
+
+    project_metadata = project.get("project", {})
+    if project_metadata.get("license") != "MIT" or project_metadata.get(
+        "license-files"
+    ) != ["LICENSE"]:
+        raise BundleError("Python license metadata does not match the MIT license")
+    if package.get("license") != "MIT":
+        raise BundleError("TUI package license does not match the MIT license")
+    if lock.get("packages", {}).get("", {}).get("license") != "MIT":
+        raise BundleError("TUI lock license does not match the MIT license")
+    return license_content
+
+
+def _validate_wheel(path: Path, version: str, license_content: bytes) -> None:
+    try:
+        validate_release_wheel(path, version, license_content)
         with ZipFile(path) as wheel:
             if any(_is_forbidden(PurePosixPath(name)) for name in wheel.namelist()):
                 raise BundleError("wheel contains forbidden development content")
@@ -96,7 +167,7 @@ def _tui_dist_files(root: Path) -> tuple[Path, ...]:
     return files
 
 
-def _installer_assets(root: Path, version: str) -> dict[str, bytes]:
+def validate_installer_files(root: Path, version: str) -> dict[str, bytes]:
     expected = {
         "install.sh": re.compile(
             rf'^VERSION="{re.escape(version)}"\r?$',
@@ -153,9 +224,10 @@ def _write_member(archive: ZipFile, name: str, content: bytes) -> None:
 
 def assemble_bundle(root: Path, version: str) -> BundleResult:
     validate_version_files(root, version)
-    installers = _installer_assets(root, version)
+    license_content = validate_license_files(root)
+    installers = validate_installer_files(root, version)
     wheel = root / "dist" / f"awesome_agent-{version}-py3-none-any.whl"
-    _validate_wheel(wheel, version)
+    _validate_wheel(wheel, version, license_content)
     requirements = _locked_requirements(root)
     tui_dist = _tui_dist_files(root)
     tui = root / "tui"
@@ -172,6 +244,7 @@ def assemble_bundle(root: Path, version: str) -> BundleResult:
     archive_path = release / f"awesome-{version}.zip"
     prefix = f"awesome-{version}"
     members: dict[str, bytes] = {
+        f"{prefix}/LICENSE": license_content,
         f"{prefix}/VERSION": (root / "VERSION").read_bytes(),
         f"{prefix}/core/{wheel.name}": wheel.read_bytes(),
         f"{prefix}/core/requirements.lock": requirements,
@@ -200,12 +273,38 @@ def assemble_bundle(root: Path, version: str) -> BundleResult:
     return BundleResult(archive=archive_path, checksums=checksums)
 
 
-def _run(root: Path, *command: str) -> None:
+def source_date_epoch(root: Path) -> str:
+    try:
+        result = subprocess.run(
+            ["git", "show", "-s", "--format=%ct", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise BundleError("release commit timestamp is unavailable") from error
+    epoch = result.stdout.strip()
+    if result.returncode != 0 or re.fullmatch(r"0|[1-9][0-9]{0,15}", epoch) is None:
+        raise BundleError("release commit timestamp is unavailable")
+    return epoch
+
+
+def _run(
+    root: Path,
+    *command: str,
+    environment: Mapping[str, str] | None = None,
+) -> None:
     executable = shutil.which(command[0])
     if executable is None:
         raise BundleError(f"release command is unavailable: {command[0]}")
     try:
-        subprocess.run((executable, *command[1:]), cwd=root, check=True)
+        subprocess.run(
+            (executable, *command[1:]),
+            cwd=root,
+            env=environment,
+            check=True,
+        )
     except (OSError, subprocess.CalledProcessError) as error:
         raise BundleError(f"release command failed: {' '.join(command)}") from error
 
@@ -213,8 +312,23 @@ def _run(root: Path, *command: str) -> None:
 def build_bundle(root: Path) -> BundleResult:
     version = read_version(root)
     validate_version_files(root, version)
-    _run(root, "node", "tui/scripts/sync-version.mjs", "--check")
-    _run(root, "uv", "build", "--wheel", "--no-build-isolation")
+    environment = os.environ.copy()
+    environment["SOURCE_DATE_EPOCH"] = source_date_epoch(root)
+    _run(
+        root,
+        "node",
+        "tui/scripts/sync-version.mjs",
+        "--check",
+        environment=environment,
+    )
+    _run(
+        root,
+        "uv",
+        "build",
+        "--wheel",
+        "--no-build-isolation",
+        environment=environment,
+    )
     _run(
         root,
         "uv",
@@ -229,18 +343,39 @@ def build_bundle(root: Path) -> BundleResult:
         "--no-emit-project",
         "--output-file",
         f"dist/{_RELEASE_REQUIREMENTS}",
+        environment=environment,
     )
-    _run(root, "npm", "--prefix", "tui", "ci")
-    _run(root, "npm", "--prefix", "tui", "run", "build")
+    _run(
+        root,
+        "npm",
+        "--prefix",
+        "tui",
+        "ci",
+        environment=environment,
+    )
+    _run(
+        root,
+        "npm",
+        "--prefix",
+        "tui",
+        "run",
+        "build",
+        environment=environment,
+    )
     return assemble_bundle(root, version)
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Build the deterministic Awesome Agent release bundle."
+    )
+    parser.parse_args(argv)
     root = Path(__file__).resolve().parents[2]
     result = build_bundle(root)
     print(result.archive.relative_to(root).as_posix())
     print(result.checksums.relative_to(root).as_posix())
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

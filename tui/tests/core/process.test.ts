@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -106,6 +106,7 @@ describe("CoreProcess", () => {
       AWESOME_FAKE_CORE_FRAGMENT: "1",
       AWESOME_FAKE_CORE_MARKER: "inherited",
     });
+    const canonicalCwd = await realpath(value.cwd);
     const session = await startCoreProcess(value, [fileURLToPath(fixture)]);
     const initialized = await session.rpc.request("initialize", {
       protocol_version: 3,
@@ -114,7 +115,7 @@ describe("CoreProcess", () => {
     });
     expect(initialized).toMatchObject({
       ok: true,
-      value: { workspace: { display_path: value.cwd, branch: "inherited" } },
+      value: { workspace: { display_path: canonicalCwd, branch: "inherited" } },
     });
     await session.requestShutdown();
     await expect(session.exit).resolves.toMatchObject({

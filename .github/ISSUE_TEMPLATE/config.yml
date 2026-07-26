@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/JAGGER-L/awesome_agent/security/advisories/new
+    about: Do not disclose security-sensitive details in a public issue.

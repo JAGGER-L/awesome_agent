@@ -14,6 +14,7 @@ import {
   jsonValueSchema,
   methodNames,
   methodSchemas,
+  requestIdSchema,
   statusSnapshotSchema,
 } from "../../src/protocol/index.js";
 import { PRODUCT_VERSION } from "../../src/version.js";
@@ -23,6 +24,7 @@ type MethodCase = {
   name: string;
   method: string;
   params: unknown;
+  request_id?: unknown;
   result?: unknown;
   expected?: { kind: string; code: string | number };
 };
@@ -93,12 +95,61 @@ describe("shared Python fixture corpus", () => {
     ).toBe(true);
   });
 
+  it("matches the credential source omission contract", async () => {
+    const corpus = await loadFixtureCorpus();
+    const credentialCases = cases(corpus.files["methods.valid.json"]).filter(
+      (fixture) => fixture.method === "provider.credential.set",
+    );
+    const byName = new Map(
+      credentialCases.map((fixture) => [fixture.name, fixture]),
+    );
+    expect([...byName.keys()]).toEqual([
+      "provider.credential.set.configured",
+      "provider.credential.set.invalid",
+      "provider.credential.set.confirm_unverified",
+      "provider.credential.set.deleted",
+    ]);
+
+    const value = (name: string) => {
+      const fixture = byName.get(name);
+      if (!fixture) throw new Error(`Missing fixture: ${name}`);
+      return (fixture.result as { value: Record<string, unknown> }).value;
+    };
+    expect(value("provider.credential.set.configured").source).toBe("awesome");
+    for (const name of [
+      "provider.credential.set.invalid",
+      "provider.credential.set.confirm_unverified",
+      "provider.credential.set.deleted",
+    ]) {
+      expect(value(name)).not.toHaveProperty("source");
+    }
+
+    const invalid = byName.get("provider.credential.set.invalid");
+    if (!invalid) throw new Error("Missing invalid credential fixture");
+    const explicitNull = {
+      ...(invalid.result as Record<string, unknown>),
+      value: {
+        ...value("provider.credential.set.invalid"),
+        source: null,
+      },
+    };
+    expect(
+      methodSchemas["provider.credential.set"].result.safeParse(explicitNull)
+        .success,
+    ).toBe(false);
+  });
+
   it("distinguishes invalid params, unknown methods, and product failures", async () => {
     const corpus = await loadFixtureCorpus();
     for (const fixture of cases(corpus.files["methods.invalid.json"])) {
       const schema =
         methodSchemas[fixture.method as keyof typeof methodSchemas];
-      if (fixture.expected?.code === -32601) {
+      if ("request_id" in fixture) {
+        expect(requestIdSchema.safeParse(fixture.request_id).success).toBe(
+          false,
+        );
+        expect(fixture.expected?.code, fixture.name).toBe(-32600);
+      } else if (fixture.expected?.code === -32601) {
         expect(schema, fixture.name).toBeUndefined();
       } else if (fixture.name === "initialize.protocol_incompatible") {
         expect(schema?.params.safeParse(fixture.params).success).toBe(false);

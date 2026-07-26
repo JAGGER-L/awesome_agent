@@ -156,6 +156,15 @@ def test_usage_addition_uses_zero_defaults() -> None:
     )
 
 
+def test_provider_usage_rejects_numbers_outside_json_safe_range() -> None:
+    assert ModelUsage(input_tokens=9_007_199_254_740_991).input_tokens == (
+        9_007_199_254_740_991
+    )
+
+    with pytest.raises(ValidationError, match="less than or equal"):
+        ModelUsage(input_tokens=9_007_199_254_740_992)
+
+
 def test_stream_union_preserves_visible_and_terminal_events() -> None:
     adapter: TypeAdapter[ModelStreamEvent] = TypeAdapter(ModelStreamEvent)
     events: tuple[ModelStreamEvent, ...] = (

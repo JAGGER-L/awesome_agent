@@ -210,6 +210,12 @@ A platform skip records missing evidence; it is not a passing substitute. Put
 real Windows-only reparse/process tests in the Windows contracts job and use the
 nightly three-OS matrix for broader system evidence.
 
+The candidate installer hook makes pre-tag release evidence executable without
+publishing assets: serve the manual-dispatch artifact on `127.0.0.1`, then run
+the installer with the explicit candidate variables. Evidence still has to come
+from Windows 11 x64, WSL2 Ubuntu 24.04 x64, and Apple Silicon macOS. A hosted
+Windows Server job is not Windows 11, and an Ubuntu runner is not WSL2.
+
 ## Required CI
 
 `.github/workflows/ci.yml` runs on pull requests, pushes to `main`, merge-queue
@@ -252,25 +258,23 @@ platform coverage but does not excuse a focused PR regression.
 
 ## Known CI evidence gaps
 
-The current workflows still leave five useful additions. They should be added
-as focused jobs rather than overstating the existing gates:
+The candidate-artifact installer smoke is now an explicit manual pre-tag gate,
+but it is intentionally not mislabeled as hosted CI evidence. The workflows
+still leave four useful automation additions. They should be added as focused
+jobs rather than overstating the existing gates:
 
-1. **Candidate-artifact installer smoke.** Install into a temporary installation
-   root/home on each supported OS, then verify `awesome --version`, one
-   TUI/Core Protocol handshake, and scoped uninstall cleanup. Current Windows
-   CI validates installer source contracts but does not perform a real install.
-2. **Source-derived documentation contracts.** Generate or compare reference
+1. **Source-derived documentation contracts.** Generate or compare reference
    inventories from `COMMAND_OWNERS`, configuration models, Tool registration,
    and Protocol method models so a new public contract cannot bypass docs by
    forgetting to update a hand-copied test list.
-3. **Browser accessibility smoke.** Use Playwright plus axe against the built
-   homepage, one English guide, and the Chinese quickstart. Static contrast and
-   link checks cannot prove keyboard navigation, landmarks, ARIA, mobile menus,
-   search, language switching, or copy-button behavior.
-4. **Scheduled external-link check.** Run with bounded timeouts, retries, and an
+2. **Browser accessibility smoke.** Use Playwright plus axe against the built
+   homepage, one English guide, and its corresponding Chinese page. Static
+   contrast and link checks cannot prove keyboard navigation, landmarks, ARIA,
+   mobile menus, search, language switching, or copy-button behavior.
+3. **Scheduled external-link check.** Run with bounded timeouts, retries, and an
    allowlist as a non-PR-blocking scheduled workflow; the deterministic local
    link checker intentionally skips other origins.
-5. **Post-deployment Pages smoke.** After deployment, fetch the real base URL,
+4. **Post-deployment Pages smoke.** After deployment, fetch the real base URL,
    representative English and Chinese pages, `llms.txt`, and a representative
    unknown/non-canonical route that must return 404 without redirecting. Build
    success does not prove the deployed origin and base-path routing are reachable.
@@ -281,6 +285,16 @@ The release workflow rebuilds from the exact revision, runs deterministic
 Python, TUI, Protocol, audit, and packaging gates, builds one release bundle on
 Ubuntu, and reverifies that downloaded artifact on Windows and macOS. Only a
 tag run that passes every unprivileged job reaches attestation.
+
+Manual dispatch from `main` additionally requires the latest GitHub Actions
+`Required` and `Security required` check-runs to be successful for the exact
+`GITHUB_SHA`. Its artifact is served over loopback for installer smoke on all
+three real supported hosts before a tag is allowed. If that evidence is
+missing, the candidate may be merged but cannot be tagged or released. The tag
+workflow rebuild is compared byte-for-byte by the three published asset hashes;
+any difference requires the real-host loopback smoke to be repeated on the tag
+artifact before publication. See [Release](release.md) for the commands and the
+post-publication rollout recheck.
 
 The local release-quality gate is:
 

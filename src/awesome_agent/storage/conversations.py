@@ -60,8 +60,57 @@ class SQLiteConversationRepositories:
     def create_thread(self, thread: Thread) -> Thread:
         return self.threads.create(thread)
 
-    def update_thread(self, thread: Thread) -> Thread:
-        return self.threads.update(thread)
+    def set_thread_model(
+        self,
+        thread_id: str,
+        model: str | None,
+        *,
+        updated_at: datetime,
+    ) -> Thread:
+        return self._patch_thread(
+            thread_id,
+            {"current_model": model, "updated_at": updated_at},
+        )
+
+    def rename_thread(
+        self,
+        thread_id: str,
+        title: str,
+        *,
+        updated_at: datetime,
+    ) -> Thread:
+        return self._patch_thread(
+            thread_id,
+            {
+                "title": title,
+                "title_source": ThreadTitleSource.MANUAL,
+                "updated_at": updated_at,
+            },
+        )
+
+    def set_thread_thinking(
+        self,
+        thread_id: str,
+        enabled: bool,
+        *,
+        updated_at: datetime,
+    ) -> Thread:
+        return self._patch_thread(
+            thread_id,
+            {"thinking_enabled": enabled, "updated_at": updated_at},
+        )
+
+    def set_thread_skill_mode(
+        self,
+        thread_id: str,
+        skill_mode: str,
+        *,
+        updated_at: datetime,
+    ) -> Thread:
+        return self._patch_thread(
+            thread_id,
+            {"skill_mode": skill_mode, "updated_at": updated_at},
+        )
 
     def list_threads(self, workspace_key: str) -> Sequence[Thread]:
         return self.threads.list(workspace_key)
@@ -169,19 +218,27 @@ class SQLiteConversationRepositories:
         self,
         user_entry: ThreadEntry,
         turn: Turn,
-        updated_thread: Thread,
+        *,
+        automatic_title: str | None,
+        updated_at: datetime,
     ) -> Turn:
         with self.transaction() as connection:
             thread = self.threads.get(turn.thread_id, connection=connection)
             if thread is None:
                 raise ThreadNotFound(turn.thread_id)
-            if updated_thread.id != thread.id:
-                raise ConversationConflict("Thread update identity differs.")
             if self.turns.in_progress(turn.thread_id, connection=connection):
                 raise TurnBusy(turn.thread_id)
-            self._require_next_sequence(user_entry, connection)
+            next_sequence = self._require_next_sequence(user_entry, connection)
             self.entries.append(user_entry, connection=connection)
             self.turns.create(turn, connection=connection)
+            thread_update: dict[str, object] = {"updated_at": updated_at}
+            if (
+                automatic_title is not None
+                and thread.title_source is ThreadTitleSource.AUTOMATIC
+                and next_sequence == 1
+            ):
+                thread_update["title"] = automatic_title
+            updated_thread = _monotonic_thread_update(thread, thread_update)
             self.threads.update(updated_thread, connection=connection)
         return turn
 
@@ -207,7 +264,10 @@ class SQLiteConversationRepositories:
             if thread is None:
                 raise ThreadNotFound(turn.thread_id)
             self.threads.update(
-                thread.model_copy(update={"updated_at": turn.updated_at}),
+                _monotonic_thread_update(
+                    thread,
+                    {"updated_at": turn.updated_at},
+                ),
                 connection=connection,
             )
         return turn
@@ -258,7 +318,10 @@ class SQLiteConversationRepositories:
             if thread is None:
                 raise ThreadNotFound(turn.thread_id)
             self.threads.update(
-                thread.model_copy(update={"updated_at": turn.updated_at}),
+                _monotonic_thread_update(
+                    thread,
+                    {"updated_at": turn.updated_at},
+                ),
                 connection=connection,
             )
         return turn
@@ -271,7 +334,10 @@ class SQLiteConversationRepositories:
             self._require_next_sequence(entry, connection)
             self.entries.append(entry, connection=connection)
             self.threads.update(
-                thread.model_copy(update={"updated_at": entry.created_at}),
+                _monotonic_thread_update(
+                    thread,
+                    {"updated_at": entry.created_at},
+                ),
                 connection=connection,
             )
         return entry
@@ -284,11 +350,26 @@ class SQLiteConversationRepositories:
     ) -> ThreadSummary:
         return self.summaries.compare_and_swap(summary, expected=expected)
 
+    def _patch_thread(
+        self,
+        thread_id: str,
+        update: dict[str, object],
+    ) -> Thread:
+        """Apply one field-level Thread mutation from transaction-current state."""
+
+        with self.transaction() as connection:
+            current = self.threads.get(thread_id, connection=connection)
+            if current is None:
+                raise ThreadNotFound(thread_id)
+            updated = _monotonic_thread_update(current, update)
+            self.threads.update(updated, connection=connection)
+        return updated
+
     def _require_next_sequence(
         self,
         entry: ThreadEntry,
         connection: sqlite3.Connection,
-    ) -> None:
+    ) -> int:
         row = connection.execute(
             """
             SELECT COALESCE(MAX(sequence), 0) + 1
@@ -299,6 +380,7 @@ class SQLiteConversationRepositories:
         expected = int(row[0])
         if entry.sequence != expected:
             raise ConversationConflict("Thread Entry sequence changed concurrently.")
+        return expected
 
 
 class _SQLiteRepository:
@@ -900,6 +982,18 @@ class SQLiteToolActivityRepository(_SQLiteRepository):
                 (operation_id, call_id),
             ).fetchone()
         return None if row is None else _activity_from_row(row)
+
+
+def _monotonic_thread_update(
+    current: Thread,
+    update: dict[str, object],
+) -> Thread:
+    candidate = update.get("updated_at")
+    if not isinstance(candidate, datetime):
+        raise TypeError("Thread update requires an updated_at timestamp")
+    bounded_update = dict(update)
+    bounded_update["updated_at"] = max(current.updated_at, candidate)
+    return Thread.model_validate(current.model_copy(update=bounded_update).model_dump())
 
 
 def _thread_from_row(row: sqlite3.Row) -> Thread:

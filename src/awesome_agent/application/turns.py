@@ -8,7 +8,7 @@ from enum import StrEnum
 from math import isfinite
 from typing import Any, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
@@ -21,7 +21,10 @@ from awesome_agent.application.context import (
 )
 from awesome_agent.application.contracts import OperationAccepted
 from awesome_agent.application.events import ApplicationEventProjector
-from awesome_agent.application.operations import OperationController
+from awesome_agent.application.operations import (
+    OperationContinuation,
+    OperationController,
+)
 from awesome_agent.application.turn_facts import (
     ObservedTurnFacts,
     observed_turn_facts,
@@ -193,17 +196,30 @@ class TurnCoordinator:
                 operation_id=operation_id,
                 client_message_id=client_message_id,
             )
-            await self._start_turn(turn, projector)
+            await self._start_turn(turn, operation_id, projector)
             try:
                 self._turn_input_preparer(turn, content)
+            except asyncio.CancelledError:
+                await self._finish_cancelled_turn(turn, projector)
+                raise
             except ExplicitPathError as error:
-                self._conversation.fail_turn(turn.id, "invalid_explicit_path")
-                try:
-                    with suppress(Exception, asyncio.CancelledError):
-                        await projector.turn_failed("invalid_explicit_path")
-                finally:
-                    await self._cleanup_turn_after_failure(turn.id, seal=False)
+                self._operations.mark_failed(operation_id)
+                await self._fail_turn_preparation(
+                    turn,
+                    operation_id,
+                    projector,
+                    "invalid_explicit_path",
+                )
                 raise TurnInputInvalid(str(error)) from error
+            except BaseException:
+                self._operations.mark_failed(operation_id)
+                await self._fail_turn_preparation(
+                    turn,
+                    operation_id,
+                    projector,
+                    "turn_preparation_failed",
+                )
+                raise
             await self._execute_turn(turn, operation_id, projector)
 
         try:
@@ -250,10 +266,11 @@ class TurnCoordinator:
         thread_id: str,
         *,
         expected_turn_id: str | None = None,
+        continuation: OperationContinuation | None = None,
         claim: ResumeClaim | None = None,
         finished: ResumeFinished | None = None,
     ) -> OperationAccepted:
-        reservation = self._operations.reserve()
+        reservation = self._operations.reserve(continuation=continuation)
         try:
             view = self._conversation.read_thread(thread_id)
             self._require_thread_workspace(view.thread)
@@ -315,7 +332,7 @@ class TurnCoordinator:
                 client_message_id=client_message_id,
             )
             try:
-                await self._start_turn(turn, projector)
+                await self._start_turn(turn, operation_id, projector)
                 await self._execute_turn(turn, operation_id, projector, resume=True)
             finally:
                 if finished is not None:
@@ -525,6 +542,7 @@ class TurnCoordinator:
     async def _start_turn(
         self,
         turn: Turn,
+        operation_id: str,
         projector: ApplicationEventProjector,
     ) -> None:
         try:
@@ -533,10 +551,18 @@ class TurnCoordinator:
             await self._finish_cancelled_turn(turn, projector)
             raise cancellation
         except Exception:
-            self._conversation.fail_turn(turn.id, "turn_start_failed")
+            self._operations.mark_failed(operation_id)
+            self._persist_failed_turn(
+                turn,
+                "turn_start_failed",
+                ObservedTurnFacts(),
+            )
             try:
                 with suppress(Exception, asyncio.CancelledError):
-                    await projector.turn_failed("turn_start_failed")
+                    await self._operations.publish_committed(
+                        operation_id,
+                        lambda: projector.turn_failed("turn_start_failed"),
+                    )
             finally:
                 await self._cleanup_turn_after_failure(turn.id, seal=False)
             raise
@@ -555,34 +581,59 @@ class TurnCoordinator:
             await self._finish_cancelled_turn(turn, projector)
             raise cancellation
         except Exception:
-            self._conversation.fail_turn(turn.id, "agent_initialization_failed")
+            self._operations.mark_failed(operation_id)
+            self._persist_failed_turn(
+                turn,
+                "agent_initialization_failed",
+                ObservedTurnFacts(),
+            )
             try:
                 with suppress(Exception, asyncio.CancelledError):
-                    await projector.turn_failed("agent_initialization_failed")
+                    await self._operations.publish_committed(
+                        operation_id,
+                        lambda: projector.turn_failed("agent_initialization_failed"),
+                    )
             finally:
                 await self._cleanup_turn_after_failure(turn.id, seal=False)
             raise
-        state = (
-            None
-            if resume
-            else new_agent_state(
-                thread_id=turn.thread_id,
-                turn_id=turn.id,
-                workspace_key=self._workspace_key,
-                provider=turn.provider,
-                model=turn.model,
-                thinking_enabled=turn.thinking_enabled,
+        try:
+            state = (
+                None
+                if resume
+                else new_agent_state(
+                    thread_id=turn.thread_id,
+                    turn_id=turn.id,
+                    workspace_key=self._workspace_key,
+                    provider=turn.provider,
+                    model=turn.model,
+                    thinking_enabled=turn.thinking_enabled,
+                )
             )
-        )
+        except asyncio.CancelledError as cancellation:
+            await self._finish_cancelled_turn(turn, projector)
+            raise cancellation
+        except Exception:
+            await self._finish_failed_active_turn(
+                turn,
+                operation_id,
+                projector,
+                "agent_initialization_failed",
+                seal=False,
+            )
+            raise
         try:
             runtime = self._runtime_context_factory(turn, operation_id, projector)
+        except asyncio.CancelledError as cancellation:
+            await self._finish_cancelled_turn(turn, projector)
+            raise cancellation
         except Exception:
-            self._conversation.fail_turn(turn.id, "agent_initialization_failed")
-            try:
-                with suppress(Exception, asyncio.CancelledError):
-                    await projector.turn_failed("agent_initialization_failed")
-            finally:
-                await self._cleanup_turn_after_failure(turn.id, seal=False)
+            await self._finish_failed_active_turn(
+                turn,
+                operation_id,
+                projector,
+                "agent_initialization_failed",
+                seal=False,
+            )
             raise
         try:
             result = await self._graph.ainvoke(
@@ -601,52 +652,246 @@ class TurnCoordinator:
             await self._finish_cancelled_turn(turn, projector)
             raise cancellation
         except Exception:
-            facts = await self._latest_observed_facts(turn.id)
-            self._conversation.fail_turn(
-                turn.id,
+            self._operations.mark_failed(operation_id)
+            facts = await self._failure_observed_facts(turn.id)
+            self._persist_failed_turn(
+                turn,
                 "agent_execution_failed",
-                usage=facts.usage,
-                context_manifest=facts.context_manifest,
+                facts,
             )
             try:
                 with suppress(Exception, asyncio.CancelledError):
-                    await projector.turn_failed("agent_execution_failed")
+                    await self._operations.publish_committed(
+                        operation_id,
+                        lambda: projector.turn_failed("agent_execution_failed"),
+                    )
             finally:
                 await self._cleanup_turn_after_failure(turn.id)
             raise
 
-        reason = result["termination_reason"] or "completed"
-        answer = result["final_answer"]
-        facts = observed_turn_facts(result)
+        try:
+            reason = result["termination_reason"] or "completed"
+            answer = result["final_answer"]
+            facts = observed_turn_facts(result)
+        except asyncio.CancelledError as cancellation:
+            await self._finish_cancelled_turn(turn, projector)
+            raise cancellation
+        except Exception:
+            await self._finish_failed_active_turn(
+                turn,
+                operation_id,
+                projector,
+                "agent_execution_failed",
+                observe_facts=True,
+            )
+            raise
         if answer is None:
-            self._conversation.fail_turn(
-                turn.id,
-                reason,
-                usage=facts.usage,
-                context_manifest=facts.context_manifest,
+            self._operations.commit_failed(
+                operation_id,
+                lambda: self._persist_failed_turn(turn, reason, facts),
             )
             try:
                 with suppress(Exception, asyncio.CancelledError):
-                    await projector.turn_failed(reason)
+                    await self._operations.publish_committed(
+                        operation_id,
+                        lambda: projector.turn_failed(reason),
+                    )
             finally:
                 await self._cleanup_turn_after_failure(turn.id)
             raise TurnExecutionFailed(reason)
 
-        self._conversation.complete_turn(
-            turn.id,
-            answer,
-            facts.usage,
-            reason,
-            facts.context_manifest,
+        self._operations.commit_completed(
+            operation_id,
+            lambda: self._persist_completed_turn(turn, answer, reason, facts),
         )
         await self._cleanup_turn_after_failure(turn.id)
         try:
-            await projector.turn_completed()
-        except (Exception, asyncio.CancelledError):
+            await self._operations.publish_committed(
+                operation_id,
+                projector.turn_completed,
+            )
+        except Exception:
             logger.warning(
                 "Turn terminal event delivery failed after completion.",
                 exc_info=True,
             )
+
+    def _persist_completed_turn(
+        self,
+        turn: Turn,
+        answer: str,
+        reason: str,
+        facts: ObservedTurnFacts,
+    ) -> None:
+        expected_manifest = self._expected_terminal_manifest(turn, facts)
+        self._persist_terminal_write(
+            lambda: self._conversation.complete_turn(
+                turn.id,
+                answer,
+                facts.usage,
+                reason,
+                facts.context_manifest,
+            ),
+            committed=lambda: self._completed_turn_matches(
+                turn,
+                answer,
+                reason,
+                facts,
+                expected_manifest,
+            ),
+            outcome="completed",
+        )
+
+    def _persist_failed_turn(
+        self,
+        turn: Turn,
+        error_code: str,
+        facts: ObservedTurnFacts,
+    ) -> None:
+        expected_manifest = self._expected_terminal_manifest(turn, facts)
+        self._persist_terminal_write(
+            lambda: self._conversation.fail_turn(
+                turn.id,
+                error_code,
+                usage=facts.usage,
+                context_manifest=facts.context_manifest,
+            ),
+            committed=lambda: self._failed_turn_matches(
+                turn,
+                error_code,
+                facts,
+                expected_manifest,
+            ),
+            outcome="failed",
+        )
+
+    def _persist_cancelled_turn(
+        self,
+        turn: Turn,
+        facts: ObservedTurnFacts,
+    ) -> None:
+        expected_manifest = self._expected_terminal_manifest(turn, facts)
+        self._persist_terminal_write(
+            lambda: self._conversation.cancel_turn(
+                turn.id,
+                usage=facts.usage,
+                context_manifest=facts.context_manifest,
+            ),
+            committed=lambda: self._cancelled_turn_matches(
+                turn,
+                facts,
+                expected_manifest,
+            ),
+            outcome="cancelled",
+        )
+
+    @staticmethod
+    def _persist_terminal_write(
+        action: Callable[[], object],
+        *,
+        committed: Callable[[], bool],
+        outcome: str,
+    ) -> None:
+        try:
+            action()
+        except (Exception, asyncio.CancelledError):
+            if not committed():
+                raise
+            logger.warning(
+                "Turn %s write raised after its exact durable state committed.",
+                outcome,
+                exc_info=True,
+            )
+
+    def _completed_turn_matches(
+        self,
+        turn: Turn,
+        answer: str,
+        reason: str,
+        facts: ObservedTurnFacts,
+        expected_manifest: tuple[dict[str, JsonValue], ...] | None,
+    ) -> bool:
+        if expected_manifest is None:
+            return False
+        current = self._current_turn(turn)
+        if current is None:
+            return False
+        view, observed = current
+        assistant = next(
+            (
+                entry
+                for entry in view.entries
+                if entry.id == observed.assistant_entry_id
+            ),
+            None,
+        )
+        return (
+            observed.status is TurnStatus.COMPLETED
+            and assistant is not None
+            and assistant.kind is ThreadEntryKind.ASSISTANT_MESSAGE
+            and assistant.content == answer
+            and observed.usage == facts.usage
+            and observed.termination_reason == reason
+            and observed.context_manifest == expected_manifest
+        )
+
+    def _failed_turn_matches(
+        self,
+        turn: Turn,
+        error_code: str,
+        facts: ObservedTurnFacts,
+        expected_manifest: tuple[dict[str, JsonValue], ...] | None,
+    ) -> bool:
+        if expected_manifest is None:
+            return False
+        current = self._current_turn(turn)
+        if current is None:
+            return False
+        _, observed = current
+        return (
+            observed.status is TurnStatus.FAILED
+            and observed.error_code == error_code
+            and observed.usage == facts.usage
+            and observed.context_manifest == expected_manifest
+        )
+
+    def _cancelled_turn_matches(
+        self,
+        turn: Turn,
+        facts: ObservedTurnFacts,
+        expected_manifest: tuple[dict[str, JsonValue], ...] | None,
+    ) -> bool:
+        if expected_manifest is None:
+            return False
+        current = self._current_turn(turn)
+        if current is None:
+            return False
+        _, observed = current
+        return (
+            observed.status is TurnStatus.CANCELLED
+            and observed.termination_reason == "cancelled"
+            and observed.usage == facts.usage
+            and observed.context_manifest == expected_manifest
+        )
+
+    def _expected_terminal_manifest(
+        self,
+        turn: Turn,
+        facts: ObservedTurnFacts,
+    ) -> tuple[dict[str, JsonValue], ...] | None:
+        current = self._current_turn(turn)
+        if current is None:
+            return None
+        _, observed = current
+        return facts.context_manifest or observed.context_manifest
+
+    def _current_turn(self, turn: Turn) -> tuple[ThreadView, Turn] | None:
+        try:
+            view = self._conversation.read_thread(turn.thread_id)
+        except (Exception, asyncio.CancelledError):
+            return None
+        observed = next((item for item in view.turns if item.id == turn.id), None)
+        return (view, observed) if observed is not None else None
 
     async def _cleanup_turn(self, turn_id: str, *, seal: bool = True) -> None:
         try:
@@ -669,6 +914,49 @@ class TurnCoordinator:
                 exc_info=True,
             )
 
+    async def _fail_turn_preparation(
+        self,
+        turn: Turn,
+        operation_id: str,
+        projector: ApplicationEventProjector,
+        error_code: str,
+    ) -> None:
+        self._persist_failed_turn(turn, error_code, ObservedTurnFacts())
+        try:
+            with suppress(Exception, asyncio.CancelledError):
+                await self._operations.publish_committed(
+                    operation_id,
+                    lambda: projector.turn_failed(error_code),
+                )
+        finally:
+            await self._cleanup_turn_after_failure(turn.id, seal=False)
+
+    async def _finish_failed_active_turn(
+        self,
+        turn: Turn,
+        operation_id: str,
+        projector: ApplicationEventProjector,
+        error_code: str,
+        *,
+        observe_facts: bool = False,
+        seal: bool = True,
+    ) -> None:
+        self._operations.mark_failed(operation_id)
+        facts = (
+            await self._failure_observed_facts(turn.id)
+            if observe_facts
+            else ObservedTurnFacts()
+        )
+        self._persist_failed_turn(turn, error_code, facts)
+        try:
+            with suppress(Exception, asyncio.CancelledError):
+                await self._operations.publish_committed(
+                    operation_id,
+                    lambda: projector.turn_failed(error_code),
+                )
+        finally:
+            await self._cleanup_turn_after_failure(turn.id, seal=seal)
+
     async def _finish_cancelled_turn(
         self,
         turn: Turn,
@@ -687,11 +975,7 @@ class TurnCoordinator:
         facts = await self._cancellation_observed_facts(turn.id)
         terminal_state_persisted = False
         try:
-            self._conversation.cancel_turn(
-                turn.id,
-                usage=facts.usage,
-                context_manifest=facts.context_manifest,
-            )
+            self._persist_cancelled_turn(turn, facts)
             terminal_state_persisted = True
             try:
                 await projector.turn_cancelled("cancelled")
@@ -711,9 +995,20 @@ class TurnCoordinator:
         try:
             async with asyncio.timeout(_CANCELLATION_FACTS_TIMEOUT_SECONDS):
                 return await self._latest_observed_facts(turn_id)
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             logger.warning(
                 "Observed Turn facts were unavailable during cancellation.",
+                exc_info=True,
+            )
+            return ObservedTurnFacts()
+
+    async def _failure_observed_facts(self, turn_id: str) -> ObservedTurnFacts:
+        try:
+            async with asyncio.timeout(_CANCELLATION_FACTS_TIMEOUT_SECONDS):
+                return await self._latest_observed_facts(turn_id)
+        except (Exception, asyncio.CancelledError):
+            logger.warning(
+                "Observed Turn facts were unavailable after execution failure.",
                 exc_info=True,
             )
             return ObservedTurnFacts()

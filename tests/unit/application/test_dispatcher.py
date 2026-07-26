@@ -21,6 +21,10 @@ from awesome_agent.application.dispatcher import (
 )
 from awesome_agent.application.foreground import ForegroundArbiter
 from awesome_agent.application.operations import OperationBusy, OperationController
+from awesome_agent.config.resource_lock import (
+    ResourceLockTimeout,
+    ResourceLockUnavailable,
+)
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 
 
@@ -47,6 +51,34 @@ async def test_dispatcher_requires_and_exposes_exact_core_inventory() -> None:
     assert set(dispatcher.registered_names) == set(handlers)
     outcome = await dispatcher.dispatch(CommandIntent(name=CommandName.TOOLS))
     assert outcome == result(NoticeCommandPayload(message="tools"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "error_code"),
+    [
+        (ResourceLockTimeout(), "operation_busy"),
+        (ResourceLockUnavailable(), "state_unavailable"),
+    ],
+)
+async def test_dispatcher_normalizes_user_state_lock_failures(
+    failure: Exception,
+    error_code: str,
+) -> None:
+    async def fail(_: CommandIntent) -> CommandOutcome:
+        raise failure
+
+    handlers = _complete_handlers()
+    handlers[CommandName.MEMORY] = fail
+    dispatcher = CommandDispatcher(handlers)
+
+    outcome = await dispatcher.dispatch(
+        CommandIntent(name=CommandName.MEMORY, arguments=("local", "on"))
+    )
+
+    assert isinstance(outcome, CommandError)
+    assert outcome.code == error_code
+    assert "lock" not in outcome.message.lower()
 
 
 def test_dispatcher_rejects_incomplete_or_surface_owned_inventory() -> None:
@@ -121,6 +153,31 @@ async def test_pending_interaction_blocks_mutation_but_not_observation() -> None
     resumed = await dispatcher.dispatch(CommandIntent(name=CommandName.RESUME))
     assert not isinstance(resumed, CommandError)
     assert resumed.kind == "result"
+
+
+@pytest.mark.asyncio
+async def test_recovery_guard_blocks_mutations_but_not_observations() -> None:
+    foreground = ForegroundArbiter()
+    handled: list[CommandName] = []
+
+    async def handler(intent: CommandIntent) -> CommandOutcome:
+        handled.append(intent.name)
+        return result(NoticeCommandPayload(message=intent.name.value))
+
+    async def require_consistent_state() -> None:
+        raise RuntimeError("recovery required")
+
+    dispatcher = CommandDispatcher(
+        {name: handler for name in _complete_handlers()},
+        foreground=foreground,
+        mutation_guard=require_consistent_state,
+    )
+
+    observed = await dispatcher.dispatch(CommandIntent(name=CommandName.STATUS))
+    assert not isinstance(observed, CommandError)
+    with pytest.raises(RuntimeError, match="recovery required"):
+        await dispatcher.dispatch(CommandIntent(name=CommandName.NEW))
+    assert handled == [CommandName.STATUS]
 
 
 @pytest.mark.asyncio

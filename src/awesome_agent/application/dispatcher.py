@@ -10,8 +10,13 @@ from awesome_agent.application.commands import (
     CommandOwner,
 )
 from awesome_agent.application.foreground import ForegroundArbiter, ForegroundBusy
+from awesome_agent.config.resource_lock import (
+    ResourceLockTimeout,
+    ResourceLockUnavailable,
+)
 
 type CommandHandler = Callable[[CommandIntent], Awaitable[CommandOutcome]]
+type MutationGuard = Callable[[], Awaitable[None]]
 
 _APPLICATION_COMMANDS = frozenset(
     name for name, owner in COMMAND_OWNERS.items() if owner is not CommandOwner.INK
@@ -42,6 +47,7 @@ class CommandDispatcher:
         *,
         foreground: ForegroundArbiter | None = None,
         has_pending_interaction: Callable[[], bool] = lambda: False,
+        mutation_guard: MutationGuard | None = None,
     ) -> None:
         names = frozenset(handlers)
         if names != _APPLICATION_COMMANDS:
@@ -54,22 +60,39 @@ class CommandDispatcher:
         self._handlers = dict(handlers)
         self._foreground = foreground
         self._has_pending_interaction = has_pending_interaction
+        self._mutation_guard = mutation_guard
 
     @property
     def registered_names(self) -> tuple[CommandName, ...]:
         return tuple(sorted(self._handlers, key=lambda name: name.value))
 
     async def dispatch(self, intent: CommandIntent) -> CommandOutcome:
+        try:
+            return await self._dispatch(intent)
+        except ResourceLockTimeout:
+            return error(
+                "operation_busy",
+                "User state is being changed by another Awesome process.",
+            )
+        except ResourceLockUnavailable:
+            return error(
+                "state_unavailable",
+                "User state cannot be accessed safely.",
+            )
+
+    async def _dispatch(self, intent: CommandIntent) -> CommandOutcome:
         handler = self._handlers.get(intent.name)
         if handler is None:
             return error(
                 "command_not_available",
                 "Command is not available in the current product phase.",
             )
+        observation = _is_observation(intent)
         foreground = self._foreground
         if foreground is None:
+            if not observation and self._mutation_guard is not None:
+                await self._mutation_guard()
             return await handler(intent)
-        observation = _is_observation(intent)
         if foreground.closing or foreground.exclusive_active:
             return _operation_busy()
         if foreground.operation_active:
@@ -95,6 +118,8 @@ class CommandDispatcher:
                     "interaction_busy",
                     "Resolve the pending interaction before changing state.",
                 )
+            if self._mutation_guard is not None:
+                await self._mutation_guard()
             return await handler(intent)
 
 

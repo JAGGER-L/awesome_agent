@@ -22,18 +22,25 @@ home, not the operating-system home.
 ```text
 <HOME>/
 ├── .env
+├── .env.lock
+├── .provider-credential-transaction.json
+├── .provider-credential-transaction.env
 ├── .state.lock
+├── .config.yaml.lock
 ├── config.yaml
 ├── ui.json
 ├── skills/
 ├── memory/
+│   ├── .USER.md.lock
 │   └── USER.md
 ├── workspaces/
 │   └── <workspace_key>/
+│       ├── .MEMORY.md.lock
 │       └── MEMORY.md
 ├── state/
 │   ├── application.db
 │   ├── checkpoints.db
+│   ├── provider-model-transaction.json
 │   └── change-journal/
 │       └── blobs/
 ├── .workspace-leases/
@@ -96,6 +103,34 @@ lives at `<HOME>/workspaces/<workspace_key>/MEMORY.md`; it is intentionally
 outside the repository so a remembered fact cannot become a commit by accident.
 Both are bounded managed Markdown documents with stable entry IDs and a content
 hash. See [Memory](../extensions/memory.md).
+
+### User-state mutation locks
+
+Core serializes read-modify-write transactions for `config.yaml`, `.env`,
+`USER.md`, and each Workspace `MEMORY.md` across threads and processes. It uses
+a persistent one-byte sibling named `.<resource>.lock`; an already-hidden
+resource such as `.env` uses `.env.lock`, not a second leading dot. Waiting for
+these locks is bounded and runs outside the event-loop thread, so another
+process cannot freeze foreground cancellation or status rendering. A cancelled
+mutation finishes its already-started filesystem transaction within a bounded
+cleanup window before cancellation is reported; a worker that misses that
+window cannot later publish an in-memory state commit. Its filesystem outcome
+must be treated as uncertain until a later process reloads the durable files.
+
+A lock wait that reaches its deadline is reported as retryable
+`operation_busy` for commands and credential RPCs, or retryable `timeout` for a
+Memory tool call. An unsafe or unavailable sidecar/platform lock has two typed
+envelopes: an Application command or RPC returns retryable
+`state_unavailable` with bounded `state_directory` metadata, while a Memory
+tool returns a non-retryable `state_unavailable` `ToolOutput`. These errors are
+fixed and sanitized; they never expose the sidecar path or the operating-system
+exception.
+
+These sidecars are coordination artifacts, not configuration or Memory
+content. Do not edit or delete them while an Awesome process may be running.
+Their absence before the first mutation is normal; Core creates them lazily and
+rejects a sidecar that is a link, reparse point, non-regular file, or whose
+opened identity does not match its path.
 
 ## Workspace-owned files
 
@@ -160,6 +195,56 @@ silently duplicated.
 Do not edit this database manually. Row invariants, foreign keys, the Checkpoint
 store, and Change Journal blobs form one recovery contract even though they use
 separate files.
+
+## Provider model transaction journal
+
+`<HOME>/state/provider-model-transaction.json` closes the atomicity gap between
+the default model in `config.yaml` and the selected model on a Thread in
+`application.db`. Those resources cannot participate in one database
+transaction. A model change therefore writes a durable `prepared` record with
+the previous and target model identities, replaces and reloads configuration,
+updates the Thread, verifies both resources, changes the record to `committed`,
+and only then removes it.
+
+Startup rolls a `prepared` record back to its previous values and rolls a
+`committed` record forward to its target values. Reconciliation is idempotent
+and clears the journal only after both sides verify. A malformed or
+unreconcilable journal fails activation with `recovery_required`. If the same
+condition is detected at runtime, new operations and state mutations are
+fenced; snapshot reads, cancellation, and shutdown remain available.
+
+The journal is strict, bounded UTF-8 JSON and never contains credentials. Core
+rejects a linked/reparse parent, a symlink/reparse file, a hard-linked or
+non-regular file, an identity change while opening, duplicate keys, non-finite
+JSON values, and content over 4 KiB. Do not edit or delete this file: its
+presence is recovery intent, not disposable cache state.
+
+## Provider credential transaction files
+
+`/auth` may need to change both the full `<HOME>/.env` document and the selected
+credential source in `<HOME>/config.yaml`. They cannot share one filesystem
+commit, so Core coordinates them with two hidden files at the `<HOME>` root:
+
+- `.provider-credential-transaction.json` is a strict, non-secret journal with
+  the service, action, phase, source choices, and whole-file hashes;
+- `.provider-credential-transaction.env` is an exact byte-for-byte backup of
+  the previous `.env`, including comments and unrelated entries.
+
+The backup is staged before `PREPARED` is published. Startup reconciles both
+`PREPARED` and `SECRET_COMMITTED` by restoring the complete previous `.env` and
+previous source; `COMMITTED` is rolled forward to the target source only after
+the target `.env` hash matches. The files are removed only after both durable
+facts verify. Reconciliation runs before the first real configuration load,
+state preflight/reset, or workspace-trust handling, so a half-written secret
+cannot influence startup.
+
+The JSON file is capped at 4 KiB and never stores a credential. The backup is
+capped at 1 MiB, contains secrets, and is owner-readable/writable only on
+POSIX. Both reject symlinks, reparse points, hard links, non-regular files, and
+identity changes while opening. `.env` is likewise a bounded strict UTF-8
+input; NUL bytes and unsafe file identities fail closed. Do not delete either
+transaction file manually. An invalid or inconsistent record produces
+`recovery_required` rather than guessing which write succeeded.
 
 ## LangGraph checkpoints
 
@@ -233,10 +318,12 @@ Reset removes:
 - checkpoints;
 - ChangeSets, undo/redo history, and blobs.
 
-Reset keeps everything outside `<HOME>/state`: `config.yaml`, `.env`, `ui.json`,
-User Skills, Local Memory documents/settings, and the installed release. Cloud
-Memory records already stored by Mem0 are external and are not deleted by a
-local reset.
+Reset keeps everything outside `<HOME>/state`: `config.yaml`, `.env`, the
+Provider credential transaction journal and backup, `ui.json`, User Skills,
+Local Memory documents/settings, and the installed release. Keeping the
+credential recovery evidence outside the resettable namespace prevents a state
+reset from erasing an unresolved cross-file transaction. Cloud Memory records
+already stored by Mem0 are external and are not deleted by a local reset.
 
 ## Backup and restore
 

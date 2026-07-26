@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "locale": "en",
-  "kicker": "Terminal-native · One Python Core · Recoverable changes",
-  "title": "Turn intent into a verified change.",
-  "lead": "Awesome is an AI coding assistant for deliberate software work. It understands your codebase, plans the change, acts through controlled tools, verifies the result, and keeps every step visible, bounded, and recoverable.",
+  "kicker": "Terminal-native · One Python Core · Controlled execution",
+  "title": "Turn intent into a reviewable change.",
+  "lead": "Awesome is an AI coding assistant for deliberate software work. It understands your codebase, plans the change, acts through controlled tools, can run relevant checks, and keeps execution visible and bounded. Change Journal recovery applies only to supported file edits—not arbitrary shell or external effects.",
   "primaryAction": "Start in five minutes",
   "secondaryAction": "See how it works",
   "copy": "Copy",
@@ -44,14 +44,14 @@
     {
       "id": "verify",
       "eyebrow": "03 / VERIFY",
-      "title": "Verification is part of the work",
-      "description": "Awesome runs the smallest sufficient checks and records real results."
+      "title": "Verification stays explicit",
+      "description": "Awesome can run relevant checks and records what actually ran; it does not guarantee that every result is verified."
     },
     {
       "id": "recover",
       "eyebrow": "04 / RECOVER",
-      "title": "Changes have a way back",
-      "description": "The Change Journal gives controlled edits explicit undo semantics."
+      "title": "Controlled file edits have a way back",
+      "description": "The Change Journal gives controlled file edits explicit undo semantics; shell and external effects are not reversible."
     }
   ],
   "loopEyebrow": "01 / PRODUCT LOOP",
@@ -80,7 +80,7 @@
       "id": "verify",
       "number": "04",
       "title": "Verify",
-      "description": "Run relevant checks, explain the result, and preserve a recovery path."
+      "description": "Run requested or necessary checks, report what actually ran, and distinguish reversible file edits from other effects."
     }
   ],
   "resourcesEyebrow": "02 / START HERE",

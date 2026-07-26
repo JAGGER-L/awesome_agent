@@ -45,7 +45,11 @@ from awesome_agent.memory.policy import (
     cloud_fact_hash,
 )
 from awesome_agent.memory.service import LocalMemoryService
-from awesome_agent.memory.tools import MEMORY_TOOL_NAMES, refresh_local_memory_tools
+from awesome_agent.memory.tools import (
+    MEMORY_TOOL_NAMES,
+    refresh_local_memory_tools,
+    validate_local_memory_tools,
+)
 
 __all__ = [
     "MEM0_MAX_RESULTS",
@@ -85,4 +89,5 @@ __all__ = [
     "new_mem0_user_id",
     "refresh_local_memory_tools",
     "render_memory_document",
+    "validate_local_memory_tools",
 ]

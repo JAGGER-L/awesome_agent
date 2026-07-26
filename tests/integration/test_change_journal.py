@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from time import monotonic
 from unittest.mock import Mock
@@ -128,6 +129,7 @@ async def test_delete_removes_symlink_without_following_target(tmp_path: Path) -
         link.symlink_to(outside)
     except OSError:
         pytest.skip("File symlinks are not available on this platform.")
+    raw_target = os.readlink(link)
 
     result = await executor.execute(
         ToolRequest(
@@ -146,7 +148,7 @@ async def test_delete_removes_symlink_without_following_target(tmp_path: Path) -
     change = change_set.files[0]
     assert change.node_type is FileNodeType.SYMLINK
     assert change.before_blob is not None
-    assert blobs.get(change.before_blob) == bytes(outside)
+    assert blobs.get(change.before_blob) == os.fsencode(raw_target)
 
     reopened = ChangeOperations(
         SQLiteChangeSetStore(tmp_path / "application.db"),
@@ -155,6 +157,7 @@ async def test_delete_removes_symlink_without_following_target(tmp_path: Path) -
     )
     reopened.undo(change_set.id)
     assert link.is_symlink()
+    assert os.readlink(link) == raw_target
     assert link.read_text(encoding="utf-8") == "outside"
     reopened.redo(change_set.id)
     assert not link.exists()

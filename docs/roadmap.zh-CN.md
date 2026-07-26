@@ -39,25 +39,10 @@ Awesome 目前提供：
   [工具契约](reference/built-in-tools.zh-CN.md#通用请求与结果契约)、
   [配置](reference/configuration.zh-CN.md)和
   [Skills](extensions/skills.zh-CN.md#创建-skill)。
-- MCP Manager 发布与 Registry 替换是两次各自全有或全无的提交，而不是一个事务。
-  compiler 还不会拒绝完整命名空间工具名超过 `/tools` payload 的 128 字符限制或
-  model/event 的 200 字符限制。参见
-  [MCP 发布](extensions/mcp.zh-CN.md#catalog-与-registry-发布)。
-- 无效但已启用的本地 Memory 可能在 Turn 记录创建之后、coordinator 将其终态化之前
-  失败，使启动恢复负责协调该 Turn。参见
-  [Memory 上下文](extensions/memory.zh-CN.md#进入模型的内容)。
 - Skill 模式 `auto` 与 `off` 当前具有相同的可观察行为；尚不存在自动选择器。参见
   [Skill 选择](extensions/skills.zh-CN.md#选择和加载-skills)。
-- Core 与 TUI 尚未强制执行完全相同的 JSON-RPC request ID 边界；
-  `direct.execute` 先接受 30,000 字符的传输字段，再委托给 8,000 字符的工具字段。
-  参见 [Protocol 请求契约](reference/protocol.zh-CN.md#json-rpc-request-形状)与
-  [方法目录](reference/protocol.zh-CN.md#method-catalog)。
-- Core 会限制请求行，却不会按 TUI 的 1 MiB frame 上限预检自己序列化后的输出。
-  因此，较大的 `thread.read` 页面或未分页的 `/tools` 结果可能使 TUI 关闭一个原本
-  有效的通道。参见 [Protocol framing](reference/protocol.zh-CN.md#进程与传输)。
-- 如果 ChangeSet finalization 自身抛出异常，Direct Operation 不会保留原始取消/失败；
-  取消可能表现为 `operation.failed`。参见
-  [Direct 生命周期](architecture/request-lifecycles.zh-CN.md#直接-shell-命令)。
+- `direct.execute` 先接受 30,000 字符的传输字段，再委托给 8,000 字符的工具字段。
+  参见[方法目录](reference/protocol.zh-CN.md#method-catalog)。
 - `/auth mem0` 会保存本地格式有效的输入，而不远程验证 Mem0 凭据；失败会在第一次
   云操作时出现。参见 [Memory 配置](extensions/memory.zh-CN.md#配置)。
 

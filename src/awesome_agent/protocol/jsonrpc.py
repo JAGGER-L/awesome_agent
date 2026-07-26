@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import logging
-import math
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
-    BeforeValidator,
     ConfigDict,
     Field,
     SecretStr,
@@ -30,6 +28,10 @@ from awesome_agent.application.contracts import (
 )
 from awesome_agent.application.facade import ApplicationFacade
 from awesome_agent.application.interactions import InteractionDecision
+from awesome_agent.core.contracts import (
+    JsonSafeInteger,
+    normalize_json_safe_integer,
+)
 from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
@@ -40,28 +42,6 @@ logger = logging.getLogger(__name__)
 
 type JsonObject = dict[str, Any]
 type MethodHandler = Callable[[Mapping[str, object]], Awaitable[object]]
-_MAX_JSON_SAFE_INTEGER = 9_007_199_254_740_991
-
-
-def _normalize_json_safe_integer(value: object) -> int:
-    if type(value) is int:
-        normalized = value
-    elif type(value) is float:
-        observed = value
-        if not math.isfinite(observed) or not observed.is_integer():
-            raise ValueError("Expected an integral JSON number.")
-        normalized = int(observed)
-    else:
-        raise ValueError("Expected an integral JSON number.")
-    if abs(normalized) > _MAX_JSON_SAFE_INTEGER:
-        raise ValueError("JSON integer exceeds the interoperable safe range.")
-    return normalized
-
-
-type _JsonSafeInteger = Annotated[
-    int,
-    BeforeValidator(_normalize_json_safe_integer),
-]
 
 
 def _reject_explicit_nulls(
@@ -82,7 +62,7 @@ class _EmptyParams(BaseModel):
 class _InitializeWireParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    protocol_version: _JsonSafeInteger
+    protocol_version: JsonSafeInteger
     client_name: str = Field(min_length=1, max_length=128, strict=True)
     client_version: str = Field(min_length=1, max_length=64, strict=True)
 
@@ -97,7 +77,7 @@ class _ThreadListParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
-    limit: _JsonSafeInteger = Field(default=50, ge=1, le=200)
+    limit: JsonSafeInteger = Field(default=50, ge=1, le=200)
 
     @model_validator(mode="before")
     @classmethod
@@ -106,8 +86,8 @@ class _ThreadListParams(BaseModel):
 
 
 class _ThreadReadParams(_ThreadParams):
-    before_sequence: _JsonSafeInteger | None = Field(default=None, ge=1)
-    limit: _JsonSafeInteger = Field(default=100, ge=1, le=500)
+    before_sequence: JsonSafeInteger | None = Field(default=None, ge=1)
+    limit: JsonSafeInteger = Field(default=100, ge=1, le=500)
 
     @model_validator(mode="before")
     @classmethod
@@ -372,15 +352,33 @@ def parse_jsonrpc_request(
     if not isinstance(method, str) or not method:
         return None
     has_id = "id" in value
-    request_id = value.get("id")
-    if has_id and (
-        isinstance(request_id, bool)
-        or request_id is None
-        or not isinstance(request_id, (str, int))
-    ):
+    request_id = normalize_jsonrpc_request_id(value.get("id"))
+    if has_id and request_id is None:
         return None
     params = value.get("params", {})
-    return cast(str | int | None, request_id), has_id, method, params
+    return request_id, has_id, method, params
+
+
+def normalize_jsonrpc_request_id(value: object) -> str | int | None:
+    if isinstance(value, str):
+        if not 1 <= len(value) <= 128:
+            return None
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return None
+        return value
+    if type(value) is int:
+        try:
+            return normalize_json_safe_integer(value)
+        except ValueError:
+            return None
+    if type(value) is float:
+        try:
+            return normalize_json_safe_integer(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _serialize(value: object) -> object:

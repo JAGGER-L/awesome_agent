@@ -398,13 +398,194 @@ def test_begin_turn_rolls_back_title_and_entry_when_turn_write_fails(
         repositories.begin_turn(
             _entry("entry_1", sequence=1),
             _turn(),
-            updated,
+            automatic_title=updated.title,
+            updated_at=updated.updated_at,
         )
 
     view = repositories.read_thread(thread.id)
     assert view.thread.title == "New conversation"
     assert view.entries == ()
     assert view.turns == ()
+
+
+def test_begin_turn_preserves_a_manual_title_selected_after_stale_read(
+    tmp_path: Path,
+) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    thread = _thread().model_copy(
+        update={
+            "title": "New conversation",
+            "title_source": ThreadTitleSource.AUTOMATIC,
+        }
+    )
+    repositories.threads.create(thread)
+    repositories.rename_thread(
+        thread.id,
+        "Manual title",
+        updated_at=_now(),
+    )
+
+    repositories.begin_turn(
+        _entry("entry_1", sequence=1),
+        _turn(),
+        automatic_title="stale automatic suggestion",
+        updated_at=_now(),
+    )
+
+    stored = repositories.read_thread(thread.id).thread
+    assert stored.title == "Manual title"
+    assert stored.title_source is ThreadTitleSource.MANUAL
+
+
+def test_begin_turn_only_applies_automatic_title_without_prior_entries(
+    tmp_path: Path,
+) -> None:
+    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    thread = _thread().model_copy(
+        update={
+            "title": "Existing automatic title",
+            "title_source": ThreadTitleSource.AUTOMATIC,
+        }
+    )
+    repositories.threads.create(thread)
+    repositories.entries.append(_entry("entry_1", sequence=1))
+
+    repositories.begin_turn(
+        _entry("entry_2", sequence=2),
+        _turn(user_entry_id="entry_2"),
+        automatic_title="stale first-turn suggestion",
+        updated_at=_now(),
+    )
+
+    stored = repositories.read_thread(thread.id).thread
+    assert stored.title == "Existing automatic title"
+    assert stored.title_source is ThreadTitleSource.AUTOMATIC
+
+
+@pytest.mark.parametrize(
+    ("first_offset", "second_offset"),
+    ((20, 10), (10, 20)),
+    ids=("newer-commits-first", "older-commits-first"),
+)
+@pytest.mark.parametrize(
+    ("mutation", "first_value", "second_value", "field"),
+    (
+        ("model", "model-a", "model-b", "current_model"),
+        ("rename", "Title A", "Title B", "title"),
+        ("thinking", False, True, "thinking_enabled"),
+        ("skill", "off", "debug", "skill_mode"),
+    ),
+)
+def test_thread_field_commits_never_move_updated_at_backwards(
+    tmp_path: Path,
+    first_offset: int,
+    second_offset: int,
+    mutation: str,
+    first_value: str | bool,
+    second_value: str | bool,
+    field: str,
+) -> None:
+    path = tmp_path / f"thread-{mutation}-{first_offset}-{second_offset}.db"
+    first = SQLiteConversationRepositories(path)
+    second = SQLiteConversationRepositories(path)
+    base = datetime(2026, 7, 26, 1, 0, tzinfo=UTC)
+    thread = _thread().model_copy(update={"created_at": base, "updated_at": base})
+    first.threads.create(thread)
+    first_time = base + timedelta(seconds=first_offset)
+    second_time = base + timedelta(seconds=second_offset)
+
+    def mutate(
+        repositories: SQLiteConversationRepositories,
+        value: str | bool,
+        updated_at: datetime,
+    ) -> Thread:
+        if mutation == "model":
+            assert isinstance(value, str)
+            return repositories.set_thread_model(
+                thread.id,
+                value,
+                updated_at=updated_at,
+            )
+        if mutation == "rename":
+            assert isinstance(value, str)
+            return repositories.rename_thread(
+                thread.id,
+                value,
+                updated_at=updated_at,
+            )
+        if mutation == "thinking":
+            assert isinstance(value, bool)
+            return repositories.set_thread_thinking(
+                thread.id,
+                value,
+                updated_at=updated_at,
+            )
+        assert mutation == "skill"
+        assert isinstance(value, str)
+        return repositories.set_thread_skill_mode(
+            thread.id,
+            value,
+            updated_at=updated_at,
+        )
+
+    first_result = mutate(first, first_value, first_time)
+    second_result = mutate(second, second_value, second_time)
+
+    expected_time = max(first_time, second_time)
+    stored = first.read_thread(thread.id).thread
+    assert first_result.updated_at == first_time
+    assert second_result.updated_at == expected_time
+    assert stored.updated_at == expected_time
+    assert getattr(stored, field) == second_value
+    if mutation == "rename":
+        assert stored.title_source is ThreadTitleSource.MANUAL
+
+
+@pytest.mark.parametrize(
+    ("field_offset", "turn_offset"),
+    ((20, 10), (10, 20)),
+    ids=("newer-field-commits-first", "older-field-commits-first"),
+)
+def test_begin_turn_never_moves_thread_updated_at_backwards(
+    tmp_path: Path,
+    field_offset: int,
+    turn_offset: int,
+) -> None:
+    path = tmp_path / f"begin-turn-{field_offset}-{turn_offset}.db"
+    field_writer = SQLiteConversationRepositories(path)
+    turn_writer = SQLiteConversationRepositories(path)
+    base = datetime(2026, 7, 26, 2, 0, tzinfo=UTC)
+    thread = _thread().model_copy(
+        update={
+            "title": "New conversation",
+            "title_source": ThreadTitleSource.AUTOMATIC,
+            "created_at": base,
+            "updated_at": base,
+        }
+    )
+    field_writer.threads.create(thread)
+    field_time = base + timedelta(seconds=field_offset)
+    turn_time = base + timedelta(seconds=turn_offset)
+    field_writer.set_thread_model(
+        thread.id,
+        "deepseek/newer-selection",
+        updated_at=field_time,
+    )
+
+    turn_writer.begin_turn(
+        _entry("entry_1", sequence=1),
+        _turn(),
+        automatic_title="First accepted request",
+        updated_at=turn_time,
+    )
+
+    view = field_writer.read_thread(thread.id)
+    assert view.thread.updated_at == max(field_time, turn_time)
+    assert view.thread.current_model == "deepseek/newer-selection"
+    assert view.thread.title == "First accepted request"
+    assert view.thread.title_source is ThreadTitleSource.AUTOMATIC
+    assert len(view.entries) == 1
+    assert len(view.turns) == 1
 
 
 def test_summary_upsert_and_tool_activity_idempotency(tmp_path: Path) -> None:

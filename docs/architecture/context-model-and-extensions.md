@@ -216,8 +216,8 @@ workspace, shell, or MCP capabilities.
 
 ## MCP catalog and calls
 
-MCP extends the shared tool registry, not the Agent graph. Publication has two
-complete-snapshot boundaries:
+MCP extends the shared tool registry, not the Agent graph. One server-specific
+lock covers catalog loading, compilation, and publication:
 
 ```text
 start stdio client
@@ -225,9 +225,10 @@ start stdio client
   -> consume all tool pages within bounds
   -> compile every input/output JSON Schema without network retrieval
   -> assign generation
-  -> Manager atomically publishes client + catalog + CONNECTED
-  -> Application builds all generation-bound handlers
-  -> Registry atomically replaces that server namespace
+  -> validate the final namespaced names
+  -> build all generation-bound handlers
+  -> Registry validates aggregate bounds and atomically replaces namespace
+  -> without awaiting, Manager publishes generation + client + catalog + CONNECTED
 ```
 
 The catalog compiler defaults to JSON Schema Draft 2020-12 and accepts only a
@@ -237,21 +238,23 @@ composition, conditionals, ranges, patterns, arrays, and property constraints.
 `$dynamicRef`, and `$recursiveRef` must resolve within the same schema resource;
 remote references are rejected before a validator can perform I/O.
 
-Current catalog bounds are 128 tools, 128 pages, 256 KiB per schema, 1 MiB for
-the full catalog, and schema depth 64. A duplicate name, invalid contract,
-cursor cycle, timeout, or bound violation closes the new client, clears the
-Manager catalog, and reports one bounded diagnostic; Registry synchronization
-then removes that namespace. Neither boundary publishes a partial snapshot.
+Per-server catalog bounds are 128 tools, 128 pages, 256 KiB per input or output
+schema, 1 MiB for the full catalog, schema depth 64, and 128 characters for the
+final `mcp.<server>.<tool>` name. The shared Registry separately bounds the
+effective aggregate across built-ins and every extension namespace to 128 tools
+and 1 MiB of canonical model-facing definitions (`name`, `description`, and
+`input_schema`). A per-server-valid candidate can therefore still fail the
+shared budget.
 
-The Manager and Registry commits are not one transaction. Manager
-`CONNECTED` means a client and compiled catalog generation exist; it does not
-prove the later namespace replacement succeeded. The current compiler also
-lacks a component-length bound for upstream tool names. Downstream limits are
-stricter: model/event tool names allow at most 200 characters and `/tools`
-items at most 128. A namespaced `mcp.<server>.<tool>` name that exceeds either
-consumer may therefore compile, leave Manager state connected, and later fail
-Registry adaptation, model exposure, or `/tools` presentation. This is a known
-contract-hardening gap, not an atomic end-to-end guarantee.
+Registry replacement first validates the complete aggregate candidate and then
+swaps the namespace all-or-none. Once that synchronous call succeeds, no
+`await` separates the Manager assignments for the same generation and the
+final `CONNECTED` state. `CONNECTED` therefore means the live client, compiled
+catalog, and complete Registry namespace have all been published. A duplicate
+name, invalid contract, cursor cycle, timeout, or either kind of bound violation
+closes the new client, invalidates the generation, removes that server's
+namespace, and reports one fixed, bounded diagnostic. It never publishes a
+valid subset or removes another server's committed namespace.
 
 Handlers capture the catalog generation. Before remote I/O, Pydantic validates
 arguments using the compiled schema; the manager then verifies that server,
@@ -290,9 +293,9 @@ Every extension must preserve these rules:
   provider-neutral predictability.
 - A closed model catalog requires code changes for a new model but keeps
   capabilities, limits, credentials, and UI selection coherent.
-- Complete-snapshot MCP publication delays tool availability until the Manager
-  catalog is valid and prevents partial Manager catalogs or Registry namespaces;
-  the separate commits still leave the documented downstream-name gap.
+- Complete-snapshot MCP publication delays tool availability until both the
+  Manager catalog and Registry aggregate are valid; this prevents partial
+  catalogs, partial namespaces, stale handlers, and overlong downstream names.
 - Immutable workspace instructions and the pinned Skill package/`SKILL.md`
   lineage require a new session after edits; lazily read Skill resources remain
   safe per-open reads rather than a whole-package content snapshot.

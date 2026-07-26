@@ -14,6 +14,9 @@ recovery rules.
 | `state/application.db` | Application Storage | trust, Threads, entries, Turns, summaries, tool activity, ChangeSets, pending mutations, MCP enablement | durable local history |
 | `state/checkpoints.db` | LangGraph adapter | unfinished `AgentState` channels | unfinished Turn only |
 | `state/change-journal/` | Change Journal | content-addressed before/after blobs | while referenced |
+| `state/provider-model-transaction.json` | Application + Config | bounded recovery intent joining the user default model to one Thread model | until verified reconciliation |
+| `.provider-credential-transaction.json` | Application + Config | non-secret credential/source recovery intent | until verified reconciliation |
+| `.provider-credential-transaction.env` | Application + Config | exact previous `.env` bytes; contains secrets | until verified reconciliation |
 | `config.yaml` | Config | user-owned non-secret configuration | user controlled |
 | `.env` | Config secret loader | explicitly persisted credentials | user controlled |
 | `memory/USER.md` | local Memory | optional user facts | user controlled |
@@ -189,6 +192,99 @@ This is crash convergence, not hostile local-state attestation. If an attacker
 can replace both checkpoint content and its matching hashes, there is no second
 external authority that authenticates them.
 
+## Provider model cross-store transaction
+
+Changing `/model` updates two independently durable facts: the default for new
+Threads in `config.yaml` and the selected model of the current Thread in
+`application.db`. Neither file can join the other's transaction. Treating one
+write as best-effort compensation would make a process kill indistinguishable
+from a successful half-update, so Application uses a small write-ahead journal
+and one user-config resource lock as the ordering boundary:
+
+```text
+acquire config resource lock
+  -> reject any unresolved journal
+  -> persist PREPARED(previous values, target values)
+  -> replace and reload config.yaml
+  -> patch only the Thread model field in Application SQLite
+  -> verify both durable values
+  -> persist COMMITTED
+  -> remove journal
+release lock
+  -> publish the verified configuration to the live runtime
+```
+
+A new process reconciles this journal before loading trusted configuration.
+`PREPARED` means restore both previous values; `COMMITTED` means write both
+target values. Both paths are idempotent, verify the two stores, and remove the
+journal only after verification. A malformed journal, failed reconciliation,
+or failed in-process compensation produces `recovery_required`. The live
+runtime then rejects new Turns, Direct commands, credentials, interactions,
+and other state mutations while still permitting bounded snapshots,
+cancellation, and shutdown. It never guesses which side won and never replays a
+Provider call.
+
+The journal is strict UTF-8 JSON, capped at 4 KiB, contains model and Thread
+identities but no credentials, and rejects links, reparse points, hard links,
+non-regular files, duplicate keys, non-finite numbers, and identity drift while
+opening. Its file and directory are synchronized around journal replacement.
+`config.yaml`, SQLite, and the journal still have no common power-loss commit
+primitive, so this contract proves ordinary process-crash convergence, not
+whole-machine power-loss atomicity.
+
+## Provider credential cross-file transaction
+
+An Awesome-managed credential has two independently durable parts: its value
+inside the complete `.env` document and its selected source in `config.yaml`.
+Atomic replacement protects either file from partial bytes, but it cannot make
+the pair atomic. `/auth` therefore acquires the config and secret resource locks
+in one order and runs this write-ahead protocol:
+
+```text
+acquire config lock, then .env lock
+  -> reject unresolved Provider journals
+  -> snapshot the complete previous .env
+  -> persist the secret backup, then PREPARED with whole-file hashes
+  -> atomically replace .env and verify the target hash
+  -> persist SECRET_COMMITTED
+  -> update the selected source in config.yaml and reload
+  -> verify both durable facts
+  -> persist COMMITTED
+  -> remove the journal and backup
+release locks
+  -> publish the verified configuration to the live runtime
+```
+
+The JSON journal never contains a secret. The companion backup contains the
+exact previous `.env` bytes rather than only the changed key; this preserves
+comments, unrelated services, ordering, and the difference between an absent
+and an empty file. Both files live directly under `<AWESOME_HOME>`, outside the
+resettable `state/` namespace, because reset must not erase unresolved recovery
+evidence.
+
+Startup reconciles this transaction before the first real config/secret load,
+before state preflight or reset, and before workspace trust. `PREPARED` is
+conservatively treated as possibly having already changed `.env`, so both
+`PREPARED` and `SECRET_COMMITTED` restore and verify the complete previous file
+and source. `COMMITTED` verifies the target file and rolls the source forward.
+Missing, malformed, linked, over-limit, or hash-inconsistent evidence fails
+closed with `recovery_required`; no phase guesses from the current secret.
+
+Cancellation adds one same-process boundary. If a blocking mutation ignores
+cancellation past the cleanup deadline, the event-loop thread installs a
+Provider-configuration fence before returning cancellation. Even if that late
+worker subsequently commits and removes its journal, that process does not
+publish its stale snapshot or accept another mutation; a fresh process reloads
+the verified durable result. The same abandonment fence covers model and
+credential transactions.
+
+A cleanup error after a verified `COMMITTED` record has already been removed
+cannot be reported as a failed RPC with stale runtime state and no recovery
+evidence. The mutation either publishes the verified result or retains the
+runtime fence. As with the model journal, file and directory synchronization
+prove bounded ordinary process-crash convergence, not a common whole-machine
+power-loss commit across the two user files.
+
 ## Recovery decisions
 
 The coordinator classifies an unfinished Turn:
@@ -232,6 +328,12 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 | after running Turn commits, before checkpoint | product Turn without valid checkpoint | fail with stable recovery code |
 | checkpoint commits, projection does not | validated frozen manifest | lineage-bound compare-and-swap |
 | answer persists, checkpoint remains | terminal product Turn | remove stale checkpoint |
+| Provider model journal is `PREPARED` | previous and target model identities | restore and verify both previous values |
+| Provider model journal is `COMMITTED` | previous and target model identities | write and verify both target values |
+| Provider model journal is invalid or cannot reconcile | journal remains; runtime stays unpublished or fenced | fail with `recovery_required`; do not mutate or guess |
+| Provider credential journal is `PREPARED` or `SECRET_COMMITTED` | exact previous `.env` backup, source identities, whole-file hashes | restore and verify the complete previous file and source |
+| Provider credential journal is `COMMITTED` | target `.env` hash and source identity | verify the target file and roll the source forward |
+| Provider credential evidence is invalid or cannot reconcile | journal/backup remains; runtime stays unpublished or fenced | fail with `recovery_required`; do not load the half-state |
 | mutation intent persists, effect uncertain | PendingMutation + blobs | verify, finalize, or roll back |
 | shell/MCP transport fails after dispatch | conservative observation / uncertain tool state | explicit Abort or Retry |
 | state reset fresh initialization fails | renamed original directory | restore original namespace |
@@ -259,7 +361,15 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 - Cross-process lease: `storage/state_lease.py`
 - Change persistence: `storage/changes.py`, `core/changes/`
 - Turn recovery: `application/turns.py`
+- Provider model transaction: `config/model_transaction.py`,
+  `application/provider_configuration.py`
+- Provider credential transaction: `config/credential_transaction.py`,
+  `config/credentials.py`, `application/provider_configuration.py`
 - Tests: `tests/unit/storage/`, `tests/integration/test_sqlite_checkpoints.py`,
   `tests/integration/test_agent_recovery.py`,
+  `tests/unit/config/test_model_transaction.py`,
+  `tests/unit/config/test_credential_transaction.py`,
+  `tests/unit/config/test_user_state_concurrency.py`,
+  `tests/integration/test_composition_activation.py`,
   `tests/integration/test_state_reset_concurrency.py`,
   `tests/structural/test_storage_architecture.py`

@@ -19,6 +19,10 @@ become Agent Turns.
 The foreground arbiter admits only one Operation, exclusive action, or
 interaction resolution at a time. Admission must happen before a Turn is
 persisted; otherwise a losing race would leave a ghost Turn that never ran.
+The decisive pending-interaction check runs inside the acquired Operation
+lease, after any asynchronous preflight. Only recovery resume may present a
+continuation, and it must exactly match the current interaction ID, generation,
+Thread, and Turn.
 
 ## Inputs, outputs, and invariants
 
@@ -78,7 +82,7 @@ turn.submit(thread_id, content, client_message_id)
   -> validate input and selected Thread
   -> reject a pending interaction
   -> validate configured provider
-  -> reserve foreground Operation atomically
+  -> reserve foreground Operation and revalidate pending interaction atomically
   -> begin Turn + append user entry in Application SQLite
   -> prepare immutable per-Turn inputs
   -> start Operation task and emit operation.started
@@ -97,6 +101,12 @@ turn.submit(thread_id, content, client_message_id)
 The cleanup attempts after the primary terminal fact are bounded. Failure does
 not rewrite a completed, cancelled, or failed Turn; startup reconciliation can
 retry leftover checkpoint cleanup.
+
+The synchronous durable Turn transition and Operation phase form one commit
+point. Before it, cancellation wins; after it, cancellation is rejected and
+bounded terminal publication preserves the already committed completed or
+failed outcome. Shutdown observes the same phase and waits rather than issuing
+a second cancellation.
 
 The TUI's `client_message_id` correlates an optimistic message with the
 authoritative accepted Turn. `operation_id`, `thread_id`, and `turn_id` bind
@@ -157,14 +167,12 @@ with its own Full-access permission session and does not open the ordinary shell
 approval interaction. Hard denial and every execution/cleanup boundary above
 remain active.
 
-There is one known finalization gap after Tool Executor returns. Direct's
-ChangeSet finalizer runs from an unprotected `finally` path. If sealing fails
-during an otherwise cancelled command, that later exception can replace the
-original `CancelledError`, and Operation Controller can emit
-`operation.failed` instead of `operation.cancelled`. The current test suite does
-not cover this combination. Fixing it requires bounded, primary-exception-
-preserving finalization tests for successful, failed, and cancelled Direct
-Operations.
+Transcript persistence and ChangeSet sealing are primary-outcome-preserving
+finalizers. If execution has already failed or been cancelled, a later
+persistence or sealing failure is reported without replacing that original
+exception. A cancelled Direct Operation therefore emits `operation.cancelled`,
+even when both finalizers fail; focused regressions cover successful, failed,
+and cancelled paths.
 
 ## Slash command
 
@@ -235,8 +243,15 @@ and checkpoint deletion, emits `operation.cancelled`, and releases the lease.
 Cleanup failure does not replace the cancelled terminal fact and can be retried
 during startup reconciliation. For a shell process, the Process Runner performs
 bounded process-tree and pipe cleanup and then re-raises the original
-`CancelledError`. The Direct-service finalization gap described above occurs
-after that runner guarantee and can still change the Operation-level outcome.
+`CancelledError`. Direct transcript and ChangeSet finalizers preserve that
+primary cancellation as it crosses the Application boundary.
+
+A true cancellation acknowledgement means the matching Operation had not yet
+crossed its commit point; this includes the observable window after
+`operation.started` but before the acceptance response. In that starting
+window, cancellation prevents the factory from running. Once completion or
+failure is committed, cancellation returns false and cannot replace its
+terminal event.
 
 Cancellation is not rollback. File changes already captured by the journal
 remain visible and can later be inspected or undone. External shell or MCP

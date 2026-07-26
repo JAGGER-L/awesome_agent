@@ -45,7 +45,9 @@ def test_secret_store_delete_is_idempotent_and_preserves_other_values(
     assert path.read_text(encoding="utf-8") == "OTHER=value\n"
 
 
-@pytest.mark.parametrize("value", ["", "   ", "line\nbreak", "line\rbreak"])
+@pytest.mark.parametrize(
+    "value", ["", "   ", "nul\0byte", "line\nbreak", "line\rbreak"]
+)
 def test_secret_store_rejects_invalid_values_without_leaking_them(
     tmp_path: Path,
     value: str,

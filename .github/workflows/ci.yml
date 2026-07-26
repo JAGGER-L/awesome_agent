@@ -27,6 +27,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Python
@@ -62,6 +63,11 @@ jobs:
 
       - name: Install locked dependencies
         run: uv sync --locked --dev
+
+      - name: Check release identity
+        run: >-
+          uv run python scripts/release/check_identity.py
+          --tag-policy absent-or-current
 
       - name: Check lockfile
         run: uv lock --check
@@ -142,6 +148,10 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --locked --dev
 
+      - name: Run Windows installer guard contracts
+        shell: pwsh
+        run: ./tests/packaging/install_windows_contract.ps1
+
       - name: Run Windows-sensitive contracts
         run: >-
           uv run pytest -q
@@ -149,8 +159,13 @@ jobs:
           tests/unit/protocol
           tests/unit/extensions
           tests/unit/application
+          tests/unit/config/test_resource_lock.py
+          tests/unit/config/test_user_state_concurrency.py
           tests/unit/context/test_workspace_instructions.py
+          tests/unit/memory/test_tools.py
           tests/unit/storage/test_state_recovery.py
+          tests/integration/test_change_journal.py
+          tests/integration/test_local_memory.py
           tests/integration/test_read_tools.py
           tests/integration/test_product_flows.py
           tests/integration/test_skills_mcp.py
@@ -184,6 +199,10 @@ jobs:
       - name: Run structural and packaging tests
         run: uv run pytest -q tests/structural tests/packaging
 
+      - name: Run POSIX installer guard contracts
+        shell: bash
+        run: sh tests/packaging/install_shell_contract.sh
+
       - name: Build wheel
         run: uv build --wheel --no-build-isolation
 
@@ -207,6 +226,8 @@ jobs:
           - os: ubuntu-latest
             node: "24"
           - os: windows-latest
+            node: "22.23.1"
+          - os: macos-latest
             node: "22.23.1"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25

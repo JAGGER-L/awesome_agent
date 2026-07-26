@@ -10,6 +10,7 @@ MCP_MODULES = {
     "__init__.py",
     "adapter.py",
     "catalog.py",
+    "errors.py",
     "manager.py",
     "models.py",
     "stdio.py",
@@ -65,7 +66,12 @@ def test_mcp_tool_calls_flow_through_the_shared_adapter() -> None:
     adapter = Path("src/awesome_agent/extensions/mcp/adapter.py").read_text(
         encoding="utf-8"
     )
+    manager = Path("src/awesome_agent/extensions/mcp/manager.py").read_text(
+        encoding="utf-8"
+    )
     assert direct_calls == []
     assert "RegisteredTool" in adapter
-    assert "replace_namespace" in adapter
+    assert "registered_tools" in adapter
     assert "ExpectedToolFailure" in adapter
+    assert "McpToolAdapter" in manager
+    assert "replace_namespace" in manager

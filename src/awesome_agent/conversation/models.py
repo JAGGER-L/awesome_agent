@@ -15,6 +15,8 @@ from pydantic import (
 
 from awesome_agent.config.models import BudgetConfig
 
+_MAX_JSON_SAFE_INTEGER = 9_007_199_254_740_991
+
 
 class ThreadEntryKind(StrEnum):
     USER_MESSAGE = "user_message"
@@ -46,17 +48,17 @@ class ToolActivityOutcome(StrEnum):
 
 
 class UsageSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
-    reasoning_tokens: int = Field(default=0, ge=0)
-    cache_read_tokens: int = Field(default=0, ge=0)
-    cache_write_tokens: int = Field(default=0, ge=0)
-    model_calls: int = Field(default=0, ge=0)
-    tool_calls: int = Field(default=0, ge=0)
-    provider_retries: int = Field(default=0, ge=0)
-    compressions: int = Field(default=0, ge=0)
+    input_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    output_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    reasoning_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    cache_read_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    cache_write_tokens: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    model_calls: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    tool_calls: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    provider_retries: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    compressions: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
     active_execution_seconds: float = Field(default=0.0, ge=0.0)
 
     def __add__(self, other: UsageSummary) -> UsageSummary:
@@ -102,7 +104,7 @@ class ThreadEntry(BaseModel):
 
     id: str = Field(min_length=1, max_length=128)
     thread_id: str = Field(min_length=1, max_length=128)
-    sequence: int = Field(ge=1)
+    sequence: int = Field(ge=1, le=_MAX_JSON_SAFE_INTEGER)
     kind: ThreadEntryKind
     content: str = Field(max_length=200_000)
     client_message_id: str | None = Field(
@@ -177,9 +179,9 @@ class ThreadSummary(BaseModel):
     thread_id: str = Field(min_length=1, max_length=128)
     content: str = Field(max_length=200_000)
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
-    covered_entry_sequence: int = Field(ge=0)
-    covered_turn_count: int = Field(ge=0)
-    estimated_tokens: int = Field(ge=0)
+    covered_entry_sequence: int = Field(ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    covered_turn_count: int = Field(ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    estimated_tokens: int = Field(ge=0, le=_MAX_JSON_SAFE_INTEGER)
     provider: str = Field(min_length=1, max_length=64)
     model: str = Field(min_length=1, max_length=200)
     updated_at: datetime
@@ -193,14 +195,14 @@ class ToolActivity(BaseModel):
     turn_id: str | None = Field(default=None, max_length=128)
     operation_id: str = Field(min_length=1, max_length=128)
     call_id: str = Field(min_length=1, max_length=128)
-    sequence: int = Field(ge=1)
+    sequence: int = Field(ge=1, le=_MAX_JSON_SAFE_INTEGER)
     origin: ToolActivityOrigin
     tool_name: str = Field(min_length=1, max_length=200)
     outcome: ToolActivityOutcome
     input_summary: str = Field(default="", max_length=2_000)
     result_summary: str = Field(default="", max_length=4_000)
     error_code: str | None = Field(default=None, max_length=128)
-    duration_ms: int = Field(ge=0)
+    duration_ms: int = Field(ge=0, le=_MAX_JSON_SAFE_INTEGER)
     change_set_id: str | None = Field(default=None, max_length=128)
     created_at: datetime
 
@@ -235,4 +237,8 @@ class ThreadPage(BaseModel):
 
     view: ThreadView
     has_more: bool = False
-    next_before_sequence: int | None = Field(default=None, ge=1)
+    next_before_sequence: int | None = Field(
+        default=None,
+        ge=1,
+        le=_MAX_JSON_SAFE_INTEGER,
+    )

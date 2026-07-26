@@ -446,12 +446,6 @@ async def test_terminal_event_failure_cannot_skip_turn_resource_cleanup(
         model="deepseek/deepseek-v4-flash",
         budgets=BudgetConfig(),
     )
-    turn = conversation.begin_turn(
-        thread.id,
-        "inspect",
-        config,
-        client_message_id="client_terminal_failure",
-    )
     checkpoints = RecordingCheckpoints()
     sealed: list[str] = []
     emitter = EventEmitter(
@@ -473,20 +467,17 @@ async def test_terminal_event_failure_cannot_skip_turn_resource_cleanup(
         checkpoints=cast(Any, checkpoints),
         seal_changes=sealed.append,
     )
-    projector = ApplicationEventProjector(
-        emitter=emitter,
-        thread_id=thread.id,
-        turn_id=turn.id,
-        operation_id="operation_1",
+    accepted = await coordinator.submit_turn(
+        thread.id,
+        "inspect",
         client_message_id="client_terminal_failure",
     )
-    await projector.turn_started()
-
-    await coordinator._execute_turn(turn, "operation_1", projector)
+    await coordinator.wait(accepted.operation_id)
 
     stored = conversation.read_thread(thread.id).turns[0]
     assert stored.status is TurnStatus.COMPLETED
-    assert sealed == [turn.id]
-    assert checkpoints.deleted == [turn.id]
+    assert accepted.turn_id is not None
+    assert sealed == [accepted.turn_id]
+    assert checkpoints.deleted == [accepted.turn_id]
     assert emitter._started_turns == set()
-    assert turn.id in emitter._terminal_turns
+    assert accepted.turn_id in emitter._terminal_turns

@@ -10,6 +10,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from awesome_agent.core.contracts import JsonSafeInteger
+
 _MAX_LIFECYCLE_HISTORY = 4_096
 
 type InteractionDecisionValue = Literal[
@@ -71,7 +73,7 @@ class TurnLifecyclePayload(BaseModel):
         EventType.TURN_CANCELLED,
     ]
     reason: str | None = Field(default=None, max_length=200)
-    duration_ms: int | None = Field(default=None, ge=0)
+    duration_ms: JsonSafeInteger | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_duration(self) -> TurnLifecyclePayload:
@@ -102,8 +104,8 @@ class ProviderRetryingPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: Literal[EventType.PROVIDER_RETRYING] = EventType.PROVIDER_RETRYING
-    attempt: int = Field(ge=2, le=7)
-    maximum: int = Field(ge=1, le=7)
+    attempt: JsonSafeInteger = Field(ge=2, le=7)
+    maximum: JsonSafeInteger = Field(ge=1, le=7)
     delay_seconds: float = Field(ge=0.0, le=30.0)
     error_code: str = Field(min_length=1, max_length=128)
 
@@ -133,8 +135,8 @@ class ToolResultPayload(BaseModel):
     outcome: str = Field(min_length=1, max_length=128)
     summary: str = Field(default="", max_length=2_000)
     detail: str | None = Field(default=None, max_length=4_000)
-    detail_truncated_count: int | None = Field(default=None, ge=0)
-    duration_ms: int = Field(ge=0)
+    detail_truncated_count: JsonSafeInteger | None = Field(default=None, ge=0)
+    duration_ms: JsonSafeInteger = Field(ge=0)
     error_code: str | None = Field(default=None, max_length=128)
 
 
@@ -145,19 +147,19 @@ class ContextPayload(BaseModel):
         EventType.CONTEXT_PREPARED,
         EventType.CONTEXT_COMPRESSED,
     ]
-    source_count: int = Field(default=0, ge=0, le=10_000)
-    estimated_tokens: int = Field(default=0, ge=0)
+    source_count: JsonSafeInteger = Field(default=0, ge=0, le=10_000)
+    estimated_tokens: JsonSafeInteger = Field(default=0, ge=0)
 
 
 class UsageUpdatedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: Literal[EventType.USAGE_UPDATED] = EventType.USAGE_UPDATED
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
-    reasoning_tokens: int = Field(default=0, ge=0)
-    cache_read_tokens: int = Field(default=0, ge=0)
-    cache_write_tokens: int = Field(default=0, ge=0)
+    input_tokens: JsonSafeInteger = Field(default=0, ge=0)
+    output_tokens: JsonSafeInteger = Field(default=0, ge=0)
+    reasoning_tokens: JsonSafeInteger = Field(default=0, ge=0)
+    cache_read_tokens: JsonSafeInteger = Field(default=0, ge=0)
+    cache_write_tokens: JsonSafeInteger = Field(default=0, ge=0)
 
 
 class MemoryStatusPayload(BaseModel):
@@ -258,7 +260,7 @@ class EventEnvelope(BaseModel):
 
     version: Literal[1] = 1
     event_id: str = Field(pattern=r"^event_[A-Za-z0-9]+$", max_length=128)
-    sequence: int = Field(ge=1)
+    sequence: JsonSafeInteger = Field(ge=1)
     session_id: str = Field(min_length=1, max_length=128)
     workspace_key: str = Field(min_length=1, max_length=512)
     thread_id: str | None = Field(default=None, max_length=128)

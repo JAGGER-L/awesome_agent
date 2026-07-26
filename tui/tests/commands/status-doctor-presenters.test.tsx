@@ -16,7 +16,7 @@ describe("workspace, status, and doctor presenters", () => {
     const result = presentCommandPayload("status", {
       kind: "status",
       snapshot: {
-        version: "1.2.1",
+        version: "1.3.0",
         workspace_path: "E:/awesome_agent",
         thread_title: "Architecture review",
         thread_id: "thread_12345678",
