@@ -1,6 +1,4 @@
 ---
-import { translatedRoutes } from "../../docs-navigation.mjs";
-
 const route = Astro.locals.starlightRoute;
 const basePath = import.meta.env.BASE_URL.endsWith("/")
   ? import.meta.env.BASE_URL
@@ -15,8 +13,6 @@ const canonicalRoute =
       ? relativePath.slice("zh-cn/".length)
       : relativePath;
 const is404 = canonicalRoute === "404";
-const isFallback = route.isFallback === true;
-const hasTranslation = translatedRoutes.has(canonicalRoute);
 const englishCanonical = new URL(
   `${basePath}${canonicalRoute ? `${canonicalRoute}/` : ""}`,
   Astro.site ?? Astro.url,
@@ -31,10 +27,12 @@ const isCanonical = ({ tag, attrs }: HeadEntry) =>
   tag === "link" && attrs?.rel === "canonical";
 const isAlternate = ({ tag, attrs }: HeadEntry) =>
   tag === "link" && attrs?.rel === "alternate";
-const isChineseAlternate = ({ tag, attrs }: HeadEntry) =>
-  isAlternate({ tag, attrs }) && attrs?.hreflang === "zh-CN";
 const isOpenGraphUrl = ({ tag, attrs }: HeadEntry) =>
   tag === "meta" && attrs?.property === "og:url";
+
+if (!is404 && route.isFallback === true) {
+  throw new Error(`Missing localized source for documentation route: ${relativePath}`);
+}
 
 let head = [...route.head];
 if (is404) {
@@ -45,16 +43,7 @@ if (is404) {
     tag: "meta",
     attrs: { name: "robots", content: "noindex,follow" },
   });
-} else if (isFallback) {
-  head = head.filter(
-    (entry) => !isCanonical(entry) && !isAlternate(entry) && !isOpenGraphUrl(entry),
-  );
-  head.push(
-    { tag: "link", attrs: { rel: "canonical", href: englishCanonical } },
-    { tag: "meta", attrs: { property: "og:url", content: englishCanonical } },
-    { tag: "meta", attrs: { name: "robots", content: "noindex,follow" } },
-  );
-} else if (hasTranslation) {
+} else {
   head = head.filter((entry) => !isAlternate(entry));
   head.push(
     {
@@ -78,8 +67,6 @@ if (is404) {
       },
     },
   );
-} else if (!hasTranslation) {
-  head = head.filter((entry) => !isChineseAlternate(entry));
 }
 ---
 

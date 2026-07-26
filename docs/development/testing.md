@@ -271,8 +271,9 @@ as focused jobs rather than overstating the existing gates:
    allowlist as a non-PR-blocking scheduled workflow; the deterministic local
    link checker intentionally skips other origins.
 5. **Post-deployment Pages smoke.** After deployment, fetch the real base URL,
-   representative pages, one legacy redirect, and `llms.txt`. Build success does
-   not prove the deployed origin and base-path routing are reachable.
+   representative English and Chinese pages, `llms.txt`, and a representative
+   unknown/non-canonical route that must return 404 without redirecting. Build
+   success does not prove the deployed origin and base-path routing are reachable.
 
 ## Release gate
 

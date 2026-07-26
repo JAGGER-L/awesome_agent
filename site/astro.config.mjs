@@ -1,11 +1,7 @@
 import { defineConfig } from "astro/config";
 import sitemap from "@astrojs/sitemap";
 import starlight from "@astrojs/starlight";
-import {
-  docsSidebar,
-  redirectsForBase,
-  translatedRoutes,
-} from "./docs-navigation.mjs";
+import { docsSidebar } from "./docs-navigation.mjs";
 
 const siteOrigin = process.env.SITE_URL ?? "https://jagger-l.github.io";
 const basePath =
@@ -26,14 +22,11 @@ export default defineConfig({
   site: siteOrigin,
   base: basePath,
   trailingSlash: "always",
-  redirects: redirectsForBase(basePath),
   integrations: [
     sitemap({
       filter(page) {
         const route = routeWithinBase(page);
-        if (route === null || route === "404") return false;
-        if (!route.startsWith("zh-cn/")) return true;
-        return translatedRoutes.has(route.slice("zh-cn/".length));
+        return route !== null && route !== "404";
       },
     }),
     starlight({

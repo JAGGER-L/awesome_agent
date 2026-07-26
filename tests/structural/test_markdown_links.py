@@ -117,9 +117,35 @@ COMMANDS = (
 )
 
 
-def _is_generated_site_markdown(path: Path) -> bool:
+def _markdown_shape(content: str) -> tuple[list[int], int]:
+    headings: list[int] = []
+    fence: str | None = None
+    fence_markers = 0
+    for line in content.splitlines():
+        marker = re.match(r"^\s*(`{3,}|~{3,})", line)
+        if marker:
+            candidate = marker.group(1)
+            if fence is None:
+                fence = candidate
+                fence_markers += 1
+            elif candidate[0] == fence[0] and len(candidate) >= len(fence):
+                fence = None
+                fence_markers += 1
+            continue
+        if fence is None and (heading := re.match(r"^(#{1,6})\s+", line)):
+            headings.append(len(heading.group(1)))
+    return headings, fence_markers
+
+
+def _is_non_source_markdown(path: Path) -> bool:
     relative = path.relative_to(ROOT).as_posix()
-    return relative.startswith("site/src/content/docs/")
+    if relative.startswith("site/src/content/docs/"):
+        return True
+    return any(
+        (parent / "pyvenv.cfg").is_file()
+        for parent in path.parents
+        if parent != ROOT and ROOT in parent.parents
+    )
 
 
 def test_relative_markdown_links_resolve() -> None:
@@ -127,7 +153,7 @@ def test_relative_markdown_links_resolve() -> None:
     markdown_files = [
         path
         for path in ROOT.rglob("*.md")
-        if not _is_generated_site_markdown(path)
+        if not _is_non_source_markdown(path)
         and not any(
             part
             in {
@@ -170,16 +196,45 @@ def test_documentation_has_intent_based_sections_and_required_pages() -> None:
     assert (DOCS / "roadmap.md").is_file()
 
 
-def test_every_translation_has_an_english_canonical_page() -> None:
-    failures: list[str] = []
-    for translated in DOCS.rglob("*.zh-CN.md"):
-        canonical = translated.with_name(translated.name.replace(".zh-CN.md", ".md"))
-        if not canonical.is_file():
-            failures.append(str(translated.relative_to(ROOT)))
+def test_every_documentation_source_has_exactly_one_chinese_peer() -> None:
+    english_sources = {
+        path.relative_to(DOCS).as_posix()
+        for path in DOCS.rglob("*.md")
+        if not path.name.endswith(".zh-CN.md")
+    }
+    translated_sources = {
+        path.relative_to(DOCS).as_posix() for path in DOCS.rglob("*.zh-CN.md")
+    }
+    expected_translations = {
+        path.removesuffix(".md") + ".zh-CN.md" for path in english_sources
+    }
 
-    assert not failures, "Translations without an English source:\n" + "\n".join(
-        failures
-    )
+    assert translated_sources == expected_translations
+    assert (ROOT / "ARCHITECTURE.zh-CN.md").is_file()
+    translated_pairs = [
+        (
+            translated.with_name(translated.name.replace(".zh-CN.md", ".md")),
+            translated,
+        )
+        for translated in DOCS.rglob("*.zh-CN.md")
+    ]
+    translated_pairs.append((ROOT / "ARCHITECTURE.md", ROOT / "ARCHITECTURE.zh-CN.md"))
+    for english, translated in translated_pairs:
+        english_content = english.read_text(encoding="utf-8")
+        content = translated.read_text(encoding="utf-8")
+        assert re.search(r"[\u3400-\u9fff]", content), translated.relative_to(ROOT)
+        assert len(content) >= len(english_content) * 0.35, translated.relative_to(ROOT)
+        assert _markdown_shape(content) == _markdown_shape(english_content), (
+            translated.relative_to(ROOT)
+        )
+
+
+def test_documentation_site_has_no_redirect_compatibility_layer() -> None:
+    navigation = (ROOT / "site/docs-navigation.mjs").read_text(encoding="utf-8")
+    astro_config = (ROOT / "site/astro.config.mjs").read_text(encoding="utf-8")
+
+    assert "redirect" not in navigation.casefold()
+    assert not re.search(r"^\s*redirects\s*:", astro_config, re.MULTILINE)
 
 
 def test_architecture_is_the_complete_technical_entrypoint() -> None:
@@ -232,6 +287,16 @@ def test_entry_docs_present_the_current_product() -> None:
     assert "不限制为八个" in chinese
     assert "default off" in english
     assert "默认关闭" in chinese
+
+    chinese_local_doc_targets = {
+        target.split("#", 1)[0]
+        for target in LINK.findall(chinese)
+        if target.startswith("docs/")
+    }
+    assert chinese_local_doc_targets
+    assert all(target.endswith(".zh-CN.md") for target in chinese_local_doc_targets)
+    assert "(ARCHITECTURE.zh-CN.md)" in chinese
+    assert "英文回退" not in chinese
 
 
 def test_quickstarts_are_five_step_product_tutorials() -> None:

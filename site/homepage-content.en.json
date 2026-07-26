@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "locale": "en",
+  "kicker": "Terminal-native · One Python Core · Recoverable changes",
+  "title": "Turn intent into a verified change.",
+  "lead": "Awesome is an AI coding assistant for deliberate software work. It understands your codebase, plans the change, acts through controlled tools, verifies the result, and keeps every step visible, bounded, and recoverable.",
+  "primaryAction": "Start in five minutes",
+  "secondaryAction": "See how it works",
+  "copy": "Copy",
+  "copied": "Copied",
+  "installPlatform": "Fast path · Windows PowerShell",
+  "installReview": "Review the installer, integrity boundary, and other platforms →",
+  "previewLabel": "Product interface preview based on Awesome's current TUI",
+  "userPrompt": "Tighten the workspace path policy and run the smallest relevant tests.",
+  "assistantReply": "The path boundary is tighter and coverage is in place. All related unit tests pass.",
+  "boundariesLabel": "Product boundaries",
+  "proofPills": [
+    {
+      "id": "approval-default",
+      "text": "Request approval by default"
+    },
+    {
+      "id": "single-operation",
+      "text": "One foreground operation"
+    },
+    {
+      "id": "change-journal",
+      "text": "Change Journal"
+    }
+  ],
+  "boundaries": [
+    {
+      "id": "core",
+      "eyebrow": "01 / CORE",
+      "title": "One behavior authority",
+      "description": "Models, tools, state, and recovery converge in Python Core."
+    },
+    {
+      "id": "control",
+      "eyebrow": "02 / CONTROL",
+      "title": "Operations stay visible",
+      "description": "Approvals, events, and normalized results share one execution path."
+    },
+    {
+      "id": "verify",
+      "eyebrow": "03 / VERIFY",
+      "title": "Verification is part of the work",
+      "description": "Awesome runs the smallest sufficient checks and records real results."
+    },
+    {
+      "id": "recover",
+      "eyebrow": "04 / RECOVER",
+      "title": "Changes have a way back",
+      "description": "The Change Journal gives controlled edits explicit undo semantics."
+    }
+  ],
+  "loopEyebrow": "01 / PRODUCT LOOP",
+  "loopTitle": "A complete loop, from understanding to evidence.",
+  "loopLead": "Awesome organizes context, execution, and proof around a real software task—not just a code completion.",
+  "loop": [
+    {
+      "id": "understand",
+      "number": "01",
+      "title": "Understand",
+      "description": "Read the relevant code, constraints, docs, and current contracts into bounded context."
+    },
+    {
+      "id": "plan",
+      "number": "02",
+      "title": "Plan",
+      "description": "Define the goal, affected surface, risks, and the lightest validation path."
+    },
+    {
+      "id": "change",
+      "number": "03",
+      "title": "Change",
+      "description": "Route every tool call through one Registry, Policy, and Executor."
+    },
+    {
+      "id": "verify",
+      "number": "04",
+      "title": "Verify",
+      "description": "Run relevant checks, explain the result, and preserve a recovery path."
+    }
+  ],
+  "resourcesEyebrow": "02 / START HERE",
+  "resourcesTitle": "Enter the docs by task.",
+  "resourcesLead": "Choose the outcome you need instead of learning the whole documentation tree first.",
+  "resources": [
+    {
+      "id": "get-started",
+      "eyebrow": "GET STARTED",
+      "title": "Install and complete a first session",
+      "description": "Choose an installation path, configure a model, trust the workspace, and begin read-only."
+    },
+    {
+      "id": "daily-work",
+      "eyebrow": "DAILY WORK",
+      "title": "Build a reliable working loop",
+      "description": "Frame context, submit work, inspect evidence, and continue a session when useful."
+    },
+    {
+      "id": "control",
+      "eyebrow": "CONTROL",
+      "title": "Approve, inspect, and recover safely",
+      "description": "Understand permission modes, shell boundaries, diff, undo, cancellation, and recovery."
+    },
+    {
+      "id": "extend",
+      "eyebrow": "EXTEND",
+      "title": "Choose Memory, Skills, or MCP",
+      "description": "Add facts, working methods, or external tools without bypassing shared policy."
+    },
+    {
+      "id": "understand",
+      "eyebrow": "UNDERSTAND",
+      "title": "Read the architecture and data flow",
+      "description": "Follow typed intent through Ink, Application, Agent, tools, protocol, and storage."
+    },
+    {
+      "id": "contribute",
+      "eyebrow": "CONTRIBUTE",
+      "title": "Change Core, TUI, or documentation",
+      "description": "Start with the development environment, package boundaries, test gates, and release contract."
+    }
+  ],
+  "closingTitle": "Start with one controlled, read-only task.",
+  "closingLead": "Install Awesome, trust the current workspace, and use the first turn to understand the codebase.",
+  "closingAction": "Open the quickstart"
+}

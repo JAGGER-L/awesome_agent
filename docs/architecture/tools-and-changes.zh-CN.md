@@ -1,0 +1,249 @@
+# 工具与变更
+
+工具是模型意图对工作区或 host 产生作用的唯一通路。因此，Awesome 在调用 built-in 或
+MCP handler 之前，统一处理注册、参数校验、hard-deny 检查、权限决策、审批、超时、取消、
+审计和终态事件。
+
+Change Journal 与工具相邻，但职责独立。它记录并恢复通过受管 built-in 产生的文件
+mutation；它无法让任意 shell 或 MCP 副作用变得可逆。
+
+## 工具契约
+
+一个 `RegisteredTool` 组合四项内部事实：
+
+- 提供商可见的 `ToolSpec`，其中包含名称、描述、JSON schema、capability、read-only
+  标志和展示 metadata；
+- 一个严格的 Pydantic input model；
+- 一个 async handler；
+- 一个可选的动态总超时解析器。
+
+超时解析器有意不属于模型可见 schema。它让 `execute` 可以用
+`timeout_seconds + 10` 秒覆盖请求期限和有界清理，也让 MCP 可以使用 40 秒外层封装，
+而不向模型泄露 executor 内部机制。
+
+Built-in 基线如下：
+
+| 工具 | Capability | 受管文件变更 |
+| --- | --- | --- |
+| `ls`、`read_file`、`glob`、`grep` | `workspace.read` | 无 |
+| `write_file`、`edit_file` | `workspace.write` | 记入 journal |
+| `delete` | `workspace.delete` | 记入 journal |
+| `execute` | `shell.execute` | 仅 observation |
+
+Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式替换，名称形如
+`mcp.<server>.<tool>`。
+
+## Executor 流水线
+
+```text
+ToolRequest
+  -> resolve registry item
+  -> validate Pydantic arguments
+  -> validate built-in path syntax
+  -> compute non-disableable hard deny
+  -> PermissionPolicy: allow | ask | deny
+  -> resolve bound approval, when asked
+  -> resolve total timeout
+  -> invoke handler under deadline
+  -> normalize result or expected failure
+  -> write one ToolActivity
+  -> emit one terminal tool event
+  -> return one bounded ToolResult
+```
+
+`tool.started` 会在解析前发出，因此未知工具仍是可观察的尝试调用。参数错误、policy
+denial、timeout 和预期 handler failure 会成为有界 `ToolResult` error。意外 handler
+exception 属于不变量失败，会终止 Turn，而不会伪装成模型可修正的错误。
+
+取消会通过有界清理尝试终结唯一一条 cancelled activity/event，然后重新抛出调用方的
+原始取消。忽略取消的 handler task 只有在其宽限期限结束后才会被 detach，其结果仍会被
+消费，避免泄漏 task exception。
+
+工具内容进入 Agent state 或 transcript 前会受到边界约束。审计 summary 只保留参数名，
+不保留原始参数值。
+
+## 权限决策
+
+权限是纯 capability 决策。Hard denial 始终优先：
+
+| 模式 | 读取 | 创建/修改 | 删除 | Shell | MCP/未知扩展 |
+| --- | --- | --- | --- | --- | --- |
+| Request approval | 允许 | 询问 | 询问 | 询问 | 询问 |
+| Accept edits | 允许 | 允许 | 询问 | 询问 | 询问 |
+| Full access | 允许 | 允许 | 允许 | 允许 | 询问 |
+
+该表适用于使用选中 Thread permission session 的 Agent 工具调用。直接 `! command` 输入
+是用户对该确切命令的显式授权：Application 为其建立独立 Full-access permission
+session 的 Direct Operation，因此不会显示普通 shell 审批。直接执行仍经过同一 schema、
+command circuit breaker（词法检查和 spawn 前检查）、Process Runner、审计、超时、取消
+与脱敏边界。
+
+Allow-once 结果只作用于当前 Tool call。“Allow all edits during this session”只 grant
+`workspace.write`；它不能 grant delete、shell 或扩展 capability。切换 mode 或 Thread
+会清除临时 grant。
+
+Tool Executor 根据经过校验的操作事实创建审批文本。TUI 渲染该类型化请求并返回决策；
+它绝不会从提示词文本推断 capability，也不执行操作。
+
+## 工作区路径准入与使用
+
+文件工具接受工作区相对路径。语法校验会拒绝绝对路径、父目录逃逸、敏感凭据/密钥路径
+和语义不明确的 Windows 拼写。随后 `resolve_workspace_path()` 检查规范工作区身份，
+并对遍历的每个组件使用 `lstat`，拒绝会被跟随的链接和 reparse point。
+
+单次路径准入无法防止之后 mutation 遇到替换竞态。因此受管文件 handler 使用
+`core/filesystem.py` 与 `core/changes/filesystem.py` 中绑定身份的 primitive：
+
+```text
+validate lexical path
+  -> open and pin workspace root
+  -> descend and pin parent identities without following links
+  -> capture target existence, type, identity, link count, content, and mode
+  -> persist mutation intent
+  -> mutate through pinned parent
+  -> recapture and verify intended after-state
+  -> append committed FileChange
+  -> clear pending intent
+```
+
+具有多个 hard link 的普通文件会被拒绝，因为一个工作区路径无法证明所有 alias 的位置。
+Write 和 edit 使用原子 sibling replacement。递归 delete 在首次移除前就对完整目录树进行
+inventory 和绑定；任意嵌套 symlink、junction、reparse directory、hard-linked file、
+容量越界或可观察身份变化都会中止，并确保预期删除数为零。
+
+POSIX 最终 symlink 节点本身可以在不跟随目标的情况下删除；这并不允许遍历 linked parent，
+也不允许通过嵌套链接进行递归 inventory。
+
+这是 fail-closed 的 userspace 防护，而不是文件系统 compare-and-swap 或 kernel jail。
+同权限进程仍可在最后一次身份检查后制造竞态。固定的 no-follow 操作能防止跟随替换链接
+到工作区外，却无法承诺隔离恶意并发 host writer。
+
+## 命令 circuit breaker
+
+Agent `execute` 与直接 `!` 输入都会调用同一个纯命令 policy。Executor 的审批前检查接收
+命令、显式 shell dialect、workspace，以及在规范工作区根下拼接出的请求词法 working
+directory。随后 handler 解析并校验该目录的身份；spawn 前检查使用已校验的 resolved
+directory 再次调用同一 policy。共享 evaluator 可以防止规则漂移，而第二阶段具有已打开
+路径证据支撑。
+
+对 CMD、POSIX shell 和 PowerShell 的有界检查会展开已知 wrapper、复合命令、pipeline
+和换行。它会规范化 executable path、大小写与 executable suffix；在目录切换间保守
+追踪可能的 working directory；解码 PowerShell encoded command；处理
+`Start-Process` elevation alias；并检查部分字面量 Python `-c` 调用中的危险文件系统/
+进程 API。
+
+Circuit breaker 始终拒绝可识别的灾难性操作，例如递归删除文件系统根或工作区根、
+shutdown/reboot、elevation、磁盘格式化、block-device overwrite 和 fork bomb。输入若
+不能在深度与节点上限内被安全解析，也会被拒绝。
+
+该 policy 旨在防止误操作和已知 wrapper。它不是 malware detector，也不声称理解任意
+恶意混淆。Full access 无法将其禁用。
+
+## Shell 生命周期与审计
+
+`execute` 会在记录不可逆尝试之前校验参数与 policy。紧接 Process Runner 启动前，它会
+向打开的 ChangeSet 追加一条脱敏 `ExecuteObservation`。因此 timeout、cancellation、
+spawn failure 和 backend failure 会保守地留下证据；畸形参数、审批拒绝和 hard denial
+不会声称发生过执行尝试。
+
+```text
+validated + approved execute
+  -> record observation
+  -> spawn supervisor and root command
+  -> concurrently drain bounded stdout/stderr
+  -> root completes | requested timeout | cancellation | backend failure
+  -> terminate owned process tree when needed
+  -> force-kill after grace when needed
+  -> bounded pipe drain, cancel inherited readers if needed
+  -> return ProcessResult or propagate original cancellation
+```
+
+请求的 `timeout_seconds` 覆盖 spawn 和根命令执行。Handler 外层期限额外增加 10 秒，用于
+进程树终止和 pipe 清理。命令超时返回带 metadata 的 `TIMEOUT`；外层期限用于兜底违反
+契约的 backend。
+
+POSIX 上，每条命令使用绑定 lease 的 session supervisor 和 process group。Windows 上，
+等待中的 supervisor 会先被放入嵌套的 kill-on-close Job Object，才可以创建目标。根进程
+与 pipe 的生命周期相互独立：持有 stdout 的 descendant 可能导致输出截断，却不能让 Tool
+call 永远保持 pending。
+
+有意逃出 POSIX session 的进程或通过外部服务执行的行为超出此清理边界。进程所有权不等于
+执行隔离。
+
+## ChangeSet 模型
+
+每个 Turn 或直接命令都会打开一个绑定工作区的 ChangeSet。它从 `OPEN` 开始，封存为
+`APPLIED`，可以转换到 `UNDONE`，再回到 `APPLIED`。可逆性分为：
+
+- `FULL`：只有受管文件 mutation；
+- `PARTIAL`：受管文件 mutation 加不受管 execution observation；
+- `NONE`：只有不受管副作用，或没有可恢复文件状态。
+
+`FileChange` 存储彼此独立的 before/after node type、hash、blob ID、mode 和 mutation
+identity。独立 node type 能保留文件、目录、symlink 与不存在状态之间的 transition，
+而不会用一侧 type 解释另一侧。
+
+Journal 将单个 ChangeSet 限制为 1,000 条文件记录和 50 MiB 引用内容。按内容寻址的 blob
+避免重复存储相同快照。
+
+## 普通 mutation 的崩溃窗口
+
+Journal 在工作区作用之前按顺序持久化 intent：
+
+```text
+save before/after blobs
+  -> save PendingMutation
+  -> mutate workspace
+  -> verify actual after-state
+  -> save FileChange with mutation_id
+  -> delete PendingMutation
+```
+
+如果进程在该窗口中停止，启动校正会比较已记录 identity、当前工作区状态以及任何已提交
+FileChange。Mutation ID 使“记录已提交但 pending 清理未提交”场景具有幂等性。语义不明
+的旧证据会被保留为 conflict，而不会重复或丢弃。
+
+## Undo 与 redo 事务
+
+Undo/redo 会合并同一路径的重复变更，在同一棵固定工作区树中绑定所有目标，并在修改任何
+内容前检查每个当前快照。
+
+```text
+load and validate blobs
+  -> bind all paths + detect conflicts
+  -> prepare all inverse/forward intents
+  -> persist every pending intent
+  -> restore each path through the same pinned tree
+  -> commit ChangeSet lifecycle once
+  -> clear pending intents
+```
+
+如果 lifecycle commit 前发生错误，在固定目录树和原始快照仍可用时，会回滚已经恢复的
+路径。如果无法证明该回滚，pending evidence 会被保留。启动恢复会完成已提交操作，或
+回滚未提交的部分操作；它绝不会通过全新路径解析进行猜测。
+
+如果当前工作区不再匹配已记录的 after state，Undo 会拒绝执行。它还会报告 shell/MCP
+副作用未被恢复。用户可以通过 `/diff`、`/undo` 和 `/redo` 检查这些事实，但不应把 journal
+当成版本控制替代品。
+
+## 设计取舍
+
+- 集中式执行给简单工具增加仪式，但让所有工具共享审批、超时、事件和审计语义。
+- 严格 no-link 文件操作会拒绝一些合法布局，以换取可解释且可测试的边界。
+- Spawn 前记录 shell 尝试，可能会多报一次其实未启动的作用，却避免在不确定错误后错误
+  宣称可逆。
+- 多路径 undo 偏向保守 conflict，而不是覆盖用户变更。
+- Host 执行保留原生开发者工作流，但明确把 OS 隔离留作当前非目标。
+
+## 源代码与测试索引
+
+- 契约与 registry：`core/tools/contracts.py`、`registry.py`
+- Policy 与权限：`core/tools/policy.py`、`permissions.py`、`command_policy.py`
+- Executor：`core/tools/executor.py`
+- Built-ins：`core/tools/builtins/`
+- 进程生命周期：`core/tools/process.py`、`core/process_lifetime.py`
+- Journal：`core/changes/journal.py`、`core/changes/operations.py`
+- 文件系统：`core/filesystem.py`、`core/changes/filesystem.py`
+- 测试：`tests/unit/core/tools/`、`tests/unit/core/changes/`、
+  `tests/integration/test_application_tools.py`、
+  `tests/integration/test_change_journal.py`

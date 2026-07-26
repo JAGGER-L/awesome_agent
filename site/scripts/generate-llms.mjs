@@ -1,8 +1,12 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { compileDocumentationCatalog } from "../documentation-catalog.mjs";
 import { docsSidebar } from "../docs-navigation.mjs";
+import {
+  atomicWriteSafeSiteFile,
+  ensureSafeSiteDirectory,
+} from "./safe-site-paths.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const siteDirectory = resolve(scriptDirectory, "..");
@@ -13,20 +17,11 @@ const configuredBase =
   process.env.BASE_PATH === undefined ? "/awesome_agent" : process.env.BASE_PATH;
 const basePath = configuredBase === "/" ? "" : `/${configuredBase.replace(/^\/+|\/+$/g, "")}`;
 
-function sourceForRoute(route) {
-  if (route === "architecture/overview") return join(repositoryRoot, "ARCHITECTURE.md");
-  if (route === "roadmap") return join(repositoryRoot, "docs", "roadmap.md");
-  const segments = route.split("/");
-  if (segments.length === 1) {
-    return join(repositoryRoot, "docs", route, "README.md");
-  }
-  return join(repositoryRoot, "docs", `${route}.md`);
-}
-
-async function titleForRoute(route) {
-  const content = await readFile(sourceForRoute(route), "utf8");
-  const heading = content.match(/^#\s+(.+)$/m);
-  if (!heading) throw new Error(`Canonical page has no H1: ${route}`);
+function titleForRoute(catalog, route) {
+  const entry = catalog.byRoute.get(route);
+  if (!entry) throw new Error(`Canonical page is missing from the catalog: ${route}`);
+  const heading = entry.content.match(/^#\s+(.+)$/m);
+  if (!heading) throw new Error(`Canonical page has no H1: ${entry.source}`);
   return heading[1].trim();
 }
 
@@ -35,29 +30,56 @@ function publicUrl(route = "") {
   return new URL(path, siteOrigin).href;
 }
 
+const catalog = await compileDocumentationCatalog({ repositoryRoot });
 const lines = [
   "# Awesome documentation",
   "",
-  "> Official documentation for Awesome, the terminal AI coding assistant.",
+  "> Official English and Simplified Chinese documentation for Awesome, the terminal AI coding assistant.",
+  "",
+  "## English",
   "",
   `- [Documentation home](${publicUrl()})`,
 ];
 
 for (const group of docsSidebar) {
-  lines.push("", `## ${group.label}`, "");
+  lines.push("", `### ${group.label}`, "");
   for (const item of group.items) {
     const route = typeof item === "string" ? item : item.slug;
-    lines.push(`- [${await titleForRoute(route)}](${publicUrl(route)})`);
+    lines.push(`- [${titleForRoute(catalog, route)}](${publicUrl(route)})`);
+  }
+}
+
+lines.push("", "## 简体中文", "", `- [文档首页](${publicUrl("zh-cn")})`);
+for (const group of docsSidebar) {
+  lines.push("", `### ${group.translations["zh-CN"]}`, "");
+  for (const item of group.items) {
+    const route = typeof item === "string" ? item : item.slug;
+    const localizedRoute = `zh-cn/${route}`;
+    lines.push(
+      `- [${titleForRoute(catalog, localizedRoute)}](${publicUrl(localizedRoute)})`,
+    );
   }
 }
 
 lines.push(
   "",
-  "Canonical sources: https://github.com/JAGGER-L/awesome_agent/tree/main " +
-    "(`docs/`, `ARCHITECTURE.md`, and the documentation homepage under `site/`).",
+  "Canonical sources live in the Awesome repository " +
+    "(`docs/`, paired root READMEs and architecture, and paired homepage MDX/JSON under `site/`).",
   "",
 );
 
-await mkdir(outputDirectory, { recursive: true });
-await writeFile(join(outputDirectory, "llms.txt"), lines.join("\n"), "utf8");
-console.log(`Generated llms.txt with ${lines.filter((line) => line.startsWith("- [")).length} links.`);
+await ensureSafeSiteDirectory({
+  siteDirectory,
+  targetDirectory: outputDirectory,
+  label: "Documentation build output directory",
+});
+const llmsPath = join(outputDirectory, "llms.txt");
+await atomicWriteSafeSiteFile({
+  siteDirectory,
+  targetFile: llmsPath,
+  content: lines.join("\n"),
+  label: "Generated llms.txt",
+});
+console.log(
+  `Generated llms.txt with ${lines.filter((line) => line.startsWith("- [")).length} links.`,
+);

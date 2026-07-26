@@ -1,7 +1,7 @@
 # 快速开始
 
 按照下面五步完成一次成功的只读 Awesome 会话。主机要求、安装器行为、升级和修复说明
-请参阅[安装指南](installation.md)。
+请参阅[安装指南](installation.zh-CN.md)。
 
 ## 1. 安装 Awesome
 
@@ -31,7 +31,7 @@ Awesome 已包含 Python 和 Node.js 运行时。Git 是可选能力，可从
 选择一个你了解的项目，从项目根目录启动：
 
 ```text
-cd <项目目录>
+cd <project>
 awesome
 ```
 
@@ -63,7 +63,7 @@ Workspace 的项目配置、项目指令或工具。
 保存前验证密钥。之后可用 `/auth` 添加、替换、删除凭据或选择凭据来源。不要把
 API Key 粘贴到聊天消息或 slash command 参数中。
 
-创建正式密钥前，请阅读 [What You Need](README.md#what-you-need)，确认官方密钥
+创建正式密钥前，请阅读[需要准备什么](README.zh-CN.md#需要准备什么)，确认官方密钥
 入口、Kimi 中国区/全球区选择、账户与网络前提，以及模型上下文会发送给所选第三方
 Provider 的数据边界。
 
@@ -81,8 +81,8 @@ Awesome 实际使用的状态。
 
 ## 接下来读什么
 
-- 通过 [Workspace、Thread、Turn 与 Operation](../concepts/workspace-thread-turn.md)
+- 通过 [Workspace、Thread、Turn 与 Operation](../concepts/workspace-thread-turn.zh-CN.md)
   理解生命周期。
-- 在[权限与安全](../user-guide/permissions.md)中选择合适的审批方式。
-- 按[用户指南](../user-guide/README.md)建立日常工作流。
-- 某一步失败时查看[故障排查](../user-guide/troubleshooting.md)。
+- 在[权限与安全](../user-guide/permissions.zh-CN.md)中选择合适的审批方式。
+- 按[用户指南](../user-guide/README.zh-CN.md)建立日常工作流。
+- 某一步失败时查看[故障排查](../user-guide/troubleshooting.zh-CN.md)。

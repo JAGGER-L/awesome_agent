@@ -202,8 +202,11 @@ rebuilds Starlight content before check/build:
 - `docs/README.md` is the repository documentation map and is excluded from
   site pages;
 - a directory `README.md` becomes that directory's index route;
-- `name.zh-CN.md` becomes the `zh-cn` route paired with `name.md`;
-- root `ARCHITECTURE.md` becomes `architecture/overview`;
+- every English source has one complete `name.zh-CN.md` counterpart, including
+  directory `README.md` files; missing or orphaned translations fail sync and
+  navigation checks instead of producing a fallback page;
+- root `ARCHITECTURE.md` and `ARCHITECTURE.zh-CN.md` become the paired
+  `architecture/overview` routes;
 - source headings become generated title frontmatter;
 - bounded whole-sentence descriptions, canonical-source update dates, and edit
   URLs are supplied when absent;
@@ -213,17 +216,60 @@ Do not edit `site/src/content/docs/`; it is generated. Edit canonical Markdown,
 the seed homepage, navigation manifest, styles/components, or sync scripts as
 appropriate.
 
-`site/docs-navigation.mjs` is the single sidebar and legacy-redirect manifest
-consumed by Astro and the navigation checker. Every canonical English page
-except `docs/README.md` must appear exactly once. Every Chinese page must have
-an English counterpart. When a published page is merged or renamed, add its old
-English and locale routes to `docsRedirects`; the checker requires each target
-to remain canonical and prevents a redirect from shadowing a live source page.
+`site/documentation-catalog.mjs` compiles every source into one source identity,
+locale, canonical route, and output path before synchronization writes generated
+content. It consumes `site/docs-navigation.mjs`, requires sidebar routes and
+canonical English sources to be exact sets, and rejects source, route, or output
+collisions. Every English source, including the repository-only root `README.md`
+and `docs/README.md`, must have one complete Chinese counterpart with no orphan
+in either language.
+
+`site/translation-lock.json` records normalized SHA-256 identities for all 46
+English/Chinese repository documentation and homepage-content pairs. After both
+sources have been translated and reviewed, run
+`npm --prefix site run translations:lock` and
+inspect the lock diff. Changing an English or Chinese source without updating
+the reviewed pair leaves a stale hash and stops synchronization before it
+replaces generated content. Updating the lock alone is not translation evidence;
+the same contract also checks prose language, structure, executable fences,
+external URLs, inline identifiers, and matching same-locale target-page pairs.
+Homepage JSON has its own strict schema, stable IDs, shared route map, structural
+parity, and language-completeness checks.
+
+When a page is merged or renamed, update the canonical route directly. Awesome
+does not preserve documentation route aliases or redirects; old and
+non-canonical URLs return 404 by design.
 
 After a successful site build, `site/scripts/generate-llms.mjs` derives
 `dist/llms.txt` from that same navigation manifest and each canonical page's H1.
 It publishes the ordered documentation map with base-aware public URLs; it is
 generated output, not a second hand-maintained index.
+
+The built-site checker derives an exact contract from that same route set: 86
+canonical HTML pages plus one 404, exactly 86 sitemap URLs, and exactly 86
+Markdown links in `llms.txt`. Extra pages, duplicate URLs, redirect pages,
+encoded path escapes, directories without an index, non-ordinary output nodes,
+and real paths outside `dist` all fail the check. Markdown link discovery and
+rewriting share one AST. Built HTML and sitemap evidence is parsed semantically,
+not counted with comment-sensitive regular expressions. Before replacing or
+writing generated content, every existing path component is checked and any
+symlink, junction, or reparse point is rejected.
+
+Canonical inputs are capped at 1 MiB and must be strict UTF-8 without NUL. The
+reader validates the repository and every path component, uses a no-follow open
+where the platform exposes it, binds the open handle to the preceding `lstat`
+identity with `fstat`, and repeats identity and metadata checks after the
+bounded read. Output files use exclusive random sibling temporaries, handle
+identity checks, `fsync`, and rename-based installation. The complete generated
+documentation tree is populated in a sibling staging directory before an
+identity-bound rename/backup swap, so a rendering failure leaves the prior tree
+in place. Cleanup refuses to traverse any object whose identity changed.
+
+This is a fail-closed build-integrity boundary, not OS isolation. Node has no
+portable directory-handle-relative rename/unlink or atomic directory exchange,
+so the code does not claim to eliminate a hostile same-user race in the final
+pathname syscall. Observed drift aborts the build; a random temporary or backup
+may be retained for inspection instead of risking cleanup of an unknown object.
 
 Starlight renders generated files, so its default Git lookup cannot recover the
 history of canonical Markdown. Synchronization therefore reads the last commit
@@ -270,7 +316,8 @@ tradeoffs, and source/test maps.
 - Link to the owning reference instead of copying long tables into several
   pages.
 - Avoid hard-coded historical version narratives in evergreen guides.
-- Keep English and Chinese pages behaviorally aligned when both exist.
+- Keep every English and Chinese page behaviorally aligned; both languages are
+  required canonical documentation, not fallback variants.
 
 ## Documentation validation
 
@@ -280,6 +327,7 @@ Run repository and site contracts:
 git diff --check
 uv run pytest -q tests/structural/test_markdown_links.py
 npm ci --prefix site
+npm --prefix site run check:contracts
 npm --prefix site run check:navigation
 npm --prefix site run check:contrast
 npm --prefix site run check
@@ -290,13 +338,13 @@ npm --prefix site run check:links
 Remove-Item Env:SITE_URL, Env:BASE_PATH -ErrorAction SilentlyContinue
 ```
 
-The source link test catches missing files. Navigation validation catches
-orphans, duplicates, nonexistent routes, and unpaired translations. The theme
-contrast check protects small-text foregrounds in both palettes at WCAG AA.
-Astro checks generated frontmatter/content. A production-base build and
-built-link scan catch route, redirect, anchor, and asset errors that source-only
-checks miss. The build's post-step must also leave a base-aware `dist/llms.txt`
-whose ordered links come from the same sidebar contract.
+The source link test catches missing files. Catalog and navigation validation
+catch stale translation hashes, language/identifier drift, orphans, duplicates,
+collisions, nonexistent routes, and unpaired translations. The theme contrast
+check protects small-text foregrounds in both palettes at WCAG AA. Astro checks
+generated frontmatter/content. A production-base build and exact built-site
+scan catch route, anchor, locale-pair, output-containment, sitemap, llms, and
+asset errors that source-only checks miss.
 
 For a documentation change, also search for superseded names and links:
 
@@ -311,7 +359,8 @@ rg -n "old-page-name|old-command|old-config-key" README.md README.zh-CN.md `
 - [ ] User path, design reason, internal owner, limits, and failures are clear.
 - [ ] Examples use current commands/configuration and safe placeholders.
 - [ ] Destructive or external effects state recovery limits.
-- [ ] New/moved/deleted page is reflected in `docs/README.md` and navigation.
+- [ ] New/moved/deleted page is reflected in both documentation indexes and navigation.
+- [ ] Every English source has one complete Chinese counterpart and neither locale has an orphan.
 - [ ] Incoming/outgoing links and next-step reading path remain coherent.
 - [ ] Root README English/Chinese and `AGENTS.md` map are updated when affected.
 - [ ] Root architecture remains authoritative; focused pages do not redefine it.
