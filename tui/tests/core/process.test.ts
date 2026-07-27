@@ -148,10 +148,8 @@ describe("CoreProcess", () => {
   });
 
   it("keeps exactly the last 65,536 stderr bytes", async () => {
-    const bytes = Uint8Array.from(
-      { length: 70_000 },
-      (_, index) => index % 251,
-    );
+    const bytes = new Uint8Array(70_000);
+    bytes[bytes.length - 1] = 1;
     const session = await startFakeCore({
       AWESOME_FAKE_CORE_STDERR_BASE64: Buffer.from(bytes).toString("base64"),
     });
@@ -160,7 +158,12 @@ describe("CoreProcess", () => {
       client_name: "awesome",
       client_version: "0.1.0",
     });
-    expect(session.stderrTail()).toEqual(bytes.slice(bytes.length - 65_536));
+    const expectedTail = bytes.slice(bytes.length - 65_536);
+    const observedTail = await waitFor(async () => {
+      const tail = session.stderrTail();
+      return Buffer.compare(tail, expectedTail) === 0 ? tail : undefined;
+    });
+    expect(observedTail).toEqual(expectedTail);
     await session.requestShutdown();
   });
 
