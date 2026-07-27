@@ -3,6 +3,7 @@ import base64
 import sqlite3
 import sys
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
@@ -12,6 +13,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import awesome_agent.core.tools.builtins.execute as execute_module
+import awesome_agent.core.tools.executor as executor_module
 from awesome_agent.core.changes import ChangeJournal, ChangeReversibility
 from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
@@ -157,11 +159,12 @@ class WaitingProcessRunner(RecordingProcessRunner):
         raise AssertionError("cancelled process backend resumed")
 
 
-class CancellationSuppressingProcessRunner(RecordingProcessRunner):
+class GateControlledCancellationSuppressingProcessRunner(RecordingProcessRunner):
     def __init__(self) -> None:
         super().__init__()
         self.started = asyncio.Event()
         self.cancellation_seen = asyncio.Event()
+        self.allow_late_return = asyncio.Event()
         self.late_returned = asyncio.Event()
 
     async def run(
@@ -180,7 +183,7 @@ class CancellationSuppressingProcessRunner(RecordingProcessRunner):
             raise AssertionError("cancellation-suppressing backend resumed")
         except asyncio.CancelledError:
             self.cancellation_seen.set()
-            await asyncio.sleep(0.05)
+            await self.allow_late_return.wait()
             self.late_returned.set()
             return ProcessResult(
                 exit_code=0,
@@ -189,7 +192,7 @@ class CancellationSuppressingProcessRunner(RecordingProcessRunner):
                 timed_out=False,
                 stdout_truncated=False,
                 stderr_truncated=False,
-                duration_ms=50.0,
+                duration_ms=0.0,
             )
 
 
@@ -1520,31 +1523,47 @@ async def test_execute_outer_deadline_rejects_backend_late_success(
     application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(execute_module, "_EXECUTE_CLEANUP_BUDGET_SECONDS", 0.01)
-    runner = CancellationSuppressingProcessRunner()
+    monkeypatch.setattr(execute_module, "_EXECUTE_CLEANUP_BUDGET_SECONDS", 0.02)
+    monkeypatch.setattr(
+        executor_module,
+        "_HANDLER_TIMEOUT_MAX_CANCELLATION_GRACE_SECONDS",
+        0.01,
+    )
+    runner = GateControlledCancellationSuppressingProcessRunner()
     executor, context, journal, _, sink = await execute_fixture(
         tmp_path, application_database, runner
     )
 
     started = monotonic()
-    result = await executor.execute(
-        ToolRequest(
-            call_id="call_execute",
-            tool_name="execute",
-            arguments={"command": "pytest", "timeout_seconds": 0.05},
-        ),
-        context=replace(
-            context,
-            permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
-        ),
+    execution = asyncio.create_task(
+        executor.execute(
+            ToolRequest(
+                call_id="call_execute",
+                tool_name="execute",
+                arguments={"command": "pytest", "timeout_seconds": 0.5},
+            ),
+            context=replace(
+                context,
+                permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
+            ),
+        )
     )
+    try:
+        await asyncio.wait_for(runner.started.wait(), timeout=1)
+        result = await execution
 
-    assert result.status is ToolStatus.ERROR
-    assert result.error is not None
-    assert result.error.code is ToolErrorCode.TIMEOUT
-    assert monotonic() - started < 0.2
-    await asyncio.wait_for(runner.cancellation_seen.wait(), timeout=1)
-    assert not runner.late_returned.is_set()
+        assert result.status is ToolStatus.ERROR
+        assert result.error is not None
+        assert result.error.code is ToolErrorCode.TIMEOUT
+        assert monotonic() - started < 0.8
+        await asyncio.wait_for(runner.cancellation_seen.wait(), timeout=1)
+        assert not runner.late_returned.is_set()
+    finally:
+        runner.allow_late_return.set()
+        if not execution.done():
+            execution.cancel()
+            with suppress(asyncio.CancelledError):
+                await execution
     await asyncio.wait_for(runner.late_returned.wait(), timeout=1)
     assert [
         item.command
@@ -1701,7 +1720,7 @@ async def test_execute_preserves_user_cancellation_when_backend_returns_late(
     tmp_path: Path,
     application_database: ApplicationSQLite,
 ) -> None:
-    runner = CancellationSuppressingProcessRunner()
+    runner = GateControlledCancellationSuppressingProcessRunner()
     executor, context, journal, _, sink = await execute_fixture(
         tmp_path, application_database, runner
     )
@@ -1721,10 +1740,18 @@ async def test_execute_preserves_user_cancellation_when_backend_returns_late(
     await runner.started.wait()
 
     task.cancel()
-    await runner.cancellation_seen.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    try:
+        await asyncio.wait_for(runner.cancellation_seen.wait(), timeout=1)
+        task.cancel()
+        runner.allow_late_return.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        runner.allow_late_return.set()
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
 
     assert runner.cancellation_seen.is_set()
     assert runner.late_returned.is_set()
