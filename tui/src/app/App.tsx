@@ -327,6 +327,17 @@ export function App({
       generation = store.getState().thread_generation,
     ): Promise<SubmissionResult> => {
       if (store.getState().thread_generation !== generation) {
+        if (
+          outcome.kind === "result" &&
+          outcome.payload.kind === "thread_retry"
+        ) {
+          if (!controller) {
+            throw new Error("Thread retry activation is unavailable");
+          }
+          controller.rejectThreadRetry(
+            "Thread retry response became stale before its transition was installed",
+          );
+        }
         return { accepted: true };
       }
       switch (outcome.kind) {
@@ -373,6 +384,28 @@ export function App({
           );
         case "result": {
           const payload = outcome.payload;
+          if (payload.kind === "thread_retry") {
+            if (!controller) {
+              throw new Error("Thread retry activation is unavailable");
+            }
+            const replacement = applyThreadTransition(
+              payload.transition,
+              generation,
+            );
+            if (replacement.kind !== "replaced") {
+              return controller.rejectThreadRetry(
+                "Thread retry response became stale before its transition was installed",
+              );
+            }
+            controller.activateThreadRetry(
+              payload.operation,
+              replacement.generation,
+            );
+            return {
+              accepted: true,
+              operationId: payload.operation.operation_id,
+            };
+          }
           if (payload.kind === "thread_transition") {
             try {
               applyThreadTransition(payload.transition, generation);

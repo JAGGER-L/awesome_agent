@@ -163,12 +163,12 @@ Turn 当作崩溃恢复。
 改变含义的截断。该诊断不会使配置无效。
 
 Application state preflight 是只读的，运行在建立信任、访问 checkpoint 或可写存储之前。
-当前格式是 Schema 7。产品版本与 schema 版本相互独立：schema identity 只随持久化语义
-变化，并单调递增。Migration catalog 的 floor 是 7、current 是 7，且没有生产 migration
-step。因此 Schema 1–6 只提供类型化 reset-or-exit interaction；更新、未知、损坏、不可读
-或锁定的状态绝不会被静默删除。
+当前格式是 Schema 8。产品版本与 schema 版本相互独立：schema identity 只随持久化语义
+变化，并单调递增。Migration catalog 的 floor 是 7、current 是 8，且有一个增加可空 Thread
+lineage 的生产 `7 -> 8` step。因此 Schema 1–6 只提供类型化 reset-or-exit interaction；
+更新、未知、损坏、不可读或锁定的状态绝不会被静默删除。
 
-未来已注册的 migration 只会在 shared-lease preflight、取得 exclusive lease 并再次检查
+已注册的 migration 只会在 shared-lease preflight、取得 exclusive lease 并再次检查
 兼容性之后执行。Storage 会校验并原子发布能感知 WAL 的 SQLite backup，在一个 transaction
 中执行完整的相邻迁移链，降级 lease，然后才初始化 Application repository。失败会回滚
 transaction 并保留 backup 供手动恢复；启动绝不会自动 reset 或 restore。
@@ -467,6 +467,13 @@ Thread search 是按 `updated_at DESC, id DESC` 排序的 Application SQLite rea
 cursor 用 hash 绑定当前 Workspace 与规范化 query；cursor 不会携带明文 workspace key。
 首版使用字面 substring match，而不是 FTS 或 relevance ranking。
 
+Schema 8 为每个 Thread 增加可空的直接父级 lineage。`/fork` 会物化复制至一个终态 Turn
+（含该 Turn）的 transcript 前缀；`/retry` 会物化复制该终态 Turn 之前的前缀，并以它的
+user input 创建新 Turn，同时冻结该 Turn 的 model、Thinking、Skill 与 budget 配置。两者
+都在一个 Application SQLite transaction 中创建独立的 Thread、Entry 与 Turn identity。
+它们不会建立共享历史 DAG，也不会复制 summary、ToolActivity、checkpoint 或 ChangeSet；
+Retry 既不重放旧工具，也不撤销其效果。
+
 这里的原子替换描述文件系统 namespace transition，不表示撤销在 Awesome lease protocol
 之外打开的任意 handle。打开的数据库 handle 会在 Windows 上阻止 rename。POSIX 允许
 rename 与 unlink；这样的既有 handle 会继续连接到已分离的旧 inode，直到关闭，而规范
@@ -565,6 +572,13 @@ Tab、方向键和全局取消，不会有相互竞争的 component listener。�
 Turn 是一条有序 Thinking/tool/answer timeline，已完成 answer 使用 terminal Markdown
 渲染。
 
+`/retry` 返回一个严格的 Protocol v4 `thread_retry` payload，同时包含权威 Thread
+replacement 与已准入 Operation。由于该 Operation 的 event 可能早于 response 到达，
+`ConnectedSurface` 会暂时缓存有序 event stream，先安装 replacement，再把新 generation
+绑定到返回的 Operation/Thread/Turn identity，最后才重放缓存事件。Gate 的上限为 1,024
+个 event 与 4 MiB 编码内容。容量或 identity 违规属于致命 protocol error；event 绝不会
+投影到来源 Thread。
+
 stdio Host 读取一条有界 NDJSON stream，却将普通请求作为独立 task 调度。固定 in-flight
 上限、有界 recent request-ID history，以及有边界和 deadline 保护的 stdout queue 会限制
 内存与停滞 consumer 风险。Initialize、interaction response、cancellation 和 shutdown
@@ -588,9 +602,10 @@ POSIX 保证覆盖仍留在 supervisor session 和 process group 内的 descenda
 sandbox。
 
 单一 Core Operation 活动时，TUI 最多可以排队三个终端输入。Queue 只属于会话，位于
-Thread Surface state 之外：它会跨 `/new` 与 `/resume` 保留；每个 head 只在被提升时
-解析；按 FIFO 执行；Composer 为空时按 Up 可以召回 tail；排队的 `/quit` 被视作终止
-barrier。它绝不会成为 Runtime、protocol method、database record 或第二执行权威。
+Thread Surface state 之外：它会跨 `/new`、`/resume`、`/fork` 与 `/retry` 保留；每个
+head 只在被提升时解析；按 FIFO 执行；Composer 为空时按 Up 可以召回 tail；排队的
+`/quit` 被视作终止 barrier。它绝不会成为 Runtime、protocol method、database record 或
+第二执行权威。
 
 ### 安全
 
@@ -657,7 +672,7 @@ Protocol v4 发布 catalog，使 Ink 无需复制 model 或 Provider 枚举。
 | 状态 | 所有者 | 位置 | 生命周期 |
 | --- | --- | --- | --- |
 | 工作区信任 | Application Storage | `state/application.db` | 直到用户数据被移除 |
-| Thread、Turn、transcript、summary | Conversation + Storage | `state/application.db` | 持久本地历史 |
+| Thread、直接父级 lineage、Turn、transcript、summary | Conversation + Storage | `state/application.db` | 持久本地历史 |
 | Tool activity summary | Storage | `state/application.db` | 有界本地历史 |
 | Agent graph channel | LangGraph | `state/checkpoints.db` | 仅未完成 Turn |
 | ChangeSet metadata | Change Journal + Storage | `state/application.db` | 持久本地历史 |

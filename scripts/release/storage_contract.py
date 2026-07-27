@@ -159,7 +159,7 @@ def _read_schema(path: Path) -> int:
 
 def _verify_migration_registry(storage_module: ModuleType) -> None:
     expected_floor = 7
-    expected_current = 7
+    expected_current = 8
     if expected_floor != storage_module.APPLICATION_SCHEMA_FLOOR:
         raise StorageContractError("wheel migration floor is invalid")
     registry = storage_module.APPLICATION_MIGRATIONS
@@ -175,8 +175,8 @@ def _verify_migration_registry(storage_module: ModuleType) -> None:
         raise StorageContractError("wheel migration registry is not one linear chain")
     if len(set(sources)) != len(sources):
         raise StorageContractError("wheel migration registry contains a branch")
-    if migrations:
-        raise StorageContractError("Schema 7 wheel unexpectedly publishes migrations")
+    if registry.path_from(expected_floor) != migrations:
+        raise StorageContractError("migration floor path is invalid")
     if registry.path_from(expected_current) != ():
         raise StorageContractError("current schema migration path is invalid")
     if registry.path_from(expected_floor - 1) is not None:
@@ -188,7 +188,7 @@ def verify_storage_contract(
     paths_module: ModuleType,
     root: Path,
 ) -> None:
-    expected_schema = 7
+    expected_schema = 8
     if expected_schema != storage_module.APPLICATION_SCHEMA_VERSION:
         raise StorageContractError("wheel schema version is invalid")
     _verify_migration_registry(storage_module)
@@ -203,16 +203,22 @@ def verify_storage_contract(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
+        thread_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(threads)")
+        }
     if observed_schema != expected_schema:
         raise StorageContractError("fresh database schema is invalid")
     required_tables = {"trusted_workspaces", "threads", "turns", "tool_activities"}
     if not required_tables.issubset(tables):
         raise StorageContractError("fresh database tables are incomplete")
+    if "lineage_json" not in thread_columns:
+        raise StorageContractError("fresh Thread schema is incomplete")
 
     for found_schema, expected_direction in (
         (2, "migration_unavailable"),
         (6, "migration_unavailable"),
-        (8, "newer"),
+        (7, "migration_required"),
+        (9, "newer"),
     ):
         incompatible = root / f"schema-{found_schema}" / "application.db"
         _write_versioned_database(incompatible, found_schema)

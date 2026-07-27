@@ -506,7 +506,7 @@ async def test_confirmed_reset_preserves_nonstate_data_and_continues_to_trust(
     trust = _unwrap(await application.initialize())
     assert trust.status is InitializeStatus.TRUST_REQUIRED
     with closing(sqlite3.connect(database)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
     assert not (state / "checkpoints.db").exists()
     assert not (state / "change-journal").exists()
     assert config.read_bytes() == b"providers: {}\n"
@@ -685,7 +685,7 @@ async def test_reset_confirmation_rejects_state_that_became_newer(
     pending = _unwrap(await application.initialize())
     assert pending.interaction_id is not None
     with closing(sqlite3.connect(database)) as connection:
-        connection.execute("PRAGMA user_version = 8")
+        connection.execute("PRAGMA user_version = 9")
     before = database.read_bytes()
 
     response = _unwrap(
@@ -710,7 +710,7 @@ async def test_reset_confirmation_rejects_state_that_became_newer(
 @pytest.mark.parametrize(
     ("version", "code"),
     [
-        (8, ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION),
+        (9, ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION),
         (999, ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION),
     ],
 )

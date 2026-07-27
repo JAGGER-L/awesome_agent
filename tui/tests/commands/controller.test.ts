@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CommandController,
@@ -154,6 +154,31 @@ describe("CommandController", () => {
       ),
     ).resolves.toEqual({ kind: "result", payload });
     expect(calls.map((call) => call.method)).toEqual(["command.execute"]);
+  });
+
+  it("delegates retry activation only after the caller installs its transition", () => {
+    const activateThreadRetry = vi.fn();
+    const rejectThreadRetry = vi.fn((message: string): never => {
+      throw new Error(message);
+    });
+    const controller = new CommandController({
+      request: async () => ({ ok: true, value: {} }) as never,
+      activateThreadRetry,
+      rejectThreadRetry,
+    });
+    const operation = {
+      operation_id: "operation_retry",
+      thread_id: "thread_retry",
+      turn_id: "turn_retry",
+      client_message_id: "client_retry",
+    };
+
+    controller.activateThreadRetry(operation, 2);
+    expect(activateThreadRetry).toHaveBeenCalledWith(operation, 2);
+    expect(() => controller.rejectThreadRetry("stale retry")).toThrow(
+      "stale retry",
+    );
+    expect(rejectThreadRetry).toHaveBeenCalledWith("stale retry");
   });
 
   it("appends a selected Thread to the original search query", async () => {

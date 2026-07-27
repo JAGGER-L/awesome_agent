@@ -17,6 +17,7 @@ from awesome_agent.conversation import (
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadLineage,
     ThreadSearchLimitExceeded,
     ThreadSummary,
     ThreadTitleSource,
@@ -215,7 +216,7 @@ async def test_application_schema_creates_only_product_state_tables(
         inspect
     )
 
-    assert version == APPLICATION_SCHEMA_VERSION == 7
+    assert version == APPLICATION_SCHEMA_VERSION == 8
     assert {
         "trusted_workspaces",
         "change_sets",
@@ -253,6 +254,29 @@ async def test_current_schema_accepts_new_identity_and_rejects_duplicate(
                 sequence=2,
             ).model_copy(update={"client_message_id": "client_entry_new"}),
         )
+
+
+async def test_thread_lineage_round_trips_and_survives_updates(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    lineage = ThreadLineage(
+        kind="fork",
+        source_thread_id="thread_source",
+        source_turn_id="turn_source",
+    )
+    thread = _thread().model_copy(update={"lineage": lineage})
+
+    await repositories.create_thread(thread)
+    updated = await repositories.set_thread_model(
+        thread.id,
+        "deepseek/updated",
+        updated_at=thread.updated_at + timedelta(seconds=1),
+    )
+    reopened = await repositories.read_thread(thread.id)
+
+    assert updated.lineage == lineage
+    assert reopened.thread.lineage == lineage
 
 
 async def test_repositories_persist_and_reopen_ordered_thread_state(

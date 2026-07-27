@@ -99,6 +99,7 @@ const ready: StartupResult = {
           current_model: "deepseek/deepseek-v4-flash",
           thinking_enabled: false,
           skill_mode: "auto",
+          lineage: null,
           created_at: "2026-07-11T00:00:00Z",
           updated_at: "2026-07-11T00:00:00Z",
         },

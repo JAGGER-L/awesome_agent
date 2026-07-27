@@ -95,10 +95,32 @@ credential values are not product history. The Application database stores
 bounded activity summaries. Full observations needed for unfinished execution
 remain in the checkpoint.
 
+## Materialized Thread lineage
+
+Every Schema 8 Thread stores `lineage_json`: root Threads use SQL `NULL`, while
+a forked or retried Thread stores one strict immediate-parent record containing
+`kind`, `source_thread_id`, and `source_turn_id`. This is provenance, not a
+shared-history pointer: the destination receives new Thread, Entry, Turn,
+client-message, and checkpoint-key identities.
+
+Fork and Retry both require a terminal source Turn. Fork copies the durable
+transcript prefix through that Turn. Retry copies the prefix before that Turn,
+then appends the same user input and creates one fresh in-progress Turn with
+the source Turn's provider, model, Thinking, Skill mode, and budgets. Cloned
+terminal Turns retain their public outcome and usage but clear context
+manifests. Neither operation copies summaries, ToolActivity, checkpoints, or
+ChangeSets; Retry never replays old tool calls and never undoes their effects.
+
+Conversation prepares an immutable destination plus a hash of every source
+Thread, Entry, and Turn fact that can affect materialization. Storage rechecks
+the terminal target and source fingerprint inside one `BEGIN IMMEDIATE`
+transaction before inserting the complete destination. A source race therefore
+publishes no partial Thread and returns a conflict for an explicit retry.
+
 ## Schema identity
 
 Application schema identity is independent from the product version. The
-current bootstrap schema is Schema 7. Schema identity changes only when a
+current bootstrap schema is Schema 8. Schema identity changes only when a
 required table, payload interpretation, or cross-record invariant can no
 longer be read safely by the current code, and identities increase
 monotonically.
@@ -110,8 +132,10 @@ ambiguous crash-window evidence remains pending for diagnosis.
 
 Awesome has one deliberately small forward-migration registry. It accepts only
 adjacent `N -> N+1` steps and requires one complete linear path from the support
-floor to the current schema. The production floor and current identity are both
-7, so the registry is empty and Schemas 1–6 remain migration-unavailable.
+floor to the current schema. The production floor is 7 and the current identity
+is 8. The sole `7 -> 8` step adds nullable `threads.lineage_json`; existing
+Threads therefore remain roots without rewriting product history. Schemas 1–6
+remain migration-unavailable.
 
 ## Read-only startup preflight
 
@@ -171,7 +195,7 @@ typed state-reset confirmation
   -> acquire exclusive state lease
   -> validate target == <AWESOME_HOME>/state
   -> atomically rename old state directory
-  -> create and validate fresh Schema 7
+  -> create and validate fresh Schema 8
   -> remove replaced state
   -> downgrade to shared lease
   -> continue to workspace trust
@@ -397,6 +421,7 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 | Provider credential journal is `COMMITTED` | target `.env` hash and source identity | verify the target file and roll the source forward |
 | Provider credential evidence is invalid or cannot reconcile | journal/backup remains; runtime stays unpublished or fenced | fail with `recovery_required`; do not load the half-state |
 | mutation intent persists, effect uncertain | PendingMutation + blobs | verify, finalize, or roll back |
+| materialization source changes before commit | no destination rows | return conflict; explicitly retry the command |
 | shell/MCP transport fails after dispatch | conservative observation / uncertain tool state | explicit Abort or Retry |
 | migration step fails and rolls back | fixed pre-migration SQLite backup | fail startup; preserve backup for manual recovery |
 | migration rollback cannot be proved | fixed backup plus fenced database worker | fail closed; require manual diagnosis |

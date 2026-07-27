@@ -24,6 +24,7 @@ change, and helps verify the result.
 - implement, debug, refactor, and test code;
 - show controlled file changes with `/diff`, `/undo`, and `/redo`;
 - search this Workspace's conversation history, then resume a result;
+- fork a conversation at a terminal Turn, or retry that Turn in a fresh fork;
 - export the current Thread as deterministic Markdown or JSON through the
   Change Journal;
 - continue the latest Thread or resume one by ID;
@@ -111,6 +112,13 @@ for options and exit codes.
 If startup finds an unfinished Turn, Awesome asks before continuing it. A
 verified local checkpoint offers Retry first; a shell or MCP call whose outcome
 is uncertain offers Abort first and is never replayed automatically.
+
+`/fork [turn_id]` materializes conversation history through a terminal Turn in
+a new Thread. `/retry [turn_id]` materializes the prefix before that Turn, then
+runs its original request again with the Turn's frozen model, Thinking, Skill,
+and budgets. Both commands create independent records rather than a shared
+history graph. They do not copy checkpoints, Tool activity, or ChangeSets;
+retry does not replay old tool calls or undo their side effects.
 
 ## First Task
 

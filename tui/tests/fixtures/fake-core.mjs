@@ -152,6 +152,7 @@ const emptyThreadRead = (threadId) => {
         current_model: "deepseek/deepseek-v4-flash",
         thinking_enabled: false,
         skill_mode: "auto",
+        lineage: null,
         created_at: now,
         updated_at: now,
       },
@@ -162,6 +163,134 @@ const emptyThreadRead = (threadId) => {
     change_sets: [],
     has_more: false,
   };
+};
+const retryOperation = {
+  operation_id: "operation_retry",
+  thread_id: "thread_retry",
+  turn_id: "turn_retry",
+  client_message_id: "client_retry",
+};
+const retryThreadRead = () => {
+  const now = "2026-07-11T08:00:00Z";
+  const page = emptyThreadRead(retryOperation.thread_id);
+  page.view.thread.lineage = {
+    kind: "retry",
+    source_thread_id: "thread_source",
+    source_turn_id: "turn_source",
+  };
+  page.view.entries = [
+    {
+      id: "entry_retry_user",
+      thread_id: retryOperation.thread_id,
+      sequence: 1,
+      kind: "user_message",
+      client_message_id: retryOperation.client_message_id,
+      content: "retry question",
+      metadata: {},
+      created_at: now,
+    },
+  ];
+  page.view.turns = [
+    {
+      id: retryOperation.turn_id,
+      thread_id: retryOperation.thread_id,
+      checkpoint_key: retryOperation.turn_id,
+      status: "in_progress",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      thinking_enabled: false,
+      skill_mode: "auto",
+      budgets: {
+        model_calls: 32,
+        tool_calls: 64,
+        provider_retries: 2,
+        compressions: 2,
+        active_execution_seconds: 1800,
+        total_context_tokens: 262144,
+        web_requests: 8,
+      },
+      user_entry_id: "entry_retry_user",
+      usage: {
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        model_calls: 0,
+        tool_calls: 0,
+        provider_retries: 0,
+        compressions: 0,
+        web_requests: 0,
+        active_execution_seconds: 0,
+      },
+      context_manifest: [],
+      created_at: now,
+      updated_at: now,
+    },
+  ];
+  return page;
+};
+const retryEvent = (
+  sequence,
+  event_type,
+  payload,
+  threadId = retryOperation.thread_id,
+  clientMessageId = retryOperation.client_message_id,
+) => ({
+  jsonrpc: "2.0",
+  method: "event",
+  params: {
+    version: 1,
+    event_id: `event_retry${sequence}`,
+    sequence,
+    session_id: "session_fake",
+    workspace_key: "workspace_fake",
+    thread_id: threadId,
+    turn_id: retryOperation.turn_id,
+    operation_id: retryOperation.operation_id,
+    client_message_id: clientMessageId,
+    event_type,
+    timestamp: "2026-07-11T08:00:00Z",
+    payload,
+  },
+});
+const outputRetryEvents = (
+  threadId = retryOperation.thread_id,
+  clientMessageId = retryOperation.client_message_id,
+) => {
+  output(
+    retryEvent(
+      1,
+      "operation.started",
+      {
+        kind: "operation.started",
+        message: "",
+      },
+      threadId,
+      clientMessageId,
+    ),
+  );
+  output(
+    retryEvent(
+      2,
+      "turn.started",
+      { kind: "turn.started" },
+      threadId,
+      clientMessageId,
+    ),
+  );
+};
+const outputRetryOverflow = (kind) => {
+  const count = kind === "count" ? 1_025 : 141;
+  const text = kind === "count" ? "x" : "x".repeat(30_000);
+  for (let sequence = 1; sequence <= count; sequence += 1) {
+    output(
+      retryEvent(sequence, "assistant.text.delta", {
+        kind: "assistant.text.delta",
+        text,
+      }),
+    );
+  }
 };
 const handleLine = (line) => {
   const request = JSON.parse(line);
@@ -295,6 +424,7 @@ const handleLine = (line) => {
             current_model: "deepseek/deepseek-v4-flash",
             thinking_enabled: false,
             skill_mode: "auto",
+            lineage: null,
             created_at: now,
             updated_at: now,
           },
@@ -376,7 +506,84 @@ const handleLine = (line) => {
     if (delay > 0) setTimeout(() => output(response), delay);
     else output(response);
   } else if (request.method === "command.execute") {
+    if (request.params.name === "retry") {
+      const order = process.env.AWESOME_FAKE_CORE_RETRY_EVENTS;
+      if (order === "failure_after_old_terminal") {
+        output({
+          jsonrpc: "2.0",
+          method: "event",
+          params: {
+            version: 1,
+            event_id: "event_oldterminal",
+            sequence: 1,
+            session_id: "session_fake",
+            workspace_key: "workspace_fake",
+            thread_id: "thread_fake",
+            turn_id: "turn_old",
+            operation_id: "operation_old",
+            client_message_id: "client_old",
+            event_type: "operation.completed",
+            timestamp: "2026-07-11T08:00:00Z",
+            payload: { kind: "operation.completed", message: "" },
+          },
+        });
+        output({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: application({
+            kind: "error",
+            code: "retry_not_available",
+            message: "Nothing can be retried.",
+          }),
+        });
+        return;
+      }
+      if (order === "before") outputRetryEvents();
+      if (order === "mismatch") outputRetryEvents("thread_wrong");
+      if (order === "client_mismatch") {
+        outputRetryEvents(retryOperation.thread_id, "client_wrong");
+      }
+      if (order === "overflow_count") outputRetryOverflow("count");
+      if (order === "overflow_bytes") outputRetryOverflow("bytes");
+      output({
+        jsonrpc: "2.0",
+        id: request.id,
+        result: application({
+          kind: "result",
+          payload: {
+            kind: "thread_retry",
+            transition: {
+              reason: "retry",
+              application: {
+                ...applicationState(retryOperation.thread_id),
+                active_operation_id: retryOperation.operation_id,
+              },
+              thread: retryThreadRead(),
+            },
+            operation: retryOperation,
+          },
+        }),
+      });
+      if (order === "after") setImmediate(() => outputRetryEvents());
+      if (order === "client_mismatch_after") {
+        setTimeout(
+          () =>
+            outputRetryEvents(retryOperation.thread_id, "client_wrong_after"),
+          25,
+        );
+      }
+      return;
+    }
     const threadId = request.params.arguments?.[0] ?? "thread_fake";
+    const fork = request.params.name === "fork";
+    const page = emptyThreadRead(threadId);
+    if (fork) {
+      page.view.thread.lineage = {
+        kind: "fork",
+        source_thread_id: "thread_source",
+        source_turn_id: "turn_source",
+      };
+    }
     output({
       jsonrpc: "2.0",
       id: request.id,
@@ -385,9 +592,10 @@ const handleLine = (line) => {
         payload: {
           kind: "thread_transition",
           transition: {
-            reason: request.params.name === "new" ? "new" : "resume",
+            reason:
+              request.params.name === "new" ? "new" : fork ? "fork" : "resume",
             application: applicationState(threadId),
-            thread: emptyThreadRead(threadId),
+            thread: page,
           },
         },
       }),

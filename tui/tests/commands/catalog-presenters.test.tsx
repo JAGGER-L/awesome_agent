@@ -35,6 +35,7 @@ describe("catalog and configuration presenters", () => {
         current_model: "deepseek/deepseek-v4-flash",
         thinking_enabled: true,
         skill_mode: "auto",
+        lineage: null,
         created_at: "2026-07-14T00:00:00Z",
         updated_at: "2026-07-14T00:00:01Z",
       },

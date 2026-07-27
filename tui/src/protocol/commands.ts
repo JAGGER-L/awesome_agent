@@ -18,6 +18,8 @@ export const applicationCommandNames = [
   "new",
   "rename",
   "resume",
+  "fork",
+  "retry",
   "search",
   "export",
   "context",
@@ -86,6 +88,8 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   new: "application",
   rename: "application",
   resume: "application",
+  fork: "application",
+  retry: "application",
   search: "application",
   export: "application",
   context: "application",
@@ -221,7 +225,7 @@ const doctorCheckSchema = z.strictObject({
 
 export const threadTransitionSnapshotSchema = z
   .strictObject({
-    reason: z.enum(["new", "resume"]),
+    reason: z.enum(["new", "resume", "fork", "retry"]),
     application: applicationStateSchema,
     thread: threadReadResultSchema,
   })
@@ -242,6 +246,16 @@ const commandPayloadBaseSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("thread_transition"),
     transition: threadTransitionSnapshotSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("thread_retry"),
+    transition: threadTransitionSnapshotSchema,
+    operation: z.strictObject({
+      operation_id: boundedText(1, 128),
+      thread_id: boundedText(1, 128),
+      turn_id: boundedText(1, 128),
+      client_message_id: boundedText(1, 128).regex(/^client_[A-Za-z0-9_-]+$/u),
+    }),
   }),
   z.strictObject({
     kind: z.literal("thread_renamed"),
@@ -363,16 +377,111 @@ const commandPayloadBaseSchema = z.discriminatedUnion("kind", [
 
 export const commandPayloadSchema = commandPayloadBaseSchema.superRefine(
   (payload, context) => {
-    if (payload.kind !== "thread_export") return;
-    const changed = payload.write_status !== "unchanged";
-    if (changed === Boolean(payload.change_set_id)) return;
-    context.addIssue({
-      code: "custom",
-      path: ["change_set_id"],
-      message: changed
-        ? "Changed exports require a change set"
-        : "Unchanged exports must not include a change set",
-    });
+    if (payload.kind === "thread_export") {
+      const changed = payload.write_status !== "unchanged";
+      if (changed !== Boolean(payload.change_set_id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["change_set_id"],
+          message: changed
+            ? "Changed exports require a change set"
+            : "Unchanged exports must not include a change set",
+        });
+      }
+    }
+    if (
+      payload.kind === "thread_transition" &&
+      payload.transition.reason === "retry"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["transition", "reason"],
+        message: "Retry transitions require a thread_retry payload",
+      });
+    }
+    if (payload.kind === "thread_transition") {
+      const { reason, thread } = payload.transition;
+      const lineage = thread.view.thread.lineage;
+      if (reason === "fork" && lineage?.kind !== "fork") {
+        context.addIssue({
+          code: "custom",
+          path: ["transition", "thread", "view", "thread", "lineage"],
+          message: "Fork transitions require fork lineage",
+        });
+      }
+      if (reason === "new" && lineage !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["transition", "thread", "view", "thread", "lineage"],
+          message: "New transitions require null lineage",
+        });
+      }
+    }
+    if (payload.kind === "thread_retry") {
+      const { transition, operation } = payload;
+      if (transition.reason !== "retry") {
+        context.addIssue({
+          code: "custom",
+          path: ["transition", "reason"],
+          message: "Thread retry transition reason must be retry",
+        });
+      }
+      if (transition.thread.view.thread.lineage?.kind !== "retry") {
+        context.addIssue({
+          code: "custom",
+          path: ["transition", "thread", "view", "thread", "lineage"],
+          message: "Thread retry transition requires retry lineage",
+        });
+      }
+      if (transition.thread.view.thread.id !== operation.thread_id) {
+        context.addIssue({
+          code: "custom",
+          path: ["operation", "thread_id"],
+          message:
+            "Thread retry transition and operation identities must match",
+        });
+      }
+      const operationTurn = transition.thread.view.turns.find(
+        (turn) => turn.id === operation.turn_id,
+      );
+      if (!operationTurn || operationTurn.thread_id !== operation.thread_id) {
+        context.addIssue({
+          code: "custom",
+          path: ["operation", "turn_id"],
+          message: "Thread retry operation Turn must exist in its transition",
+        });
+        return;
+      }
+      const inProgressTurns = transition.thread.view.turns.filter(
+        (turn) => turn.status === "in_progress",
+      );
+      if (
+        inProgressTurns.length !== 1 ||
+        inProgressTurns[0]?.id !== operationTurn.id ||
+        transition.thread.view.turns.at(-1)?.id !== operationTurn.id
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["operation", "turn_id"],
+          message:
+            "Thread retry operation must identify the final and only in-progress Turn",
+        });
+      }
+      const userEntry = transition.thread.view.entries.find(
+        (entry) => entry.id === operationTurn.user_entry_id,
+      );
+      if (
+        userEntry?.kind !== "user_message" ||
+        userEntry.client_message_id !== operation.client_message_id
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["operation", "client_message_id"],
+          message:
+            "Thread retry operation client identity must match its Turn user Entry",
+        });
+      }
+    }
   },
 );
 
@@ -396,10 +505,13 @@ export const commandOutcomeSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type CommandPayload = z.infer<typeof commandPayloadSchema>;
-export type ThreadTransitionSnapshot = Extract<
+export type ThreadTransitionSnapshot = z.infer<
+  typeof threadTransitionSnapshotSchema
+>;
+export type ThreadRetryOperation = Extract<
   CommandPayload,
-  { readonly kind: "thread_transition" }
->["transition"];
+  { readonly kind: "thread_retry" }
+>["operation"];
 export type CommandOutcome = z.infer<typeof commandOutcomeSchema>;
 export type CommandSelection = z.infer<typeof commandSelectionSchema>;
 export type CommandSecretPrompt = z.infer<typeof commandSecretPromptSchema>;

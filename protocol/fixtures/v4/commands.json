@@ -13,6 +13,14 @@
       "owner": "application"
     },
     {
+      "name": "fork",
+      "owner": "application"
+    },
+    {
+      "name": "retry",
+      "owner": "application"
+    },
+    {
       "name": "search",
       "owner": "application"
     },

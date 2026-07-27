@@ -1,6 +1,6 @@
 # Slash Command 参考
 
-Awesome 有一个封闭的命令 catalog。其中二十四条命令属于 Python Application，四条属于
+Awesome 有一个封闭的命令 catalog。其中二十六条命令属于 Python Application，四条属于
 Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中，但不会作为模型对话
 消息存储。
 
@@ -11,6 +11,8 @@ Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中
 | `/new` | 无参数 | 创建并选择新 Thread；重置 Thread 作用域的权限状态。 |
 | `/rename <title>` | 一个或多个标题 token | 为选中的 Thread 持久化手动标题。 |
 | `/resume [thread_id]` | 零或一个 ID/prefix | 打开 picker 或选择一个 Workspace Thread。 |
+| `/fork [turn_id]` | 零或一个 Turn ID | 将截至一个终态 Turn 的前缀物化为独立 Thread，并选中它。 |
+| `/retry [turn_id]` | 零或一个 Turn ID | 在一个终态 Turn 之前物化分支，并全新执行其请求。 |
 | `/search <query> [thread_id]` | 一个 query token（多词时加引号），随后可选精确结果 ID | 搜索当前 Workspace、打开 picker，或恢复选中的匹配 Thread。 |
 | `/context` | 无参数 | 显示最新的活动上下文类别、实际 token 数和预算。 |
 | `/compact` | 无参数 | 立即构建并持久化新的对话摘要。 |
@@ -39,6 +41,15 @@ Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中
 
 `/resume` 接受精确 Thread ID，或由 8–32 个小写十六进制数字组成且无歧义的 `thread_`
 prefix。有歧义的 prefix 会打开 picker；绝不会选择其他 Workspace 的 Thread。
+
+`/fork` 与 `/retry` 最多接受当前 Thread 中一个精确 Turn ID。省略时，按 transcript 顺序
+选择最近的终态 Turn；进行中的目标会被拒绝。`/fork` 会物理复制截至目标的持久前缀；
+`/retry` 只复制目标之前的前缀，以新的 entry/client identity 追加目标用户请求，并启动
+全新的 Turn。即使源 Thread 的设置后来变化，新 Turn 仍冻结原目标的 Provider、模型、
+Thinking、Skill 和完整预算快照。每个被复制的 Thread、entry 和 Turn 都获得新 identity，
+新 Thread 只记录直接来源 Thread/Turn 的 lineage，不构造共享 DAG。Summary、checkpoint、
+ToolActivity 和 ChangeSet record 都不会复制。Retry 经过普通 Turn 路径重新执行，不会重放
+旧工具调用，也不会自动撤销它们之前产生的副作用。
 
 `/search` 接受一个 query 参数。多词 query 必须加引号，例如
 `/search "provider retry"`；选择后，TUI 会把选中的精确 Thread ID 追加到原始 query。

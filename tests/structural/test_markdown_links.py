@@ -326,7 +326,8 @@ def test_state_recovery_docs_use_the_product_flow() -> None:
         encoding="utf-8"
     )
 
-    assert "Schema 7" in storage
+    assert "Schema 8" in storage
+    assert "7 -> 8" in storage
     assert "exclusive" in storage and "lease" in storage
     assert "Reset local state and continue" in troubleshooting
     assert "API keys" in troubleshooting

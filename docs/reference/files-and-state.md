@@ -198,7 +198,7 @@ input and see the [configuration reference](configuration.md#workspace-configura
 ## Application database
 
 `<HOME>/state/application.db` is the authoritative embedded Application SQLite
-database. Current `PRAGMA user_version` is **7**. One process-level bounded FIFO
+database. Current `PRAGMA user_version` is **8**. One process-level bounded FIFO
 worker owns its long-lived connection. The connection enables foreign keys, a
 five-second busy timeout, WAL journal mode, and normal synchronous mode.
 Application-facing repositories expose async methods: reads use deferred
@@ -212,7 +212,7 @@ Its logical ownership is:
 | Records | Purpose |
 | --- | --- |
 | `trusted_workspaces` | Accepted workspace key, canonical path, and trust time |
-| `threads` | Workspace association, title/source, selected model, Thinking and Skill mode |
+| `threads` | Workspace association, title/source, selected model, Thinking and Skill mode, and optional immediate-parent fork/retry lineage |
 | `thread_entries` | Durable user messages, assistant messages, and direct commands in sequence |
 | `turns` | Turn lifecycle, immutable execution choices/budgets, usage, context manifest, and checkpoint key |
 | `thread_summaries` | Bounded conversation summary and covered sequence/count |
@@ -353,18 +353,20 @@ Awesome performs a read-only preflight before normal database access:
 
 | Observed state | Behavior |
 | --- | --- |
-| No database, or empty SQLite with version 0 | Initialize schema 7 under an exclusive lease, then downgrade to shared ownership. |
-| Schema 7 | Open normally. |
+| No database, or empty SQLite with version 0 | Initialize schema 8 under an exclusive lease, then downgrade to shared ownership. |
+| Schema 8 | Open normally. |
+| Schema 7 | Back up the database, then migrate it to schema 8 under an exclusive lease. |
 | Schema 1–6 | Migration is unavailable; ask the user to reset local state or exit. |
-| Schema greater than 7 | Refuse with `state_created_by_newer_version`. |
+| Schema greater than 8 | Refuse with `state_created_by_newer_version`. |
 | Non-empty version 0, invalid SQLite, or unknown format | Refuse as unknown/unavailable state. |
 
-The production migration registry has floor 7, current 7, and no steps. Future
-supported upgrades must form one adjacent linear chain. Startup then performs a
-shared-lease preflight, acquires the exclusive state lease, rechecks the schema,
-and creates `<HOME>/state/application.db.pre-migration.bak` with SQLite's Backup
-API before applying the whole chain in one transaction. It downgrades to shared
-ownership before initializing repositories.
+The production migration registry has floor 7 and current 8. Its 7→8 step adds
+the nullable Thread lineage field without rewriting existing conversation data.
+Future supported upgrades must extend the adjacent linear chain. Startup first
+performs a shared-lease preflight, acquires the exclusive state lease, rechecks
+the schema, and creates `<HOME>/state/application.db.pre-migration.bak` with
+SQLite's Backup API before applying the whole chain in one transaction. It
+downgrades to shared ownership before initializing repositories.
 
 The backup is independently reopened and checked before migration. A failed
 step rolls back every schema and data change and leaves the backup available for

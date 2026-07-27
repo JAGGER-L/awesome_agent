@@ -7,6 +7,7 @@ from awesome_agent.conversation.models import (
     AssistantEntryMetadata,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadLineage,
     ThreadView,
 )
 from awesome_agent.core.citations import Citation
@@ -33,6 +34,11 @@ def _render_json(view: ThreadView) -> str:
             "created_at": thread.created_at.isoformat(),
             "current_model": thread.current_model,
             "id": thread.id,
+            "lineage": (
+                None
+                if thread.lineage is None
+                else thread.lineage.model_dump(mode="json")
+            ),
             "skill_mode": thread.skill_mode,
             "thinking_enabled": thread.thinking_enabled,
             "title": thread.title,
@@ -80,6 +86,7 @@ def _render_markdown(view: ThreadView) -> str:
         f"- Model: `{_markdown_code(thread.current_model or 'not selected')}`",
         f"- Thinking: `{'on' if thread.thinking_enabled else 'off'}`",
         f"- Skill mode: `{_markdown_code(thread.skill_mode)}`",
+        _markdown_lineage(thread.lineage),
         "",
         "## Transcript",
         "",
@@ -121,6 +128,16 @@ def _ordered_entries(view: ThreadView) -> tuple[ThreadEntry, ...]:
 
 def _markdown_citation(citation: Citation) -> str:
     return f"- [[{citation.id}]] {_markdown_inline(citation.title)} — {citation.url}"
+
+
+def _markdown_lineage(lineage: ThreadLineage | None) -> str:
+    if lineage is None:
+        return "- Lineage: none"
+    return (
+        f"- Lineage: `{lineage.kind}` from Thread "
+        f"`{_markdown_code(lineage.source_thread_id)}`, Turn "
+        f"`{_markdown_code(lineage.source_turn_id)}`"
+    )
 
 
 def _markdown_inline(value: str) -> str:

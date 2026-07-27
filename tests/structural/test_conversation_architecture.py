@@ -3,6 +3,8 @@ from pathlib import Path
 
 CONVERSATION_MODULES = {
     "__init__.py",
+    "export.py",
+    "materialization.py",
     "models.py",
     "repository.py",
     "service.py",

@@ -17,6 +17,8 @@ Awesome currently provides:
 - DeepSeek and Kimi through provider-neutral model contracts;
 - trusted Workspace startup, root `AGENTS.md` instructions, Threads, Turns,
   cancellation, checkpoints, and recovery;
+- materialized Thread fork and retry with explicit immediate-parent lineage,
+  independent copied history, and no old-tool replay or implicit undo;
 - workspace file tools and bounded local command execution through one Registry,
   Policy, and Executor path;
 - three permission modes, single-use approval, a Thread-bound temporary

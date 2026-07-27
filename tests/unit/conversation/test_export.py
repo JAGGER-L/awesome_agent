@@ -8,6 +8,7 @@ from awesome_agent.conversation import (
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadLineage,
     ThreadView,
     render_thread_export,
 )
@@ -87,6 +88,7 @@ def test_json_thread_export_is_versioned_deterministic_and_entry_scoped() -> Non
     assert payload["schema"] == "awesome.thread-export"
     assert payload["version"] == 1
     assert "workspace_key" not in payload["thread"]
+    assert payload["thread"]["lineage"] is None
     assert [entry["sequence"] for entry in payload["entries"]] == [1, 2, 3, 4]
     assert "citations" not in payload["entries"][0]
     assert payload["entries"][1]["citations"] == [
@@ -109,6 +111,7 @@ def test_markdown_thread_export_emits_sources_only_for_cited_assistant() -> None
     assert rendered == render_thread_export(view, format="markdown")
     assert rendered.startswith("# Exported Thread\n")
     assert "<!-- awesome-thread-export:v1 -->" in rendered
+    assert "- Lineage: none" in rendered
     assert rendered.count("#### Sources") == 1
     assert "[[S1]] Primary source — https://example.com/source" in rendered
     assert rendered.index("### User · 1") < rendered.index("### Assistant · 2")
@@ -116,3 +119,40 @@ def test_markdown_thread_export_emits_sources_only_for_cited_assistant() -> None
     assert rendered.index("### Assistant · 3") < rendered.index(
         "### Direct command · 4"
     )
+
+
+def test_thread_export_preserves_materialized_lineage() -> None:
+    source = _view()
+    lineage = ThreadLineage(
+        kind="fork",
+        source_thread_id="thread_source",
+        source_turn_id="turn_source",
+    )
+    view = source.model_copy(
+        update={"thread": source.thread.model_copy(update={"lineage": lineage})}
+    )
+
+    payload = json.loads(render_thread_export(view, format="json"))
+    markdown = render_thread_export(view, format="markdown")
+
+    assert payload["thread"]["lineage"] == {
+        "kind": "fork",
+        "source_thread_id": "thread_source",
+        "source_turn_id": "turn_source",
+    }
+    assert (
+        "- Lineage: `fork` from Thread `thread_source`, Turn `turn_source`"
+        in markdown
+    )
+
+
+def test_thread_dump_keeps_required_nullable_lineage_with_exclude_none() -> None:
+    thread = _view().thread
+
+    assert thread.model_dump(mode="json", exclude_none=True)["lineage"] is None
+    assert "lineage" not in thread.model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude={"lineage"},
+    )
+    assert thread.model_dump(mode="json", include={"id"}) == {"id": thread.id}

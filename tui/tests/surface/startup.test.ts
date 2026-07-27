@@ -29,6 +29,7 @@ const thread = (id: string): MethodValue["thread.list"]["threads"][number] => ({
   current_model: "deepseek/deepseek-chat",
   thinking_enabled: false,
   skill_mode: "auto",
+  lineage: null,
   created_at: "2026-07-11T00:00:00Z",
   updated_at: "2026-07-11T01:00:00Z",
 });

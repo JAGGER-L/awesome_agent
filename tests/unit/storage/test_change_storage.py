@@ -48,7 +48,7 @@ async def test_current_schema_contains_change_and_pending_tables(
         return names, version
 
     names, version = await application_database.read(inspect)
-    assert APPLICATION_SCHEMA_VERSION == version == 7
+    assert APPLICATION_SCHEMA_VERSION == version == 8
     assert {"change_sets", "pending_mutations"} <= names
 
 
@@ -172,7 +172,7 @@ async def test_pending_distinct_node_types_survive_reopen_without_a_schema_chang
 
     reopened = SQLiteChangeSetStore(application_database)
 
-    assert APPLICATION_SCHEMA_VERSION == 7
+    assert APPLICATION_SCHEMA_VERSION == 8
     reopened_pending = await reopened.list_pending()
     assert reopened_pending == [pending]
     assert reopened_pending[0].before_node_type is FileNodeType.FILE

@@ -5,7 +5,7 @@ import { helpForCommand, helpOverview } from "../../src/commands/help.js";
 describe("catalog-driven help", () => {
   it("returns one semantic row for every command in catalog order", () => {
     const help = helpOverview();
-    expect(help.rows).toHaveLength(28);
+    expect(help.rows).toHaveLength(30);
     expect(help.rows.every((row) => row.usage.startsWith("/"))).toBe(true);
     expect(help.rows.every((row) => row.description.length > 0)).toBe(true);
   });

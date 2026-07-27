@@ -1,6 +1,6 @@
 # Slash Command reference
 
-Awesome has one closed command catalog. Twenty-four commands are owned by the
+Awesome has one closed command catalog. Twenty-six commands are owned by the
 Python Application and four are owned by Ink. A Slash Command is product
 control input: it is displayed in the terminal transcript but is not stored as
 a model conversation message.
@@ -12,6 +12,8 @@ a model conversation message.
 | `/new` | no arguments | Create and select a new Thread; reset Thread-scoped permission state. |
 | `/rename <title>` | one or more title tokens | Persist a manual title for the selected Thread. |
 | `/resume [thread_id]` | zero or one ID/prefix | Open a picker or select one workspace Thread. |
+| `/fork [turn_id]` | zero or one Turn ID | Materialize and select an independent Thread through one terminal Turn. |
+| `/retry [turn_id]` | zero or one Turn ID | Materialize a fork before one terminal Turn and freshly execute its request. |
 | `/search <query> [thread_id]` | one query token (quote multiple words), then optional exact result ID | Search this Workspace, open a picker, or resume the selected matching Thread. |
 | `/context` | no arguments | Show the latest active context categories, realized token count, and budget. |
 | `/compact` | no arguments | Build and persist a new conversation summary now. |
@@ -42,6 +44,19 @@ first accepted natural-language message supplies an automatic title of at most
 `/resume` accepts an exact Thread ID or an unambiguous `thread_` prefix of 8–32
 lowercase hexadecimal digits. Ambiguous prefixes open a picker; cross-workspace
 Threads are never selected.
+
+`/fork` and `/retry` accept at most one exact Turn ID from the selected Thread.
+When omitted, the latest terminal Turn by transcript order is selected. An
+in-progress target is rejected. `/fork` physically copies the durable prefix
+through the target; `/retry` copies only the prefix before the target, appends
+the target user request with fresh entry/client identities, and starts a fresh
+Turn. That Turn freezes the original target's Provider, model, Thinking, Skill,
+and complete budget snapshot even if the source Thread settings later change.
+Every copied Thread, entry, and Turn receives a new identity, and the new
+Thread records only its immediate source Thread/Turn lineage; no shared DAG is
+constructed. Summary, checkpoint, ToolActivity, and ChangeSet records are not
+copied. Retry executes through the ordinary Turn path, without replaying old
+tool calls and without automatically undoing their prior side effects.
 
 `/search` accepts one query argument. Quote a multi-word query, for example
 `/search "provider retry"`; after selection the TUI appends the chosen exact

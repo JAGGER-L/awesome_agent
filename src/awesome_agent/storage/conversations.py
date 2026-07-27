@@ -10,10 +10,16 @@ from uuid import uuid4
 from pydantic import JsonValue
 
 from awesome_agent.config import BudgetConfig
+from awesome_agent.conversation.materialization import (
+    RetryPreparation,
+    ThreadMaterializationPlan,
+    materialization_source_fingerprint,
+)
 from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadLineage,
     ThreadListPage,
     ThreadPage,
     ThreadSummary,
@@ -28,6 +34,7 @@ from awesome_agent.conversation.models import (
 )
 from awesome_agent.conversation.repository import (
     ConversationConflict,
+    InvalidTurnTransition,
     ThreadNotFound,
     ThreadSearchLimitExceeded,
     TurnBusy,
@@ -222,6 +229,31 @@ class SQLiteConversationRepositories:
             )
         )
 
+    async def materialize_fork(
+        self,
+        plan: ThreadMaterializationPlan,
+    ) -> ThreadView:
+        if plan.kind != "fork":
+            raise ConversationConflict("Fork materialization kind is invalid.")
+        return await self._database.write(
+            lambda connection: self._materialize_fork(connection, plan)
+        )
+
+    async def materialize_retry(
+        self,
+        plan: ThreadMaterializationPlan,
+        preparation: RetryPreparation,
+    ) -> RetryPreparation:
+        if plan.kind != "retry" or preparation.view != plan.view:
+            raise ConversationConflict("Retry materialization plan is inconsistent.")
+        return await self._database.write(
+            lambda connection: self._materialize_retry(
+                connection,
+                plan,
+                preparation,
+            )
+        )
+
     async def read_thread(self, thread_id: str) -> ThreadView:
         return await self._database.read(
             lambda connection: self._read_thread(connection, thread_id)
@@ -379,6 +411,95 @@ class SQLiteConversationRepositories:
                 self._tool_activities.list(thread_id, connection=connection)
             ),
         )
+
+    def _materialize_fork(
+        self,
+        connection: sqlite3.Connection,
+        plan: ThreadMaterializationPlan,
+    ) -> ThreadView:
+        source = self._validated_materialization_source(connection, plan)
+        self._validate_new_materialization_ids(source, plan.view)
+        self._insert_materialized_view(connection, plan.view)
+        return self._read_thread(connection, plan.view.thread.id)
+
+    def _materialize_retry(
+        self,
+        connection: sqlite3.Connection,
+        plan: ThreadMaterializationPlan,
+        preparation: RetryPreparation,
+    ) -> RetryPreparation:
+        source = self._validated_materialization_source(connection, plan)
+        self._validate_new_materialization_ids(source, plan.view)
+        self._insert_materialized_view(connection, plan.view)
+        persisted = self._read_thread(connection, plan.view.thread.id)
+        turn = next(
+            (turn for turn in persisted.turns if turn.id == preparation.turn.id),
+            None,
+        )
+        if turn is None:
+            raise ConversationConflict("Materialized retry Turn is unavailable.")
+        return RetryPreparation(
+            view=persisted,
+            turn=turn,
+            content=preparation.content,
+            client_message_id=preparation.client_message_id,
+        )
+
+    def _validated_materialization_source(
+        self,
+        connection: sqlite3.Connection,
+        plan: ThreadMaterializationPlan,
+    ) -> ThreadView:
+        source = self._read_thread(connection, plan.source_thread_id)
+        if source.thread.workspace_key != plan.source_workspace_key:
+            raise ThreadNotFound(plan.source_thread_id)
+        target = next(
+            (turn for turn in source.turns if turn.id == plan.source_turn_id),
+            None,
+        )
+        if target is None:
+            raise TurnNotFound(plan.source_turn_id)
+        if target.status is TurnStatus.IN_PROGRESS:
+            raise InvalidTurnTransition("Fork and retry require a terminal Turn.")
+        if materialization_source_fingerprint(source) != plan.source_fingerprint:
+            raise ConversationConflict(
+                "Source Thread changed before materialization was committed."
+            )
+        return source
+
+    @staticmethod
+    def _validate_new_materialization_ids(
+        source: ThreadView,
+        materialized: ThreadView,
+    ) -> None:
+        source_entry_ids = {entry.id for entry in source.entries}
+        source_turn_ids = {turn.id for turn in source.turns}
+        source_client_ids = {
+            entry.client_message_id
+            for entry in source.entries
+            if entry.client_message_id is not None
+        }
+        if source_entry_ids & {entry.id for entry in materialized.entries}:
+            raise ConversationConflict("Materialized Entry identity was reused.")
+        if source_turn_ids & {turn.id for turn in materialized.turns}:
+            raise ConversationConflict("Materialized Turn identity was reused.")
+        if source_client_ids & {
+            entry.client_message_id
+            for entry in materialized.entries
+            if entry.client_message_id is not None
+        }:
+            raise ConversationConflict("Materialized client identity was reused.")
+
+    def _insert_materialized_view(
+        self,
+        connection: sqlite3.Connection,
+        view: ThreadView,
+    ) -> None:
+        self._threads.create(view.thread, connection=connection)
+        for entry in view.entries:
+            self._entries.append(entry, connection=connection)
+        for turn in view.turns:
+            self._turns.create(turn, connection=connection)
 
     def _read_thread_page(
         self,
@@ -637,8 +758,9 @@ class SQLiteThreadRepository(_SQLiteRepository):
                     """
                     INSERT INTO threads (
                         thread_id, workspace_key, title, title_source, current_model,
-                        thinking_enabled, skill_mode, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        thinking_enabled, skill_mode, lineage_json, created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         thread.id,
@@ -648,6 +770,11 @@ class SQLiteThreadRepository(_SQLiteRepository):
                         thread.current_model,
                         int(thread.thinking_enabled),
                         thread.skill_mode,
+                        (
+                            None
+                            if thread.lineage is None
+                            else _json(thread.lineage.model_dump(mode="json"))
+                        ),
                         _time(thread.created_at),
                         _time(thread.updated_at),
                     ),
@@ -840,7 +967,8 @@ class SQLiteThreadRepository(_SQLiteRepository):
                 """
                 UPDATE threads SET
                     workspace_key = ?, title = ?, title_source = ?, current_model = ?,
-                    thinking_enabled = ?, skill_mode = ?, updated_at = ?
+                    thinking_enabled = ?, skill_mode = ?, lineage_json = ?,
+                    updated_at = ?
                 WHERE thread_id = ?
                 """,
                 (
@@ -850,6 +978,11 @@ class SQLiteThreadRepository(_SQLiteRepository):
                     thread.current_model,
                     int(thread.thinking_enabled),
                     thread.skill_mode,
+                    (
+                        None
+                        if thread.lineage is None
+                        else _json(thread.lineage.model_dump(mode="json"))
+                    ),
                     _time(thread.updated_at),
                     thread.id,
                 ),
@@ -1308,6 +1441,7 @@ def _monotonic_thread_update(
 
 
 def _thread_from_row(row: sqlite3.Row) -> Thread:
+    lineage_json = row["lineage_json"]
     return Thread(
         id=row["thread_id"],
         workspace_key=row["workspace_key"],
@@ -1316,6 +1450,11 @@ def _thread_from_row(row: sqlite3.Row) -> Thread:
         current_model=row["current_model"],
         thinking_enabled=bool(row["thinking_enabled"]),
         skill_mode=row["skill_mode"],
+        lineage=(
+            None
+            if lineage_json is None
+            else ThreadLineage.model_validate(json.loads(lineage_json))
+        ),
         created_at=_parse_time(row["created_at"]),
         updated_at=_parse_time(row["updated_at"]),
     )

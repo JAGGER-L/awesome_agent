@@ -8,6 +8,13 @@ from uuid import uuid4
 from pydantic import JsonValue
 
 from awesome_agent.config.models import TurnConfig
+from awesome_agent.conversation.materialization import (
+    RetryPreparation,
+    ThreadMaterializationPlan,
+    build_thread_materialization,
+    materialization_source_fingerprint,
+    terminal_materialization_target,
+)
 from awesome_agent.conversation.models import (
     AssistantEntryMetadata,
     Thread,
@@ -25,6 +32,7 @@ from awesome_agent.conversation.models import (
 from awesome_agent.conversation.repository import (
     ConversationConflict,
     ConversationStore,
+    ThreadNotFound,
     TurnNotFound,
     require_turn_transition,
 )
@@ -141,6 +149,64 @@ class ConversationService:
             query=normalized,
             thread_id=thread_id,
         )
+
+    async def fork_thread(
+        self,
+        workspace_key: str,
+        source_thread_id: str,
+        source_turn_id: str | None = None,
+    ) -> ThreadView:
+        source, target = await self._materialization_source(
+            workspace_key,
+            source_thread_id,
+            source_turn_id,
+        )
+        view, preparation = build_thread_materialization(
+            source,
+            target,
+            kind="fork",
+            id_factory=self._id_factory,
+            now=self._clock(),
+        )
+        assert preparation is None
+        plan = ThreadMaterializationPlan(
+            kind="fork",
+            source_workspace_key=workspace_key,
+            source_thread_id=source.thread.id,
+            source_turn_id=target.id,
+            source_fingerprint=materialization_source_fingerprint(source),
+            view=view,
+        )
+        return await self._store.materialize_fork(plan)
+
+    async def prepare_retry(
+        self,
+        workspace_key: str,
+        source_thread_id: str,
+        source_turn_id: str | None = None,
+    ) -> RetryPreparation:
+        source, target = await self._materialization_source(
+            workspace_key,
+            source_thread_id,
+            source_turn_id,
+        )
+        view, preparation = build_thread_materialization(
+            source,
+            target,
+            kind="retry",
+            id_factory=self._id_factory,
+            now=self._clock(),
+        )
+        assert preparation is not None
+        plan = ThreadMaterializationPlan(
+            kind="retry",
+            source_workspace_key=workspace_key,
+            source_thread_id=source.thread.id,
+            source_turn_id=target.id,
+            source_fingerprint=materialization_source_fingerprint(source),
+            view=view,
+        )
+        return await self._store.materialize_retry(plan, preparation)
 
     async def set_skill_mode(self, thread_id: str, skill_mode: str) -> Thread:
         if re.fullmatch(r"(?:auto|off|[a-z][a-z0-9-]{0,63})", skill_mode) is None:
@@ -467,6 +533,22 @@ class ConversationService:
             raise TurnNotFound(turn_id)
         return view, current
 
+    async def _materialization_source(
+        self,
+        workspace_key: str,
+        source_thread_id: str,
+        source_turn_id: str | None,
+    ) -> tuple[ThreadView, Turn]:
+        _require_identifier(workspace_key, label="Workspace")
+        _require_identifier(source_thread_id, label="source Thread")
+        if source_turn_id is not None:
+            _require_identifier(source_turn_id, label="source Turn")
+        source = await self._store.read_thread(source_thread_id)
+        if source.thread.workspace_key != workspace_key:
+            raise ThreadNotFound(source_thread_id)
+        target = terminal_materialization_target(source, source_turn_id)
+        return source, target
+
     async def _thread_id_for_turn(self, turn_id: str) -> str:
         thread_id = await self._store.thread_id_for_turn(turn_id)
         if thread_id is None:
@@ -486,3 +568,8 @@ def _entry_by_id(view: ThreadView, entry_id: str | None) -> ThreadEntry | None:
 
 def _new_identifier(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
+
+
+def _require_identifier(value: str, *, label: str) -> None:
+    if not 1 <= len(value) <= 128:
+        raise ValueError(f"{label} identity must be 1 to 128 characters.")

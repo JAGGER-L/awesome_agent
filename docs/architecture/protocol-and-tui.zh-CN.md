@@ -66,6 +66,11 @@ query 在 Application SQLite 执行字面 substring match 前完成 trim 与 bou
 且只有字节发生变化时才携带非空 `change_set_id`；穷尽 presenter 不读取原始文件或私有
 metadata。
 
+`/fork` 复用 reason 为 `fork` 的 `thread_transition`；`/retry` 使用一个严格的组合
+`thread_retry` payload，同时包含 retry transition 与已准入 Operation。每个 Thread
+projection 都携带必需且可空的 lineage，因此根、fork 与 retry identity 能在 Python、
+fixture、Zod、effect 和 hydration 间保持明确，而无需增加另一条 RPC 或 surface model。
+
 ## 跨语言证据
 
 Python 负责序列化方法结果、`CommandOutcome` variant 和事件。
@@ -155,6 +160,13 @@ Core output writer 会将一整行串行化，并在写入前检查紧凑 UTF-8 
 `operation.started` 已进入 queue；后续 lifecycle event 随后可能与匹配 response 竞速。TUI
 会在发出 request 前安装 event consumer，并把 event correlation ID 视为权威，因此 early
 event 不依赖 response-first buffering。
+
+Retry 增加一个本地顺序 gate，因为它的 event 指向组合 response 到达前界面尚不能安装的
+Thread。`ConnectedSurface` 会在 `command.execute` 前打开 gate，按 sequence 缓存 event
+stream；只有权威 retry transition 已递增 Thread generation，并且返回的 Operation identity
+已绑定到该 generation 后，才释放事件。本地 gate 上限为 1,024 个 event 与 4 MiB 编码
+内容。容量或 Operation/Thread/Turn identity 违规属于致命 protocol desynchronization。
+Retry 被拒绝时，合法的来源 Thread event 会被重放而不是丢弃。
 
 `thread.read` 会先按 Application 字节预算缩小 page。Writer 是所有 method 与 event 的最终
 不变量边界：如果任一 request result 仍超过 1 MiB，Core 会使用相同 request ID 返回有界的
@@ -297,7 +309,7 @@ command menu、Composer 或独占 interaction，最后是 status。当前 Thread
 - 每个 head 只在被提升时解析；
 - Composer 为空时，按 Up 可以召回 tail；
 - picker 或 approval 会暂停提升；
-- `/new` 与 `/resume` 会改变随后 item 的目标 Thread；
+- `/new`、`/resume`、`/fork` 与 `/retry` 会改变随后 item 的目标 Thread；
 - 排队的 `/quit` 是一个有序终止 barrier；
 - 可重试的 busy 竞态会把相同 identity 重新放回队首。
 
@@ -313,6 +325,10 @@ outcome、summary、可选 detail、duration 和 error code。
 `client_message_id` 用于校正乐观显示的用户输入与已准入的持久化条目。Thread replacement
 会递增 generation、清空活动 frame、安装权威 Application/Thread 快照，并拒绝前一
 generation 的迟到事件。Event sequence 用于检测重复和缺口。
+
+对 retry 而言，replacement 会先于任何缓存 event 完成安装。因此即使已准入 Operation 的
+start 与后续 delta 早于 command response 到达 stdio，它们仍进入新 generation，绝不会
+出现在来源 Thread。
 
 重连或 resume 后，`thread.read` 是持久化来源。实时投影按稳定 identity 合并，而不是
 盲目追加，从而避免 event 与 hydration transcript 描述同一事实时产生重复消息。

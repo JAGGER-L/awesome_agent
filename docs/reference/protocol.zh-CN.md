@@ -204,10 +204,23 @@ Params 是封闭的 `CommandIntent`：
 {"name":"mcp","arguments":["status","repository-index"]}
 ```
 
-通常只有 Application 拥有的 22 个名称通过此 method 发送。Ink 在本地拥有 `help`、`theme`、
+通常只有 Application 拥有的 26 个名称通过此 method 发送。Ink 在本地拥有 `help`、`theme`、
 `copy` 和 `quit`。`CommandOutcome` 恰好包含一个分支：有类型的 `result`、有类型的
 `interaction` 或稳定的 command `error`。精确语法和 foreground snapshot 例外见
 [Slash Commands](commands.zh-CN.md)。
+
+Protocol v4 的每个 Thread projection 都有必需且可空的 `lineage` 字段。根 Thread 的值为
+`null`；具有一个直接父级的 Thread 则使用严格 object，其中包含 `kind`（`fork` 或
+`retry`）、`source_thread_id` 与 `source_turn_id`。该字段只记录来源；client 不得据此
+推断存在共享 transcript DAG，也不能通过它读取历史。
+
+`thread_transition` 携带一份权威 Application/Thread snapshot。其 `reason` 为 `new`、
+`resume` 或 `fork`：`new` 要求 lineage 为 null，`fork` 要求 fork lineage，`resume` 可以
+选择根 Thread 或物化 Thread。reason 为 `retry` 的普通 transition 无效。Retry 改为返回
+严格的组合 `thread_retry` payload：一份 reason 与 lineage 都为 retry 的 transition，以及
+包含非空 `operation_id`、`thread_id`、`turn_id` 和 `client_message_id` 的 `operation`。
+Transition Thread 必须等于 Operation Thread，且 Operation Turn 必须已存在于该 transition
+中。这一原子 result 可以防止界面安装新 Thread 后却不知道它所拥有的前台 Operation。
 
 `thread_export` command result 仅包含 `kind`、`thread_id`、1–1,000 的 `path`、`format`
 （`markdown` 或 `json`）、`write_status`（`created`、`updated` 或 `unchanged`）、
@@ -362,6 +375,13 @@ Executor 同样为每次调用终结一条 ToolActivity 和一个 terminal tool 
 sequence 和 correlation ID 渲染，而不能假定并发 request 之间 response/event 的到达顺序。
 尤其是，被接受的 Turn 或 Direct command 的 `operation.started` 会先于 acceptance response，
 后续 event 也可能在该 response 被处理前到达。
+
+`thread_retry` 也遵循相同顺序，但在组合 command response 安装前，其 Thread identity 尚不
+存在于界面。Protocol v4 界面因此会在发出命令前打开本地 retry gate，按 sequence 缓存
+event，安装返回的 transition，把新 generation 绑定到返回的 Operation/Thread/Turn
+identity，再重放缓存。Gate 最多接受 1,024 个 event 和 4 MiB 编码内容。容量或 identity
+违规属于 protocol desynchronization，必须 fail closed；不能仅因为 event 先到就把它
+渲染到来源 Thread。
 
 ## 并发与背压
 

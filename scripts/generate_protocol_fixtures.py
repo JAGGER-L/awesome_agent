@@ -53,6 +53,7 @@ from awesome_agent.conversation import (
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadLineage,
     ThreadTitleSource,
     ThreadView,
     Turn,
@@ -99,6 +100,11 @@ THREAD_ID = "thread_11111111111111111111111111111111"
 TURN_ID = "turn_22222222222222222222222222222222"
 OPERATION_ID = "operation_33333333333333333333333333333333"
 CLIENT_MESSAGE_ID = "client_44444444444444444444444444444444"
+RETRY_THREAD_ID = "thread_77777777777777777777777777777777"
+RETRY_TURN_ID = "turn_88888888888888888888888888888888"
+RETRY_OPERATION_ID = "operation_99999999999999999999999999999999"
+RETRY_CLIENT_MESSAGE_ID = "client_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+FORK_THREAD_ID = "thread_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 CAPABILITIES = ("threads", "turns", "commands", "web", "citations")
 
 METHODS = (
@@ -201,6 +207,69 @@ def _thread_view() -> ThreadView:
                 completed_at=FIXED_TIME,
             ),
         ),
+    )
+
+
+def _retry_thread_read() -> ThreadReadResult:
+    user_entry_id = "entry_77777777777777777777777777777777"
+    thread = Thread(
+        id=RETRY_THREAD_ID,
+        workspace_key=WORKSPACE_KEY,
+        title="Retry Fixture Thread",
+        current_model="deepseek/deepseek-v4-flash",
+        lineage=ThreadLineage(
+            kind="retry",
+            source_thread_id=THREAD_ID,
+            source_turn_id=TURN_ID,
+        ),
+        created_at=FIXED_TIME,
+        updated_at=FIXED_TIME,
+    )
+    user_entry = ThreadEntry(
+        id=user_entry_id,
+        thread_id=RETRY_THREAD_ID,
+        sequence=1,
+        kind=ThreadEntryKind.USER_MESSAGE,
+        content="Inspect the repository.",
+        client_message_id=RETRY_CLIENT_MESSAGE_ID,
+        created_at=FIXED_TIME,
+    )
+    turn = Turn(
+        id=RETRY_TURN_ID,
+        thread_id=RETRY_THREAD_ID,
+        checkpoint_key=RETRY_TURN_ID,
+        status=TurnStatus.IN_PROGRESS,
+        provider="deepseek",
+        model="deepseek-chat",
+        thinking_enabled=True,
+        skill_mode="auto",
+        budgets=BudgetConfig(web_requests=8),
+        user_entry_id=user_entry_id,
+        created_at=FIXED_TIME,
+        updated_at=FIXED_TIME,
+    )
+    return ThreadReadResult(
+        view=ThreadView(thread=thread, entries=(user_entry,), turns=(turn,))
+    )
+
+
+def _fork_thread_read() -> ThreadReadResult:
+    return ThreadReadResult(
+        view=ThreadView(
+            thread=Thread(
+                id=FORK_THREAD_ID,
+                workspace_key=WORKSPACE_KEY,
+                title="Fork Fixture Thread",
+                current_model="deepseek/deepseek-v4-flash",
+                lineage=ThreadLineage(
+                    kind="fork",
+                    source_thread_id=THREAD_ID,
+                    source_turn_id=TURN_ID,
+                ),
+                created_at=FIXED_TIME,
+                updated_at=FIXED_TIME,
+            )
+        )
     )
 
 
@@ -925,6 +994,26 @@ def _valid_command_results() -> dict[str, object]:
     thread = next(
         case["result"]["value"] for case in methods if case["name"] == "thread.read"
     )
+    retry_thread = _model(_retry_thread_read())
+    retry_application = {
+        **application,
+        "current_thread_id": RETRY_THREAD_ID,
+        "active_operation_id": RETRY_OPERATION_ID,
+    }
+    fork_thread = _model(_fork_thread_read())
+    fork_application = {
+        **application,
+        "current_thread_id": FORK_THREAD_ID,
+        "active_operation_id": None,
+    }
+    fork_payload = {
+        "kind": "thread_transition",
+        "transition": {
+            "reason": "fork",
+            "application": fork_application,
+            "thread": fork_thread,
+        },
+    }
     credentials = _model(missing_provider_credential_statuses())
     usage = _model(UsageSummary(active_execution_seconds=0.5))
     payloads: list[dict[str, object]] = [
@@ -935,6 +1024,20 @@ def _valid_command_results() -> dict[str, object]:
                 "reason": "new",
                 "application": application,
                 "thread": thread,
+            },
+        },
+        {
+            "kind": "thread_retry",
+            "transition": {
+                "reason": "retry",
+                "application": retry_application,
+                "thread": retry_thread,
+            },
+            "operation": {
+                "operation_id": RETRY_OPERATION_ID,
+                "thread_id": RETRY_THREAD_ID,
+                "turn_id": RETRY_TURN_ID,
+                "client_message_id": RETRY_CLIENT_MESSAGE_ID,
             },
         },
         {
@@ -1095,6 +1198,16 @@ def _valid_command_results() -> dict[str, object]:
             {"kind": "result", "payload": payload}
         )
         cases.append({"name": f"result.{payload['kind']}", "outcome": _model(outcome)})
+    cases.append(
+        {
+            "name": "result.thread_transition.fork",
+            "outcome": _model(
+                COMMAND_OUTCOME_ADAPTER.validate_python(
+                    {"kind": "result", "payload": fork_payload}
+                )
+            ),
+        }
+    )
     for name, raw in (
         (
             "interaction.selection",
@@ -1166,6 +1279,34 @@ def _invalid_command_results() -> dict[str, object]:
     thread = next(
         case["result"]["value"] for case in methods if case["name"] == "thread.read"
     )
+    retry_outcome = next(
+        case["outcome"]
+        for case in cast(
+            list[dict[str, Any]], _valid_command_results()["cases"]
+        )
+        if case["name"] == "result.thread_retry"
+    )
+    retry_payload = cast(dict[str, Any], retry_outcome["payload"])
+    retry_transition = cast(dict[str, Any], retry_payload["transition"])
+    retry_thread = cast(dict[str, Any], retry_transition["thread"])
+    retry_view = cast(dict[str, Any], retry_thread["view"])
+    retry_thread_record = cast(dict[str, Any], retry_view["thread"])
+    retry_entries = cast(list[dict[str, Any]], retry_view["entries"])
+    retry_turns = cast(list[dict[str, Any]], retry_view["turns"])
+    retry_turn = retry_turns[-1]
+    retry_operation = cast(dict[str, Any], retry_payload["operation"])
+    fork_outcome = next(
+        case["outcome"]
+        for case in cast(
+            list[dict[str, Any]], _valid_command_results()["cases"]
+        )
+        if case["name"] == "result.thread_transition.fork"
+    )
+    fork_payload = cast(dict[str, Any], fork_outcome["payload"])
+    fork_transition = cast(dict[str, Any], fork_payload["transition"])
+    fork_thread = cast(dict[str, Any], fork_transition["thread"])
+    fork_view = cast(dict[str, Any], fork_thread["view"])
+    fork_thread_record = cast(dict[str, Any], fork_view["thread"])
     web_status = {
         "kind": "web_status",
         "enabled": False,
@@ -1204,6 +1345,247 @@ def _invalid_command_results() -> dict[str, object]:
                             "thread": thread,
                         },
                     },
+                },
+            },
+            {
+                "name": "thread_transition_retry_requires_combined_payload",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_transition",
+                        "transition": retry_transition,
+                    },
+                },
+            },
+            {
+                "name": "thread_transition_fork_requires_lineage",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **fork_payload,
+                        "transition": {
+                            **fork_transition,
+                            "thread": {
+                                **fork_thread,
+                                "view": {
+                                    **fork_view,
+                                    "thread": {
+                                        **fork_thread_record,
+                                        "lineage": None,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_transition_new_requires_null_lineage",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **fork_payload,
+                        "transition": {**fork_transition, "reason": "new"},
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_wrong_transition_reason",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {**retry_transition, "reason": "fork"},
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_wrong_lineage_kind",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "thread": {
+                                        **retry_thread_record,
+                                        "lineage": {
+                                            **retry_thread_record["lineage"],
+                                            "kind": "fork",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_thread_mismatch",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "operation": {
+                            **retry_operation,
+                            "thread_id": THREAD_ID,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_turn_missing",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "operation": {
+                            **retry_operation,
+                            "turn_id": TURN_ID,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_client_message_mismatch",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "operation": {
+                            **retry_operation,
+                            "client_message_id": (
+                                "client_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            ),
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_user_entry_missing",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "turns": [
+                                        {
+                                            **retry_turn,
+                                            "user_entry_id": (
+                                                "entry_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                                            ),
+                                        }
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_turn_terminal",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "turns": [
+                                        {
+                                            **retry_turn,
+                                            "status": "cancelled",
+                                            "termination_reason": "cancelled",
+                                            "completed_at": retry_turn["updated_at"],
+                                        }
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_turn_not_last",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "turns": [
+                                        *retry_turns,
+                                        {
+                                            **retry_turn,
+                                            "id": (
+                                                "turn_cccccccccccccccccccccccccccccccc"
+                                            ),
+                                            "checkpoint_key": (
+                                                "turn_cccccccccccccccccccccccccccccccc"
+                                            ),
+                                            "status": "cancelled",
+                                            "termination_reason": "cancelled",
+                                            "completed_at": retry_turn["updated_at"],
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_multiple_in_progress",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "entries": retry_entries,
+                                    "turns": [
+                                        {
+                                            **retry_turn,
+                                            "id": (
+                                                "turn_dddddddddddddddddddddddddddddddd"
+                                            ),
+                                            "checkpoint_key": (
+                                                "turn_dddddddddddddddddddddddddddddddd"
+                                            ),
+                                        },
+                                        *retry_turns,
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_unknown_field",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {**retry_payload, "buffered_events": []},
                 },
             },
             {

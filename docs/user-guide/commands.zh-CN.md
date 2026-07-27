@@ -42,6 +42,8 @@ Composer 会去掉前导空白，并按第一个非空白字符路由文本：
 | `/new` | 在当前 Workspace 创建并选择一个新 Thread。 |
 | `/rename <title>` | 为当前 Thread 持久化用户选择的标题。 |
 | `/resume [thread_id]` | 选择或指定当前 Workspace 中之前的 Thread。 |
+| `/fork [turn_id]` | 将截至某个终态 Turn 的历史物化为独立的新 Thread，并选中它。 |
+| `/retry [turn_id]` | 在某个终态 Turn 之前创建分支，并重新运行该 Turn 的请求。 |
 | `/search <query> [thread_id]` | 搜索当前 Workspace 的持久会话历史，再选择或恢复一个结果；多词 query 必须加引号。 |
 | `/thinking [on\|off]` | 检查或设置当前 Thread 未来 Turn 的 Thinking。 |
 | `/model [deepseek\|kimi]` | 为当前 Thread 和用户默认值选择 Provider 与模型。 |
@@ -50,6 +52,13 @@ Composer 会去掉前导空白，并按第一个非空白字符路由文本：
 新 Thread 接受的第一条自然语言消息会提供一个长度受限的自动标题。`/rename` 要求标题非空，标题过长时会拒绝，而不是静默修改。`/new` 不接受标题参数。
 
 选择 Thread 会恢复其持久消息、Turn、模型、Thinking 和 Skill 选项，同时将 Session 权限重置为 Request approval 并清除临时 grant。之前的 Thread 仍可通过 `/resume` 访问。
+
+未提供 ID 时，`/fork` 与 `/retry` 选择最近的终态 Turn；显式 ID 必须属于当前 Thread
+且已终态。Fork 会把截至该 Turn 的持久会话前缀复制成具有全新身份的记录。Retry 会复制
+目标之前的前缀，追加其用户请求的新副本，再使用目标 Turn 冻结的 Provider、模型、
+Thinking、Skill 和预算启动新 Turn。这些是物理独立的 Thread，而不是共享历史 DAG。
+两条路径都不复制 summary、checkpoint、Tool activity 或 ChangeSet；Retry 不会重放目标
+原有的工具调用，也不会撤销它们已经产生的副作用。
 
 搜索对 Thread 标题以及持久 user、assistant、direct-command transcript 文本执行字面
 substring match。它不是全文或相关性搜索，也绝不会跨越活动 Workspace。例如运行

@@ -5,11 +5,13 @@ from collections.abc import Awaitable, Callable
 from typing import Literal
 
 from awesome_agent.application.command_results import (
+    CommandError,
     CommandOption,
     CommandOutcome,
     CommandSelection,
     ThinkingCommandPayload,
     ThreadRenamedPayload,
+    ThreadRetryCommandPayload,
     ThreadTransitionCommandPayload,
     ThreadTransitionSnapshot,
     error,
@@ -19,10 +21,21 @@ from awesome_agent.application.command_results import (
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
     ApplicationState,
+    OperationAccepted,
     ThreadReadQuery,
     ThreadReadResult,
 )
-from awesome_agent.conversation import ConversationService, Thread, ThreadNotFound
+from awesome_agent.application.operations import OperationBusy
+from awesome_agent.application.turns import TurnCoordinator
+from awesome_agent.conversation import (
+    ConversationConflict,
+    ConversationService,
+    InvalidTurnTransition,
+    RetryPreparation,
+    Thread,
+    ThreadNotFound,
+    TurnNotFound,
+)
 
 
 class ConversationCommandService:
@@ -32,6 +45,7 @@ class ConversationCommandService:
         self,
         *,
         conversation: ConversationService,
+        turns: TurnCoordinator,
         workspace_key: str,
         application_snapshot: Callable[[], Awaitable[ApplicationState]],
         thread_snapshot: Callable[[ThreadReadQuery], Awaitable[ThreadReadResult]],
@@ -41,6 +55,7 @@ class ConversationCommandService:
         selected_thread_id: str | None = None,
     ) -> None:
         self._conversation = conversation
+        self._turns = turns
         self._workspace_key = workspace_key
         self._application_snapshot = application_snapshot
         self._thread_snapshot = thread_snapshot
@@ -124,6 +139,78 @@ class ConversationCommandService:
         thread = matches[0]
         return await self._transition(thread, reason="resume")
 
+    async def fork(self, intent: CommandIntent) -> CommandOutcome:
+        if self._has_active_operation():
+            return self._operation_busy()
+        parsed = self._materialization_target(intent, command="fork")
+        if isinstance(parsed, CommandError):
+            return parsed
+        source_thread_id, source_turn_id = parsed
+        try:
+            view = await self._conversation.fork_thread(
+                self._workspace_key,
+                source_thread_id,
+                source_turn_id,
+            )
+        except ThreadNotFound:
+            return error("thread_not_found", "Source Thread was not found.")
+        except TurnNotFound:
+            return error("turn_not_found", "Turn was not found.")
+        except InvalidTurnTransition:
+            return error("invalid_arguments", "Fork requires a terminal Turn.")
+        except ConversationConflict:
+            return error(
+                "conversation_conflict",
+                "The source Thread changed; retry the fork.",
+            )
+        return await self._transition(view.thread, reason="fork")
+
+    async def retry(self, intent: CommandIntent) -> CommandOutcome:
+        if self._has_active_operation():
+            return self._operation_busy()
+        parsed = self._materialization_target(intent, command="retry")
+        if isinstance(parsed, CommandError):
+            return parsed
+        source_thread_id, source_turn_id = parsed
+
+        async def started(
+            preparation: RetryPreparation,
+            operation: OperationAccepted,
+        ) -> CommandOutcome:
+            transition = await self._prepare_transition(
+                preparation.view.thread,
+                reason="retry",
+            )
+            outcome = result(
+                ThreadRetryCommandPayload(
+                    transition=transition,
+                    operation=operation,
+                )
+            )
+            self._select(preparation.view.thread, notify=False)
+            return outcome
+
+        try:
+            return await self._turns.retry_turn(
+                source_thread_id,
+                source_turn_id,
+                before_start=self._on_thread_selected,
+                started=started,
+            )
+        except OperationBusy:
+            return self._operation_busy()
+        except ThreadNotFound:
+            return error("thread_not_found", "Source Thread was not found.")
+        except TurnNotFound:
+            return error("turn_not_found", "Turn was not found.")
+        except InvalidTurnTransition:
+            return error("invalid_arguments", "Retry requires a terminal Turn.")
+        except ConversationConflict:
+            return error(
+                "conversation_conflict",
+                "The source Thread changed; retry the command.",
+            )
+
     async def thinking(self, intent: CommandIntent) -> CommandOutcome:
         thread = await self._selected_thread()
         if thread is None:
@@ -167,30 +254,60 @@ class ConversationCommandService:
             )
         return []
 
-    def _select(self, thread: Thread) -> None:
+    def _select(self, thread: Thread, *, notify: bool = True) -> None:
         self._current_thread_id = thread.id
-        self._on_thread_selected()
+        if notify:
+            self._on_thread_selected()
 
     async def _transition(
         self,
         thread: Thread,
         *,
-        reason: Literal["new", "resume"],
+        reason: Literal["new", "resume", "fork"],
     ) -> CommandOutcome:
+        transition = await self._prepare_transition(thread, reason=reason)
+        outcome = result(ThreadTransitionCommandPayload(transition=transition))
+        self._select(thread)
+        return outcome
+
+    async def _prepare_transition(
+        self,
+        thread: Thread,
+        *,
+        reason: Literal["new", "resume", "fork", "retry"],
+    ) -> ThreadTransitionSnapshot:
         page = await self._thread_snapshot(
             ThreadReadQuery(thread_id=thread.id, limit=100)
         )
-        self._select(thread)
         application = await self._application_snapshot()
-        return result(
-            ThreadTransitionCommandPayload(
-                transition=ThreadTransitionSnapshot(
-                    reason=reason,
-                    application=application,
-                    thread=page,
-                )
-            )
+        application = application.model_copy(
+            update={"current_thread_id": thread.id}
         )
+        return ThreadTransitionSnapshot(
+            reason=reason,
+            application=application,
+            thread=page,
+        )
+
+    def _materialization_target(
+        self,
+        intent: CommandIntent,
+        *,
+        command: Literal["fork", "retry"],
+    ) -> tuple[str, str | None] | CommandError:
+        if len(intent.arguments) > 1:
+            return error("invalid_arguments", f"Usage: /{command} [turn_id]")
+        if self._current_thread_id is None:
+            return error("thread_not_found", "Select a Thread first.")
+        source_turn_id = intent.arguments[0] if intent.arguments else None
+        if source_turn_id is not None and re.fullmatch(
+            r"turn_[a-f0-9]{8,32}", source_turn_id
+        ) is None:
+            return error(
+                "invalid_arguments",
+                f"Usage: /{command} [turn_id]",
+            )
+        return self._current_thread_id, source_turn_id
 
     @staticmethod
     def _operation_busy() -> CommandOutcome:

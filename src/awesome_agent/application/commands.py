@@ -14,6 +14,8 @@ class CommandName(StrEnum):
     NEW = "new"
     RENAME = "rename"
     RESUME = "resume"
+    FORK = "fork"
+    RETRY = "retry"
     SEARCH = "search"
     EXPORT = "export"
     CONTEXT = "context"
@@ -48,6 +50,8 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.NEW,
             CommandName.RENAME,
             CommandName.RESUME,
+            CommandName.FORK,
+            CommandName.RETRY,
             CommandName.SEARCH,
             CommandName.EXPORT,
             CommandName.CONTEXT,

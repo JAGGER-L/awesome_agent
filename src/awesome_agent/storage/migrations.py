@@ -187,10 +187,16 @@ class ApplicationMigrationRegistry:
 
 
 APPLICATION_SCHEMA_FLOOR = 7
+
+
+def _migrate_schema_7_to_8(connection: ApplicationMigrationConnection) -> None:
+    connection.execute("ALTER TABLE threads ADD COLUMN lineage_json TEXT")
+
+
 APPLICATION_MIGRATIONS = ApplicationMigrationRegistry(
     floor=APPLICATION_SCHEMA_FLOOR,
-    current=7,
-    migrations=(),
+    current=8,
+    migrations=(ApplicationMigration(7, 8, _migrate_schema_7_to_8),),
 )
 
 

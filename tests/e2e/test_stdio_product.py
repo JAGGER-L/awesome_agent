@@ -371,7 +371,7 @@ async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
         },
     )
     assert _value(trusted) == {"accepted": True, "status": "resolved"}
-    assert _schema_version(database) == APPLICATION_SCHEMA_VERSION == 7
+    assert _schema_version(database) == APPLICATION_SCHEMA_VERSION == 8
     with closing(sqlite3.connect(database)) as connection:
         marker = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'legacy_marker'"
@@ -391,7 +391,7 @@ async def test_stdio_rejects_newer_state_without_offering_reset(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    database = _write_schema_version(home, 8)
+    database = _write_schema_version(home, 9)
     before = database.read_bytes()
     client = await _spawn(home=home, workspace=workspace, provider="deepseek")
 
@@ -414,7 +414,7 @@ async def test_stdio_rejects_newer_state_without_offering_reset(
             ),
             "retryable": False,
             "data": {
-                "found_schema": 8,
+                "found_schema": 9,
                 "expected_schema": APPLICATION_SCHEMA_VERSION,
                 "state_directory": str((home / "state").resolve()),
             },

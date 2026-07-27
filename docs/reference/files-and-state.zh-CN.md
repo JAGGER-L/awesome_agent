@@ -170,7 +170,7 @@ Workspace Skill 加载相同的保证。请把受信任 Workspace 配置当作�
 ## Application database
 
 `<HOME>/state/application.db` 是权威的嵌入式 Application SQLite database。当前
-`PRAGMA user_version` 是 **7**。一个进程级有界 FIFO worker 持有其长期 connection；该
+`PRAGMA user_version` 是 **8**。一个进程级有界 FIFO worker 持有其长期 connection；该
 connection 会启用 foreign key、五秒 busy timeout、WAL journal mode 和 normal synchronous
 mode。面向 Application 的 repository 暴露 async method：read 使用 deferred transaction，
 write 使用 `BEGIN IMMEDIATE`。取消的 read 可以停止等待；已准入的 durable write 与 lifecycle
@@ -182,7 +182,7 @@ SQLite connection、cursor 和 row 不会跨越 worker 边界。
 | 记录 | 用途 |
 | --- | --- |
 | `trusted_workspaces` | 已接受的 workspace key、canonical path 和信任时间 |
-| `threads` | Workspace 关联、title/source、已选 model、Thinking 和 Skill mode |
+| `threads` | Workspace 关联、title/source、已选 model、Thinking 和 Skill mode，以及可选的 immediate-parent fork/retry lineage |
 | `thread_entries` | 按顺序排列的持久 User 消息、Assistant 消息和直接命令 |
 | `turns` | Turn 生命周期、不可变执行选择/预算、usage、context manifest 和 checkpoint key |
 | `thread_summaries` | 有界对话摘要及其覆盖的 sequence/count |
@@ -297,14 +297,16 @@ Awesome 对一字节 `.state.lock` 文件使用 non-blocking filesystem lock：
 
 | 观察到的状态 | 行为 |
 | --- | --- |
-| 没有 database，或 version 0 的空 SQLite | 在 exclusive lease 下初始化 schema 7，然后降级为 shared ownership。 |
-| Schema 7 | 正常打开。 |
+| 没有 database，或 version 0 的空 SQLite | 在 exclusive lease 下初始化 schema 8，然后降级为 shared ownership。 |
+| Schema 8 | 正常打开。 |
+| Schema 7 | 先备份 database，再在 exclusive lease 下迁移到 schema 8。 |
 | Schema 1–6 | Migration 不可用；询问用户是否重置本地状态或退出。 |
-| Schema 大于 7 | 拒绝并返回 `state_created_by_newer_version`。 |
+| Schema 大于 8 | 拒绝并返回 `state_created_by_newer_version`。 |
 | 非空 version 0、无效 SQLite 或未知格式 | 以未知/不可用状态拒绝。 |
 
-生产 migration registry 的 floor 是 7、current 是 7，且没有 step。未来受支持的升级必须形成
-一条相邻线性链。启动时先在 shared lease 下 preflight，再取得 exclusive state lease、重新检查
+生产 migration registry 的 floor 是 7、current 是 8。7→8 step 会添加可空的 Thread
+lineage 字段，不重写现有 conversation 数据。未来受支持的升级必须继续扩展这条
+相邻线性链。启动时先在 shared lease 下 preflight，再取得 exclusive state lease、重新检查
 schema，并用 SQLite Backup API 创建
 `<HOME>/state/application.db.pre-migration.bak`，然后在一个 transaction 内执行完整链。降级为
 shared ownership 后才初始化 repository。

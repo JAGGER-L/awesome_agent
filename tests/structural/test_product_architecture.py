@@ -53,6 +53,8 @@ CURRENT_COMMANDS = {
     "copy",
     "diff",
     "doctor",
+    "export",
+    "fork",
     "help",
     "mcp",
     "memory",
@@ -63,6 +65,8 @@ CURRENT_COMMANDS = {
     "redo",
     "rename",
     "resume",
+    "retry",
+    "search",
     "skills",
     "status",
     "theme",
@@ -209,7 +213,7 @@ def test_application_schema_identity_is_independent_from_product_version() -> No
         ROOT / "storage" / "migrations.py",
     )
 
-    assert APPLICATION_SCHEMA_VERSION == 7
+    assert APPLICATION_SCHEMA_VERSION == 8
     for owner in schema_owners:
         assert not any(
             imported == "awesome_agent.version"
@@ -327,7 +331,12 @@ def test_thread_transition_contract_has_one_projection_dependency_chain() -> Non
     projection_imports = {
         match for match in re.findall(r'from ["\']([^"\']+)["\']', projections)
     }
-    assert projection_imports == {"zod", "./base.js", "./identity.js"}
+    assert projection_imports == {
+        "zod",
+        "./base.js",
+        "./identity.js",
+        "./model-catalog.js",
+    }
     assert "applicationStateSchema" in commands
     assert "threadReadResultSchema" in commands
     assert "threadTransitionSnapshotSchema" in commands

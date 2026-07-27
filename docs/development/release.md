@@ -172,7 +172,8 @@ The verifier checks:
 - an installed-wheel Protocol v4 lifecycle in a fresh home and workspace:
   `initialize` -> workspace trust -> `application.getState` -> `shutdown`;
 - TUI package/version/entry point;
-- Schema 7 bootstrap, floor-7 empty migration registry, incompatible-state
+- Schema 8 bootstrap, the floor-7 linear `7 -> 8` Thread-lineage migration
+  with data preservation and rollback evidence, incompatible-state
   classification, exclusive reset ownership, and preservation of config,
   Skills, and Memory.
 

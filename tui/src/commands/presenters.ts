@@ -82,7 +82,15 @@ export function presentCommandPayload(
         message:
           payload.transition.reason === "new"
             ? "New conversation started"
-            : `Resumed · ${payload.transition.thread.view.thread.title}`,
+            : payload.transition.reason === "fork"
+              ? `Forked · ${payload.transition.thread.view.thread.title}`
+              : `Resumed · ${payload.transition.thread.view.thread.title}`,
+        tone: "success",
+      };
+    case "thread_retry":
+      return {
+        kind: "notice",
+        message: `Retry started · ${payload.transition.thread.view.thread.title}`,
         tone: "success",
       };
     case "thread_renamed":

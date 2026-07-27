@@ -55,10 +55,10 @@ def _schema_zero_with_tables(path: Path) -> None:
     [
         (_missing, StateCompatibility.NEW, None),
         (_empty_sqlite, StateCompatibility.NEW, 0),
-        (_schema(7), StateCompatibility.CURRENT, 7),
+        (_schema(7), StateCompatibility.MIGRATION_REQUIRED, 7),
         (_schema(2), StateCompatibility.MIGRATION_UNAVAILABLE, 2),
         (_schema(6), StateCompatibility.MIGRATION_UNAVAILABLE, 6),
-        (_schema(8), StateCompatibility.NEWER, 8),
+        (_schema(8), StateCompatibility.CURRENT, 8),
         (_schema(999), StateCompatibility.NEWER, 999),
         (_schema(-1), StateCompatibility.UNKNOWN, -1),
         (_schema_zero_with_tables, StateCompatibility.UNKNOWN, 0),
@@ -78,7 +78,7 @@ def test_inspect_application_state_classifies_without_writing(
 
     assert result.compatibility is expected
     assert result.found_schema == found_schema
-    assert result.expected_schema == APPLICATION_SCHEMA_VERSION == 7
+    assert result.expected_schema == APPLICATION_SCHEMA_VERSION == 8
     assert _inventory(tmp_path) == before
 
 

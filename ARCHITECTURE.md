@@ -173,14 +173,14 @@ source or supplies no content plus a structured diagnostic; it is never
 meaning-changing truncation. That diagnostic does not invalidate configuration.
 
 Application state preflight is read-only and runs before trust, checkpoints,
-or writable storage. The current format is Schema 7. Product and schema
+or writable storage. The current format is Schema 8. Product and schema
 versions are independent: schema identity changes only with persisted
 semantics and increases monotonically. The migration catalog has floor 7,
-current 7, and no production steps. Schemas 1–6 therefore offer only the typed
-reset-or-exit interaction; newer, unknown, corrupt, unreadable, or locked state
-is never silently deleted.
+current 8, and one production `7 -> 8` step that adds nullable Thread lineage.
+Schemas 1–6 therefore offer only the typed reset-or-exit interaction; newer,
+unknown, corrupt, unreadable, or locked state is never silently deleted.
 
-A future registered migration runs only after shared-lease preflight, exclusive
+A registered migration runs only after shared-lease preflight, exclusive
 lease acquisition, and a second compatibility check. Storage validates and
 atomically publishes a WAL-aware SQLite backup, applies the complete adjacent
 chain in one transaction, downgrades the lease, and only then initializes the
@@ -548,6 +548,15 @@ DESC`. Its opaque cursor binds the current Workspace and normalized query by
 hash; the cursor never carries that workspace key in cleartext. The first implementation
 uses literal substring matching rather than FTS or relevance ranking.
 
+Schema 8 gives every Thread a nullable immediate-parent lineage. `/fork`
+materializes the transcript prefix through one terminal Turn; `/retry`
+materializes the prefix before one terminal Turn and starts a fresh Turn from
+that Turn's user input while freezing its model, Thinking, Skill, and budget
+configuration. Both create independent Thread, Entry, and Turn identities in
+one Application SQLite transaction. They do not create a shared history DAG or
+copy summaries, ToolActivity, checkpoints, or ChangeSets, and Retry neither
+replays old tools nor undoes their effects.
+
 Here, atomic replacement describes the filesystem namespace transition, not
 revocation of arbitrary handles opened outside Awesome's lease protocol. An
 open database handle prevents the rename on Windows. POSIX permits the rename
@@ -669,6 +678,15 @@ competing component listeners. Optimistic user messages are keyed by
 The active Turn is one ordered Thinking/tool/answer timeline, and completed
 answers use terminal Markdown rendering.
 
+`/retry` returns one strict Protocol v4 `thread_retry` payload containing both
+the authoritative Thread replacement and the accepted Operation. Because that
+Operation's events may precede the response, `ConnectedSurface` temporarily
+buffers the ordered event stream, installs the replacement, binds the new
+generation to the returned Operation/Thread/Turn identities, and only then
+replays the buffered events. The gate is capped at 1,024 events and 4 MiB of
+encoded content. A capacity or identity violation is a fatal protocol error;
+events are never projected onto the source Thread.
+
 The stdio Host reads one bounded NDJSON stream but dispatches ordinary requests
 as independent tasks. A fixed in-flight ceiling, bounded recent request-ID
 history, and a bounded, deadline-protected stdout queue cap memory and stalled
@@ -701,10 +719,10 @@ an execution sandbox.
 
 The TUI may queue at most three terminal inputs while the single Core Operation
 is active. The queue is session-only and outside Thread Surface state: it
-survives `/new` and `/resume`, parses each head only when promoted, executes
-FIFO, recalls the tail with Up when Composer is empty, and treats queued
-`/quit` as a terminal barrier. It never becomes a Runtime, protocol method,
-database record, or second execution authority.
+survives `/new`, `/resume`, `/fork`, and `/retry`, parses each head only when
+promoted, executes FIFO, recalls the tail with Up when Composer is empty, and
+treats queued `/quit` as a terminal barrier. It never becomes a Runtime,
+protocol method, database record, or second execution authority.
 
 ### Safety
 
@@ -780,7 +798,7 @@ the protocol imports the Application facade rather than individual subsystems.
 | State | Owner | Location | Lifetime |
 | --- | --- | --- | --- |
 | Workspace trust | Application Storage | `state/application.db` | until user data removal |
-| Threads, Turns, transcript, summaries | Conversation + Storage | `state/application.db` | durable local history |
+| Threads, immediate-parent lineage, Turns, transcript, summaries | Conversation + Storage | `state/application.db` | durable local history |
 | Tool activity summaries | Storage | `state/application.db` | bounded local history |
 | Agent graph channels | LangGraph | `state/checkpoints.db` | unfinished Turn only |
 | ChangeSet metadata | Change Journal + Storage | `state/application.db` | durable local history |

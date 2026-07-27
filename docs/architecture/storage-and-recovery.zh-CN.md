@@ -82,9 +82,27 @@ COMMIT
 Application 数据库存储有界 activity summary。未完成执行所需的完整 observation 保留在
 checkpoint 中。
 
+## 物化 Thread lineage
+
+Schema 8 的每个 Thread 都存储 `lineage_json`：根 Thread 使用 SQL `NULL`；fork 或 retry
+产生的 Thread 则存储一条严格的直接父级记录，其中包含 `kind`、`source_thread_id` 与
+`source_turn_id`。这是来源信息，不是共享历史指针：目标会获得全新的 Thread、Entry、
+Turn、client-message 与 checkpoint-key identity。
+
+Fork 与 Retry 都要求来源 Turn 已到终态。Fork 复制至该 Turn（含该 Turn）的持久 transcript
+前缀。Retry 复制该 Turn 之前的前缀，然后追加相同 user input，并以来源 Turn 的 provider、
+model、Thinking、Skill mode 与 budgets 创建一个全新的 in-progress Turn。克隆的终态 Turn
+会保留公开 outcome 与 usage，但清空 context manifest。两者都不会复制 summary、
+ToolActivity、checkpoint 或 ChangeSet；Retry 从不重放旧工具调用，也不撤销其效果。
+
+Conversation 会准备不可变目标，以及覆盖所有会影响物化的来源 Thread、Entry 与 Turn 事实
+的 hash。Storage 在一个 `BEGIN IMMEDIATE` transaction 内重新校验终态目标和来源
+fingerprint，再插入完整目标。因此来源竞态不会发布部分 Thread，而会返回 conflict，要求
+显式重试命令。
+
 ## Schema 身份
 
-Application schema 身份与产品版本相互独立。当前 bootstrap schema 是 Schema 7。只有
+Application schema 身份与产品版本相互独立。当前 bootstrap schema 是 Schema 8。只有
 当所需 table、payload 解释或跨记录不变量无法被当前代码安全读取时，schema 身份才会
 改变，并且只单调递增。
 
@@ -93,8 +111,9 @@ Application schema 身份与产品版本相互独立。当前 bootstrap schema �
 记录仍可读取；崩溃窗口中语义不明的证据仍保持 pending，供诊断使用。
 
 Awesome 只提供一个刻意保持精简的前向 migration registry。它只接受相邻的 `N -> N+1`
-step，并要求从支持 floor 到当前 schema 只有一条完整线性路径。生产环境的 floor 与当前
-identity 都是 7，因此 registry 为空，Schema 1–6 仍然不可迁移。
+step，并要求从支持 floor 到当前 schema 只有一条完整线性路径。生产环境的 floor 是 7，
+当前 identity 是 8。唯一的 `7 -> 8` step 增加可空的 `threads.lineage_json`；既有 Thread
+因此仍是根节点，无需重写产品历史。Schema 1–6 仍然不可迁移。
 
 ## 只读启动预检
 
@@ -151,7 +170,7 @@ typed state-reset confirmation
   -> acquire exclusive state lease
   -> validate target == <AWESOME_HOME>/state
   -> atomically rename old state directory
-  -> create and validate fresh Schema 7
+  -> create and validate fresh Schema 8
   -> remove replaced state
   -> downgrade to shared lease
   -> continue to workspace trust
@@ -340,6 +359,7 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 | Provider credential journal 为 `COMMITTED` | 目标 `.env` hash 与 source identity | 验证目标文件并向前完成 source |
 | Provider credential 证据无效或无法校正 | journal/backup 保留；runtime 不发布或保持 fenced | 以 `recovery_required` 失败；不加载半状态 |
 | mutation intent 持久化，作用不确定 | PendingMutation + blob | 校验、完成或回滚 |
+| materialization 来源在提交前改变 | 没有目标行 | 返回 conflict；显式重试命令 |
 | shell/MCP transport 调度后失败 | 保守 observation / 不确定工具状态 | 显式 Abort 或 Retry |
 | migration step 失败并回滚 | 固定的 migration 前 SQLite backup | 启动失败；保留 backup 供手动恢复 |
 | 无法证明 migration rollback | 固定 backup 与被 fenced 的 database worker | fail closed；需要人工诊断 |

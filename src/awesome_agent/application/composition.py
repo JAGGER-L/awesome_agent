@@ -2565,6 +2565,7 @@ class _LocalApplicationBackend:
             )
             commands = ConversationCommandService(
                 conversation=self._conversation,
+                turns=turns,
                 workspace_key=self._workspace.key,
                 application_snapshot=self.application_state,
                 thread_snapshot=self.thread_state,
@@ -2675,6 +2676,8 @@ class _LocalApplicationBackend:
                     CommandName.NEW: commands.new,
                     CommandName.RENAME: commands.rename,
                     CommandName.RESUME: commands.resume,
+                    CommandName.FORK: commands.fork,
+                    CommandName.RETRY: commands.retry,
                     CommandName.SEARCH: self._search_command,
                     CommandName.EXPORT: thread_export.export,
                     CommandName.CONTEXT: self._context_command,

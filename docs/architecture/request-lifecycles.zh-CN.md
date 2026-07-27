@@ -41,7 +41,7 @@ Thread 和 Turn。
 ```text
 awesome [workspace]
   -> Ink starts one private awesome-core
-  -> initialize(protocol=3, client identity)
+  -> initialize(protocol=4, client identity)
   -> resolve candidate workspace identity
   -> shared-lease read-only state preflight
   -> if migration_required:
@@ -64,11 +64,12 @@ awesome [workspace]
 后，系统取得两种 lease，并在激活前重新校验身份。拒绝信任会退出，且不会持久化为
 denial。
 
-生产 migration floor 与当前 schema 都是 7，并且没有注册 step。因此 Schema 1–6 会生成
-类型化 reset-or-exit interaction。未来需要 migration 的 schema 会遵循上面的独占序列，并
-保留 `application.db.pre-migration.bak` 供手动恢复。Migration 绝不会触发自动 reset 或
-restore。更新、未知、损坏、不可读或锁定的状态都会安全停止，绝不会被静默删除。确认 reset
-后，会在 bootstrap lock、前台 interaction-resolution lease 和独占跨进程 state lease 下执行。
+生产 migration floor 是 7，当前 schema 是 8。唯一注册的 7→8 step 会增加可空的 Thread
+lineage，并让已有 Thread 保持 `lineage = null`。因此 Schema 1–6 会生成类型化
+reset-or-exit interaction。Migration 会保留 `application.db.pre-migration.bak` 供手动恢复，
+绝不会触发自动 reset 或 restore。更新、未知、损坏、不可读或锁定的状态都会安全停止，
+绝不会被静默删除。确认 reset 后，会在 bootstrap lock、前台 interaction-resolution lease
+和独占跨进程 state lease 下执行。
 
 进入 `ready` 前的失败会恢复或保持 Application-owned `ApplicationBootstrap` 的 non-ready
 phase。协议握手只是该事实的 admission projection，并会保持关闭。状态分类详见
@@ -183,6 +184,16 @@ finalizer 都失败，已取消的 Direct Operation 仍发出 `operation.cancell
   -> exhaustive Presenter
 ```
 
+Fork 与 retry 复用同一命令边界和独占前台准入。系统会重新读取来源并核对 fingerprint，
+再在一个 SQLite transaction 中用全新 identity 物化前缀。Fork 只会在独立 Thread 已存在后
+发布 `thread_transition`。Retry 先创建独立前缀和新的进行中 Turn，再启动普通 Turn 路径，
+并返回同时包含 transition 与 Operation acceptance 的 `thread_retry` 组合 payload。
+它不复制 checkpoint、ToolActivity 或 ChangeSet，也不重放旧工具调用。
+
+Retry Event 可能先于命令响应到达 stdio。Ink 会在 sequence reduction 前暂存这些 Event，
+先应用权威 retry transition，把已接受 Operation 绑定到新的 Thread generation，再按 sequence
+重放缓冲 Event。Identity 不一致会使协议失败，而不是把 Event 投影到旧 Thread。
+
 一个 Operation 活动期间，只有以下无副作用观察可以穿过 Core gate：
 
 - `/context`
@@ -259,6 +270,9 @@ replay-safety metadata；它不按具体工具名分支。经证明的本地 bui
 MCP 为 non-replayable，metadata 缺失或未知时 fail closed。这些情况绝不会自动重试：
 interaction 默认选择 Abort，而显式 Retry 可以继续旧 checkpoint 并重复 pending call。因此，
 变更同名工具契约时必须考虑 checkpoint compatibility。
+
+这种恢复 Retry 与 `/retry [turn_id]` 不同。恢复可在显式批准后继续一个未完成 checkpoint；
+slash command 则要求终态 Turn，创建全新 Thread 与 Turn，并且绝不复用或复制来源 checkpoint。
 
 ## Shutdown
 

@@ -26,10 +26,15 @@ def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None:
         table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'trusted_workspaces'"
         ).fetchone()
-    assert version == APPLICATION_SCHEMA_VERSION == 7
+        thread_columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(threads)").fetchall()
+        }
+    assert version == APPLICATION_SCHEMA_VERSION == 8
     assert str(journal_mode).lower() == "wal"
     assert foreign_keys == 1
     assert table is not None
+    assert "lineage_json" in thread_columns
 
 
 def test_noncurrent_schema_is_rejected(tmp_path: Path) -> None:

@@ -51,6 +51,8 @@ Journal observation.
 | `/new` | Create and select a new Thread in this Workspace. |
 | `/rename <title>` | Persist a user-selected title for the current Thread. |
 | `/resume [thread_id]` | Pick or select a previous Thread from this Workspace. |
+| `/fork [turn_id]` | Create and select an independent Thread materialized through a terminal Turn. |
+| `/retry [turn_id]` | Create a fork before a terminal Turn and run that Turn's request again. |
 | `/search <query> [thread_id]` | Search this Workspace's durable conversation history, then pick or resume a result. Quote multi-word queries. |
 | `/thinking [on\|off]` | Inspect or set Thinking for future Turns in this Thread. |
 | `/model [deepseek\|kimi]` | Choose a Provider and model for this Thread and the user default. |
@@ -64,6 +66,16 @@ Selecting a Thread restores its durable messages, Turns, model, Thinking, and
 Skill choices. It also resets session permission authority to Request approval
 and clears temporary grants. The previous Thread remains available through
 `/resume`.
+
+With no ID, `/fork` and `/retry` target the latest terminal Turn; an explicit
+ID must name a terminal Turn in the selected Thread. Fork copies the durable
+conversation prefix through that Turn into records with fresh identities.
+Retry copies the prefix before the target, appends a fresh copy of its user
+request, and starts a new Turn with the target Turn's frozen Provider, model,
+Thinking, Skill, and budgets. These are physical, independent Threads, not
+shared history DAGs. Neither path copies summaries, checkpoints, Tool activity,
+or ChangeSets. Retry never replays the target's old tool calls and does not undo
+side effects they already caused.
 
 Search uses literal substring matching over Thread titles and durable user,
 assistant, and direct-command transcript text. It is not full-text or relevance

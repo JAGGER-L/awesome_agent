@@ -18,7 +18,7 @@ def test_command_authority_matches_protocol_fixture_exactly() -> None:
     ]
 
     assert fixture == {"commands": expected}
-    assert len(expected) == 28
+    assert len(expected) == 30
 
 
 def test_removed_command_names_are_not_accepted() -> None:

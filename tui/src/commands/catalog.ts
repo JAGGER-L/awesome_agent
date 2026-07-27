@@ -20,6 +20,16 @@ const metadata: Readonly<
   new: entry("new", "/new", "Start a new thread"),
   rename: entry("rename", "/rename <title>", "Rename the current conversation"),
   resume: entry("resume", "/resume [thread_id]", "Resume a previous thread"),
+  fork: entry(
+    "fork",
+    "/fork [turn_id]",
+    "Fork this conversation from a terminal Turn",
+  ),
+  retry: entry(
+    "retry",
+    "/retry [turn_id]",
+    "Fork a terminal Turn and run it again with its frozen settings",
+  ),
   search: entry(
     "search",
     "/search <query> [thread_id]",

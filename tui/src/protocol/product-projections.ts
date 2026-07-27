@@ -247,6 +247,12 @@ export function credentialConfigured(
       : false;
 }
 
+export const threadLineageSchema = z.strictObject({
+  kind: z.enum(["fork", "retry"]),
+  source_thread_id: identifierSchema,
+  source_turn_id: identifierSchema,
+});
+
 export const threadSchema = z.strictObject({
   id: identifierSchema,
   workspace_key: identifierSchema,
@@ -255,6 +261,7 @@ export const threadSchema = z.strictObject({
   current_model: boundedText(0, 200).optional(),
   thinking_enabled: z.boolean(),
   skill_mode: boundedText(1, 64),
+  lineage: threadLineageSchema.nullable(),
   created_at: utcTimestampSchema,
   updated_at: utcTimestampSchema,
 });

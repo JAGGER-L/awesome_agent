@@ -8,6 +8,7 @@
     "diff": "application",
     "doctor": "application",
     "export": "application",
+    "fork": "application",
     "help": "ink",
     "mcp": "application",
     "memory": "application",
@@ -18,6 +19,7 @@
     "redo": "application",
     "rename": "application",
     "resume": "application",
+    "retry": "application",
     "search": "application",
     "skills": "application",
     "status": "application",
@@ -54,13 +56,13 @@
     "warning"
   ],
   "files": {
-    "command-results.invalid.json": "a9de559037abcd2284df7a28f168276c81458729e536bb4113cb5814406224f4",
-    "command-results.valid.json": "286adccaa0836484e245759a14e4898f9daf9eef7d3eb5a1a68966b6a2cdd7b5",
-    "commands.json": "94c9432931af991508bb17420b81cce6731dcd8ef637430bf59d00b485100cec",
+    "command-results.invalid.json": "bfd104422cfd647cd908677b388dc578666f7464d72086053b77e2b554eda9ae",
+    "command-results.valid.json": "c19b319b90e5897d7b61d346d1d234bb7372484727e93bddf19a2ae3bc66a4fe",
+    "commands.json": "99319cc39fcac8f30fbb7d9e34744293713c5d0a33687441b242ecf4788ce8e8",
     "events.invalid.json": "c9fbbc2be594f30d3a4a80ff077ef6a2e6efcf1aaa2250bc77a01530fad32eb3",
     "events.valid.json": "0bc03cb963e49fc0dd9670efd14daf2aef375b673b56b89926e66b7f22bba805",
     "methods.invalid.json": "a38f4b4154d19c37525808d95c60b37ecb30819752890d042ef37bfda9fc1871",
-    "methods.valid.json": "65e012f8fd2853d89f95c166dd5a1623e2341d3dbe17b58595595d915d32c2a2",
+    "methods.valid.json": "1efcfd9c43756e40c07e4284b6d6d225f21b4fdda70cfc846008ab95405b9711",
     "results.failures.json": "39bab801b9896e10cf71a036312f71ebc7a2484456aa4612557efd9deb3355af"
   },
   "fixture_version": 1,

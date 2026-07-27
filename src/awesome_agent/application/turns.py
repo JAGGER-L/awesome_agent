@@ -24,6 +24,7 @@ from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.operations import (
     OperationContinuation,
     OperationController,
+    OperationHandle,
 )
 from awesome_agent.application.turn_facts import (
     ObservedTurnFacts,
@@ -34,6 +35,7 @@ from awesome_agent.context import ExplicitPathError
 from awesome_agent.conversation import (
     ConversationConflict,
     ConversationService,
+    RetryPreparation,
     Thread,
     ThreadEntryKind,
     ThreadView,
@@ -93,6 +95,10 @@ type TurnExtensionPreparer = Callable[[], Awaitable[None]]
 type ResumeClaim = Callable[[Turn], Awaitable[None]]
 type ResumeFinished = Callable[[], Awaitable[None]]
 type ToolReplaySafetyResolver = Callable[[str], ToolReplaySafety]
+type RetryStarted[T] = Callable[
+    [RetryPreparation, OperationAccepted],
+    Awaitable[T],
+]
 
 
 class TurnExecutionFailed(RuntimeError):
@@ -280,6 +286,148 @@ class TurnCoordinator:
             turn_id=turn.id,
             client_message_id=client_message_id,
         )
+
+    async def retry_turn[T](
+        self,
+        source_thread_id: str,
+        source_turn_id: str | None,
+        *,
+        before_start: Callable[[], None],
+        started: RetryStarted[T],
+    ) -> T:
+        reservation = self._operations.reserve()
+        preparation_task = asyncio.create_task(
+            self._conversation.prepare_retry(
+                self._workspace_key,
+                source_thread_id,
+                source_turn_id,
+            ),
+            name=f"turn-retry-prepare:{source_turn_id or 'latest'}",
+        )
+        try:
+            preparation = await asyncio.shield(preparation_task)
+            self._require_thread_workspace(preparation.view.thread)
+        except asyncio.CancelledError as cancellation:
+            compensation = asyncio.create_task(
+                self._cancel_prepared_retry(preparation_task),
+                name=f"turn-retry-prepare-compensation:{source_turn_id or 'latest'}",
+            )
+            try:
+                await _await_task_uninterruptibly(compensation)
+            except BaseException:
+                logger.exception("Retry preparation cancellation compensation failed.")
+            self._operations.abort(reservation)
+            raise cancellation
+        except BaseException:
+            self._operations.abort(reservation)
+            raise
+
+        turn = preparation.turn
+        barrier = asyncio.Event()
+
+        async def execute(operation_id: str) -> None:
+            projector = ApplicationEventProjector(
+                emitter=self._emitter,
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+                operation_id=operation_id,
+                client_message_id=preparation.client_message_id,
+            )
+            try:
+                await barrier.wait()
+            except asyncio.CancelledError as cancellation:
+                await self._terminalize_unstarted_turn(turn, cancelled=True)
+                raise cancellation
+            await self._start_turn(turn, operation_id, projector)
+            try:
+                self._turn_input_preparer(turn, preparation.content)
+            except asyncio.CancelledError:
+                await self._finish_cancelled_turn(turn, projector)
+                raise
+            except ExplicitPathError as error:
+                await self._fail_turn_preparation(
+                    turn,
+                    operation_id,
+                    projector,
+                    "invalid_explicit_path",
+                )
+                raise TurnInputInvalid(str(error)) from error
+            except BaseException:
+                await self._fail_turn_preparation(
+                    turn,
+                    operation_id,
+                    projector,
+                    "turn_preparation_failed",
+                )
+                raise
+            await self._execute_turn(turn, operation_id, projector)
+
+        try:
+            before_start()
+            handle = await self._operations.start_reserved(
+                reservation,
+                execute,
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+                client_message_id=preparation.client_message_id,
+            )
+        except BaseException as error:
+            self._operations.abort(reservation)
+            compensation = asyncio.create_task(
+                self._terminalize_unstarted_turn(
+                    turn,
+                    cancelled=isinstance(error, asyncio.CancelledError),
+                ),
+                name=f"turn-retry-start-compensation:{turn.id}",
+            )
+            try:
+                await _await_task_uninterruptibly(compensation)
+            except BaseException:
+                logger.exception(
+                    "Retry operation-start compensation failed.",
+                    extra={"turn_id": turn.id},
+                )
+            raise
+        self._tasks[handle.operation_id] = handle.task
+        handle.task.add_done_callback(self._task_completed)
+        accepted = OperationAccepted(
+            operation_id=handle.operation_id,
+            thread_id=turn.thread_id,
+            turn_id=turn.id,
+            client_message_id=preparation.client_message_id,
+        )
+        try:
+            published = await started(preparation, accepted)
+        except BaseException:
+            publication_cleanup = asyncio.create_task(
+                self._cancel_blocked_prepared_turn(handle),
+                name=f"turn-retry-publication-compensation:{turn.id}",
+            )
+            try:
+                await _await_task_uninterruptibly(publication_cleanup)
+            except BaseException:
+                logger.exception(
+                    "Retry publication cancellation compensation failed.",
+                    extra={"turn_id": turn.id},
+                )
+            raise
+        barrier.set()
+        return published
+
+    async def _cancel_prepared_retry(
+        self,
+        preparation_task: asyncio.Task[RetryPreparation],
+    ) -> None:
+        preparation = await _await_task_uninterruptibly(preparation_task)
+        await self._terminalize_unstarted_turn(preparation.turn, cancelled=True)
+
+    async def _cancel_blocked_prepared_turn(
+        self,
+        handle: OperationHandle[None],
+    ) -> None:
+        await self._operations.cancel(handle.operation_id)
+        with suppress(Exception, asyncio.CancelledError):
+            await _await_task_uninterruptibly(handle.task)
 
     async def _cancel_begun_turn(self, begin_task: asyncio.Task[Turn]) -> None:
         begun = await _await_task_uninterruptibly(begin_task)

@@ -15,6 +15,8 @@ Awesome 目前提供：
 - 通过提供商中立的模型契约支持 DeepSeek 和 Kimi；
 - 受信任 Workspace 启动、根目录 `AGENTS.md` 指令、Threads、Turns、取消、
   checkpoints 与恢复；
+- 带明确直接父级 lineage 的物化 Thread fork 与 retry、独立复制的历史，以及不重放旧工具
+  或隐式 undo 的语义；
 - 通过唯一的 Registry、Policy 与 Executor 路径提供工作区文件工具和有界本地命令执行；
 - 三种权限模式、单次审批、绑定 Thread 的临时 `workspace.write` 授权，以及不可关闭的
   命令防误操作断路器；

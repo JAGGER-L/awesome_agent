@@ -64,7 +64,7 @@ async def test_worker_owns_one_daemon_thread_and_reuses_one_connection(
         assert first[0] != event_loop_thread
         assert first[1] is True
         assert first[2] == "awesome-application-sqlite"
-        assert first[4] == 7
+        assert first[4] == 8
 
         def reject_path_preflight(_path: Path) -> None:
             raise AssertionError("owned connection was not used")

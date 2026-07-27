@@ -5,10 +5,12 @@ import {
 } from "../core/index.js";
 import {
   type ApplicationResult,
+  type EventEnvelope,
   type MethodName,
   type MethodParams,
   type MethodValue,
   RpcClosedError,
+  type ThreadRetryOperation,
 } from "../protocol/index.js";
 import {
   type BatchedEvent,
@@ -33,8 +35,22 @@ export interface ConnectedSurface {
     method: Method,
     params: MethodParams[Method],
   ): Promise<ApplicationResult<MethodValue[Method]>>;
+  activateThreadRetry?(
+    operation: ThreadRetryOperation,
+    generation: number,
+  ): void;
+  rejectThreadRetry?(message: string): never;
   close(): Promise<void>;
 }
+
+interface ThreadRetryGate {
+  readonly events: EventEnvelope[];
+  bytes: number;
+  expected?: ThreadRetryOperation;
+}
+
+const THREAD_RETRY_EVENT_LIMIT = 1_024;
+const THREAD_RETRY_BYTE_LIMIT = 4 * 1_024 * 1_024;
 
 function dispatchBatched(
   store: SurfaceStore,
@@ -74,6 +90,9 @@ export async function connectSurface(
   let closePromise: Promise<void> | undefined;
   const reconciledTerminals = new Set<string>();
   const reconciliationTasks = new Set<Promise<void>>();
+  let retryGate: ThreadRetryGate | undefined;
+  let activeRetryBinding: ThreadRetryOperation | undefined;
+  const retryEventEncoder = new TextEncoder();
 
   const reconcileTerminal = async (
     threadId: string,
@@ -137,41 +156,167 @@ export async function connectSurface(
     );
   };
 
-  const eventConsumer = (async () => {
-    for await (const event of session.rpc.events()) {
-      const fault = batcher.accept(event);
-      if (fault) {
-        store.dispatch({
-          type: "protocol.fatal",
-          code: "protocol_desynchronized",
-          message: fault.message,
-        });
-        await session.rpc.close(fault);
-        break;
+  const failProtocol = (code: string, fault: ProtocolDesynchronized): void => {
+    store.dispatch({ type: "protocol.fatal", code, message: fault.message });
+    void session.rpc.close(fault);
+  };
+
+  const discardRetryGate = (gate: ThreadRetryGate): void => {
+    gate.events.length = 0;
+    gate.bytes = 0;
+    if (retryGate === gate) retryGate = undefined;
+  };
+
+  const bufferRetryEvent = (
+    gate: ThreadRetryGate,
+    event: EventEnvelope,
+  ): ProtocolDesynchronized | undefined => {
+    const bytes = retryEventEncoder.encode(JSON.stringify(event)).byteLength;
+    if (
+      gate.events.length >= THREAD_RETRY_EVENT_LIMIT ||
+      gate.bytes + bytes > THREAD_RETRY_BYTE_LIMIT
+    ) {
+      discardRetryGate(gate);
+      return new ProtocolDesynchronized(
+        "Thread retry Event buffer exceeded its bounded capacity",
+      );
+    }
+    gate.events.push(event);
+    gate.bytes += bytes;
+    return undefined;
+  };
+
+  const acceptEvent = (
+    event: EventEnvelope,
+  ): ProtocolDesynchronized | undefined => {
+    if (
+      activeRetryBinding &&
+      ((event.operation_id !== undefined &&
+        event.operation_id !== activeRetryBinding.operation_id) ||
+        (event.thread_id !== undefined &&
+          event.thread_id !== activeRetryBinding.thread_id) ||
+        (event.turn_id !== undefined &&
+          event.turn_id !== activeRetryBinding.turn_id) ||
+        (event.client_message_id !== undefined &&
+          event.client_message_id !== activeRetryBinding.client_message_id))
+    ) {
+      return new ProtocolDesynchronized(
+        "Retry Event identity does not match its accepted Operation",
+      );
+    }
+    const fault = batcher.accept(event);
+    if (fault) return fault;
+    if (
+      event.event_type === "operation.completed" ||
+      event.event_type === "operation.failed" ||
+      event.event_type === "operation.cancelled"
+    ) {
+      const threadId =
+        event.thread_id ?? store.getState().application?.current_thread_id;
+      const turnId =
+        event.turn_id ?? store.getState().active_operation?.turn?.id;
+      if (threadId && event.operation_id && turnId) {
+        const generation =
+          operationGenerations.get(event.operation_id) ??
+          store.getState().thread_generation;
+        ownReconciliation(
+          reconcileTerminal(
+            threadId,
+            `operation:${event.operation_id}`,
+            generation,
+            event.operation_id,
+            turnId,
+          ),
+        );
+        if (activeRetryBinding?.operation_id === event.operation_id) {
+          activeRetryBinding = undefined;
+        }
       }
-      if (
-        event.event_type === "operation.completed" ||
-        event.event_type === "operation.failed" ||
-        event.event_type === "operation.cancelled"
-      ) {
-        const threadId =
-          event.thread_id ?? store.getState().application?.current_thread_id;
-        const turnId =
-          event.turn_id ?? store.getState().active_operation?.turn?.id;
-        if (threadId && event.operation_id && turnId) {
-          const generation =
-            operationGenerations.get(event.operation_id) ??
-            store.getState().thread_generation;
-          ownReconciliation(
-            reconcileTerminal(
-              threadId,
-              `operation:${event.operation_id}`,
-              generation,
-              event.operation_id,
-              turnId,
-            ),
+    }
+    return undefined;
+  };
+
+  const validateBufferedRetryEvents = (
+    gate: ThreadRetryGate,
+    expected: ThreadRetryOperation | undefined,
+  ): ProtocolDesynchronized | undefined => {
+    const currentThreadId = store.getState().application?.current_thread_id;
+    for (const event of gate.events) {
+      if (expected) {
+        if (
+          (event.operation_id !== undefined &&
+            event.operation_id !== expected.operation_id) ||
+          (event.thread_id !== undefined &&
+            event.thread_id !== expected.thread_id) ||
+          (event.turn_id !== undefined && event.turn_id !== expected.turn_id) ||
+          (event.client_message_id !== undefined &&
+            event.client_message_id !== expected.client_message_id)
+        ) {
+          return new ProtocolDesynchronized(
+            "Buffered retry Event identity does not match its accepted Operation",
           );
         }
+        continue;
+      }
+      if (
+        event.thread_id !== undefined &&
+        event.thread_id !== currentThreadId
+      ) {
+        return new ProtocolDesynchronized(
+          "A rejected retry emitted an Event for another Thread",
+        );
+      }
+    }
+    return undefined;
+  };
+
+  const releaseRetryGate = (
+    gate: ThreadRetryGate,
+    generation: number,
+    expected: ThreadRetryOperation | undefined,
+  ): void => {
+    if (retryGate !== gate) {
+      throw new ProtocolDesynchronized(
+        "Thread retry Event gate changed unexpectedly",
+      );
+    }
+    const identityFault = validateBufferedRetryEvents(gate, expected);
+    retryGate = undefined;
+    const buffered = gate.events.splice(0, gate.events.length);
+    gate.bytes = 0;
+    if (identityFault) {
+      failProtocol("thread_retry_identity_mismatch", identityFault);
+      throw identityFault;
+    }
+    if (expected) {
+      operationGenerations.set(expected.operation_id, generation);
+      activeRetryBinding = expected;
+    }
+    for (const event of buffered) {
+      const fault = acceptEvent(event);
+      if (!fault) continue;
+      activeRetryBinding = undefined;
+      failProtocol("protocol_desynchronized", fault);
+      throw fault;
+    }
+  };
+
+  const eventConsumer = (async () => {
+    for await (const event of session.rpc.events()) {
+      if (retryGate) {
+        const fault = bufferRetryEvent(retryGate, event);
+        if (fault) {
+          failProtocol("thread_retry_buffer_limit", fault);
+          await session.rpc.close(fault);
+          break;
+        }
+        continue;
+      }
+      const fault = acceptEvent(event);
+      if (fault) {
+        failProtocol("protocol_desynchronized", fault);
+        await session.rpc.close(fault);
+        break;
       }
     }
   })()
@@ -195,6 +340,8 @@ export async function connectSurface(
   const close = (): Promise<void> => {
     if (closePromise) return closePromise;
     closed = true;
+    if (retryGate) discardRetryGate(retryGate);
+    activeRetryBinding = undefined;
     closePromise = (async () => {
       try {
         await session.requestShutdown();
@@ -212,12 +359,96 @@ export async function connectSurface(
   return {
     store,
     session,
-    request(method, params) {
+    async request(method, params) {
       if (closed)
         return Promise.reject(
           new RpcClosedError("Surface controller is closed"),
         );
-      return session.rpc.request(method, params);
+      const retryRequested =
+        method === "command.execute" &&
+        typeof params === "object" &&
+        params !== null &&
+        "name" in params &&
+        params.name === "retry";
+      let ownedGate: ThreadRetryGate | undefined;
+      if (retryRequested) {
+        if (retryGate) {
+          throw new ProtocolDesynchronized(
+            "Only one Thread retry request may be in flight",
+          );
+        }
+        ownedGate = { events: [], bytes: 0 };
+        retryGate = ownedGate;
+      }
+      try {
+        const response = await session.rpc.request(method, params);
+        if (!ownedGate) return response;
+        const value = response.ok ? response.value : undefined;
+        const expected =
+          value &&
+          typeof value === "object" &&
+          "kind" in value &&
+          value.kind === "result" &&
+          value.payload.kind === "thread_retry"
+            ? value.payload.operation
+            : undefined;
+        if (expected) {
+          if (retryGate !== ownedGate) {
+            throw new ProtocolDesynchronized(
+              "Thread retry Event gate changed before its response",
+            );
+          }
+          ownedGate.expected = expected;
+        } else {
+          releaseRetryGate(
+            ownedGate,
+            store.getState().thread_generation,
+            undefined,
+          );
+        }
+        return response;
+      } catch (error) {
+        if (ownedGate && retryGate === ownedGate) {
+          releaseRetryGate(
+            ownedGate,
+            store.getState().thread_generation,
+            undefined,
+          );
+        }
+        throw error;
+      }
+    },
+    activateThreadRetry(operation, generation) {
+      const gate = retryGate;
+      if (!gate?.expected) {
+        const fault = new ProtocolDesynchronized(
+          "Thread retry response has no pending Event gate",
+        );
+        failProtocol("thread_retry_gate_missing", fault);
+        throw fault;
+      }
+      if (
+        gate.expected.operation_id !== operation.operation_id ||
+        gate.expected.thread_id !== operation.thread_id ||
+        gate.expected.turn_id !== operation.turn_id ||
+        gate.expected.client_message_id !== operation.client_message_id ||
+        store.getState().thread_generation !== generation ||
+        store.getState().application?.current_thread_id !== operation.thread_id
+      ) {
+        const fault = new ProtocolDesynchronized(
+          "Thread retry activation identity does not match the installed transition",
+        );
+        discardRetryGate(gate);
+        failProtocol("thread_retry_identity_mismatch", fault);
+        throw fault;
+      }
+      releaseRetryGate(gate, generation, operation);
+    },
+    rejectThreadRetry(message) {
+      if (retryGate) discardRetryGate(retryGate);
+      const fault = new ProtocolDesynchronized(message);
+      failProtocol("thread_retry_transition_rejected", fault);
+      throw fault;
     },
     close,
   };

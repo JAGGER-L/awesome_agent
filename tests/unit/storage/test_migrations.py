@@ -56,6 +56,35 @@ def _seed_schema_seven(path: Path) -> None:
         )
 
 
+def _seed_production_schema_seven(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE threads (
+                thread_id TEXT PRIMARY KEY,
+                workspace_key TEXT NOT NULL,
+                title TEXT NOT NULL,
+                title_source TEXT NOT NULL,
+                current_model TEXT,
+                thinking_enabled INTEGER NOT NULL,
+                skill_mode TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO threads (
+                thread_id, workspace_key, title, title_source, current_model,
+                thinking_enabled, skill_mode, created_at, updated_at
+            ) VALUES (
+                'thread_existing', 'workspace_existing', 'Preserved', 'manual',
+                'deepseek/deepseek-v4-flash', 1, 'auto',
+                '2026-07-27T00:00:00+00:00', '2026-07-27T00:00:00+00:00'
+            );
+            PRAGMA user_version = 7;
+            """
+        )
+
+
 def _seven_to_eight(connection: ApplicationMigrationConnection) -> None:
     connection.execute(
         "ALTER TABLE parent ADD COLUMN migrated_value TEXT NOT NULL DEFAULT ''"
@@ -91,13 +120,83 @@ def _schema(path: Path) -> int:
     return int(row[0])
 
 
-def test_production_registry_stays_at_schema_seven_without_steps() -> None:
+def test_production_registry_has_one_schema_seven_to_eight_step() -> None:
     assert APPLICATION_SCHEMA_FLOOR == 7
     assert APPLICATION_MIGRATIONS.floor == 7
-    assert APPLICATION_MIGRATIONS.current == 7
-    assert APPLICATION_MIGRATIONS.migrations == ()
-    assert APPLICATION_MIGRATIONS.path_from(7) == ()
+    assert APPLICATION_MIGRATIONS.current == 8
+    assert tuple(
+        (migration.from_schema, migration.to_schema)
+        for migration in APPLICATION_MIGRATIONS.migrations
+    ) == ((7, 8),)
+    assert APPLICATION_MIGRATIONS.path_from(7) == APPLICATION_MIGRATIONS.migrations
+    assert APPLICATION_MIGRATIONS.path_from(8) == ()
     assert APPLICATION_MIGRATIONS.path_from(6) is None
+
+
+@pytest.mark.asyncio
+async def test_production_schema_seven_migrates_lineage_without_data_loss(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    path = home / "state" / "application.db"
+    backup = path.with_name("application.db.pre-migration.bak")
+    _seed_production_schema_seven(path)
+    database = ApplicationSQLite(path)
+    lease = StateLease.acquire(home, StateLeaseMode.EXCLUSIVE)
+    try:
+        assert await database.migrate(lease) == backup
+        assert _schema(path) == 8
+        assert _schema(backup) == 7
+        with sqlite3.connect(path) as connection:
+            assert connection.execute(
+                "SELECT thread_id, title, lineage_json FROM threads"
+            ).fetchone() == ("thread_existing", "Preserved", None)
+            assert {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(threads)")
+            } >= {"thread_id", "lineage_json"}
+    finally:
+        lease.close()
+        await database.aclose()
+
+
+@pytest.mark.asyncio
+async def test_schema_seven_to_eight_failure_rolls_back_column_and_data(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    path = home / "state" / "application.db"
+    backup = path.with_name("application.db.pre-migration.bak")
+    _seed_production_schema_seven(path)
+
+    def fail_after_column(connection: ApplicationMigrationConnection) -> None:
+        connection.execute("ALTER TABLE threads ADD COLUMN lineage_json TEXT")
+        raise RuntimeError("injected lineage migration failure")
+
+    registry = ApplicationMigrationRegistry(
+        floor=7,
+        current=8,
+        migrations=(ApplicationMigration(7, 8, fail_after_column),),
+    )
+    database = ApplicationSQLite(path, migration_registry=registry)
+    lease = StateLease.acquire(home, StateLeaseMode.EXCLUSIVE)
+    try:
+        with pytest.raises(ApplicationMigrationStepError) as raised:
+            await database.migrate(lease)
+        assert (raised.value.from_schema, raised.value.to_schema) == (7, 8)
+        assert _schema(path) == 7
+        assert _schema(backup) == 7
+        with sqlite3.connect(path) as connection:
+            assert connection.execute(
+                "SELECT thread_id, title FROM threads"
+            ).fetchone() == ("thread_existing", "Preserved")
+            assert "lineage_json" not in {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(threads)")
+            }
+    finally:
+        lease.close()
+        await database.aclose()
 
 
 @pytest.mark.parametrize(
@@ -641,13 +740,13 @@ def test_preflight_reads_schema_identity_from_live_wal(tmp_path: Path) -> None:
         assert connection.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
         connection.execute("CREATE TABLE wal_only (value TEXT NOT NULL)")
         connection.execute("INSERT INTO wal_only VALUES ('visible')")
-        connection.execute("PRAGMA user_version = 7")
+        connection.execute("PRAGMA user_version = 8")
         connection.commit()
         assert path.with_name("application.db-wal").exists()
 
         result = inspect_application_state(path)
 
         assert result.compatibility is StateCompatibility.CURRENT
-        assert result.found_schema == 7
+        assert result.found_schema == 8
     finally:
         connection.close()

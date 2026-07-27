@@ -59,6 +59,7 @@ CREATE TABLE threads (
     current_model TEXT,
     thinking_enabled INTEGER NOT NULL CHECK (thinking_enabled IN (0, 1)),
     skill_mode TEXT NOT NULL,
+    lineage_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

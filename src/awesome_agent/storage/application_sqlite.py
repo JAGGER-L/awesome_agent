@@ -145,7 +145,7 @@ class ApplicationSQLite:
         return await self._submit(self._preflight_on_worker)
 
     async def initialize(self) -> None:
-        """Initialize schema 7 when new, then retain one owned connection."""
+        """Initialize the current schema when new, then retain one owned connection."""
 
         await self._submit(self._initialize_on_worker, durable=True)
 

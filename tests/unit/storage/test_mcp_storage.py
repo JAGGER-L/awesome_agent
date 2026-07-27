@@ -32,7 +32,7 @@ async def test_store_uses_hash_bound_workspace_enablement(
 
         await store.enable("workspace-key", config.id, mcp_config_hash(config))
 
-        assert APPLICATION_SCHEMA_VERSION == 7
+        assert APPLICATION_SCHEMA_VERSION == 8
         enabled = await store.snapshot("workspace-key")
         assert enabled == {config.id: mcp_config_hash(config)}
         assert enabled[config.id] != mcp_config_hash(

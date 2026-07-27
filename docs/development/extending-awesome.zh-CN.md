@@ -279,12 +279,12 @@ Memory 不能 grant Tool capability，也不能成为隐藏 provider fallback。
 
 ## 变更存储或恢复
 
-Storage 变更不只是添加 column。应判断字段缺失在 Schema 7 中是否有安全解释。如果没有，
-则递增 schema identity 并定义旧/新状态的产品行为。把每个受支持的升级作为一个相邻
+Storage 变更不只是添加 column。应判断字段缺失在当前 Schema 8 中是否有安全解释。如果
+没有，则递增 schema identity 并定义旧/新状态的产品行为。把每个受支持的升级作为一个相邻
 `N -> N+1` operation 加入 Storage 所属的 migration registry。Registry 必须从显式 floor
 到 current 始终保持一条完整线性链；不要添加 branch、gap、历史 adapter，也不要把
-migration 逻辑放到该 owner 之外。Schema 7 当前同时是 floor 与 current，因此生产环境没有
-step，Schema 1–6 仍然不可迁移。
+migration 逻辑放到该 owner 之外。当前生产链的 floor 是 7、current 是 8，且有一个增加可空
+Thread lineage 的 `7 -> 8` step；Schema 1–6 仍然不可迁移。
 
 Migration code 必须保持启动协议：shared-lease read-only preflight、exclusive lease、重新检查
 兼容性、在 `application.db.pre-migration.bak` 创建并校验能感知 WAL 的 SQLite backup，然后

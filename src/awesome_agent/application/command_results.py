@@ -6,11 +6,17 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from awesome_agent.application.contracts import (
     ApplicationState,
+    OperationAccepted,
     StatusSnapshot,
     ThreadReadResult,
 )
 from awesome_agent.config.credentials import ProviderCredentialStatuses
-from awesome_agent.conversation.models import Thread, UsageSummary
+from awesome_agent.conversation.models import (
+    Thread,
+    ThreadEntryKind,
+    TurnStatus,
+    UsageSummary,
+)
 from awesome_agent.core.tools.permissions import PermissionMode
 
 
@@ -67,7 +73,7 @@ class NoticeCommandPayload(_CommandModel):
 
 
 class ThreadTransitionSnapshot(_CommandModel):
-    reason: Literal["new", "resume"]
+    reason: Literal["new", "resume", "fork", "retry"]
     application: ApplicationState
     thread: ThreadReadResult
 
@@ -81,6 +87,73 @@ class ThreadTransitionSnapshot(_CommandModel):
 class ThreadTransitionCommandPayload(_CommandModel):
     kind: Literal["thread_transition"] = "thread_transition"
     transition: ThreadTransitionSnapshot
+
+    @model_validator(mode="after")
+    def validate_non_retry_transition(self) -> Self:
+        transition = self.transition
+        reason = transition.reason
+        lineage = transition.thread.view.thread.lineage
+        if reason == "retry":
+            raise ValueError("Retry transitions require a thread_retry payload.")
+        if reason == "new" and lineage is not None:
+            raise ValueError("New transitions require a root Thread.")
+        if reason == "fork" and (lineage is None or lineage.kind != "fork"):
+            raise ValueError("Fork transitions require Fork Thread lineage.")
+        return self
+
+
+class ThreadRetryCommandPayload(_CommandModel):
+    kind: Literal["thread_retry"] = "thread_retry"
+    transition: ThreadTransitionSnapshot
+    operation: OperationAccepted
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> Self:
+        if self.transition.reason != "retry":
+            raise ValueError("Retry payload requires a retry transition.")
+        thread_id = self.transition.thread.view.thread.id
+        lineage = self.transition.thread.view.thread.lineage
+        if lineage is None or lineage.kind != "retry":
+            raise ValueError("Retry transition requires Retry Thread lineage.")
+        operation = self.operation
+        if operation.thread_id != thread_id or operation.turn_id is None:
+            raise ValueError("Retry transition and Operation identities must match.")
+        view = self.transition.thread.view
+        turn = next(
+            (
+                item
+                for item in view.turns
+                if item.id == operation.turn_id
+            ),
+            None,
+        )
+        if turn is None or turn.thread_id != thread_id:
+            raise ValueError("Retry Operation Turn must belong to the new Thread.")
+        in_progress = tuple(
+            item for item in view.turns if item.status is TurnStatus.IN_PROGRESS
+        )
+        if (
+            len(in_progress) != 1
+            or in_progress[0] != turn
+            or not view.turns
+            or view.turns[-1] != turn
+        ):
+            raise ValueError(
+                "Retry Operation must identify the final and only in-progress Turn."
+            )
+        user_entry = next(
+            (item for item in view.entries if item.id == turn.user_entry_id),
+            None,
+        )
+        if (
+            user_entry is None
+            or user_entry.kind is not ThreadEntryKind.USER_MESSAGE
+            or user_entry.client_message_id != operation.client_message_id
+        ):
+            raise ValueError(
+                "Retry Operation client identity must match its Turn user Entry."
+            )
+        return self
 
 
 class ThreadRenamedPayload(_CommandModel):
@@ -304,6 +377,7 @@ class WebStatusCommandPayload(_CommandModel):
 CommandPayload = Annotated[
     NoticeCommandPayload
     | ThreadTransitionCommandPayload
+    | ThreadRetryCommandPayload
     | ThreadRenamedPayload
     | ThreadExportCommandPayload
     | ContextCommandPayload

@@ -338,6 +338,7 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
     } == {
         "notice",
         "thread_transition",
+        "thread_retry",
         "thread_renamed",
         "context",
         "compact",
@@ -365,6 +366,11 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
         COMMAND_OUTCOME_ADAPTER.validate_python(case["outcome"])
     invalid = _cases("command-results.invalid.json")
     assert {
+        "thread_retry_operation_client_message_mismatch",
+        "thread_retry_operation_user_entry_missing",
+        "thread_retry_operation_turn_terminal",
+        "thread_retry_operation_turn_not_last",
+        "thread_retry_operation_multiple_in_progress",
         "web_status_empty_diagnostic_code",
         "web_status_invalid_diagnostic_code",
     }.issubset({case["name"] for case in invalid})

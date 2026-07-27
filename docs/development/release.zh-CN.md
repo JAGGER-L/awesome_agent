@@ -151,8 +151,8 @@ Verifier 检查：
 - 在全新 home 与 workspace 中运行已安装 wheel 的 Protocol v4 生命周期：
   `initialize` -> workspace trust -> `application.getState` -> `shutdown`；
 - TUI package/version/entry point；
-- Schema 7 bootstrap、floor-7 空 migration registry、不兼容状态分类、独占 reset
-  所有权，以及保留 config、Skills 与 Memory。
+- Schema 8 bootstrap、floor-7 线性 `7 -> 8` Thread-lineage migration 的数据保留与
+  rollback 证据、不兼容状态分类、独占 reset 所有权，以及保留 config、Skills 与 Memory。
 
 验证必须在 build wheel 和解压后的 payload 上运行。Fallback 到 editable checkout 会证明
 错误的 artifact，因此会被拒绝。

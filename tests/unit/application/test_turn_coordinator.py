@@ -10,6 +10,7 @@ from pydantic import JsonValue, TypeAdapter
 import awesome_agent.application.turns as turns_module
 from awesome_agent.agent import AgentRuntimeContext, AgentState, new_agent_state
 from awesome_agent.application.context import frozen_context_snapshot_is_valid
+from awesome_agent.application.contracts import OperationAccepted
 from awesome_agent.application.events import ApplicationEventProjector
 from awesome_agent.application.operations import OperationBusy, OperationController
 from awesome_agent.application.turns import (
@@ -20,7 +21,14 @@ from awesome_agent.application.turns import (
 )
 from awesome_agent.config import BudgetConfig, TurnConfig
 from awesome_agent.context import calculate_context_budget, estimate_messages
-from awesome_agent.conversation import ConversationService, ThreadView, Turn, TurnStatus
+from awesome_agent.conversation import (
+    ConversationService,
+    RetryPreparation,
+    ThreadView,
+    Turn,
+    TurnStatus,
+    UsageSummary,
+)
 from awesome_agent.core.events import (
     CollectingEventSink,
     EventEmitter,
@@ -223,6 +231,23 @@ class FailOnTerminalSink(CollectingEventSink):
         await super().emit(event)
 
 
+class FailOnOperationStartedSink(CollectingEventSink):
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.OPERATION_STARTED:
+            raise BrokenPipeError("protocol output closed")
+        await super().emit(event)
+
+
+class OrderingSink(CollectingEventSink):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__()
+        self._order = order
+
+    async def emit(self, event: EventEnvelope) -> None:
+        self._order.append(event.event_type.value)
+        await super().emit(event)
+
+
 def _config() -> TurnConfig:
     return TurnConfig(
         provider="deepseek",
@@ -332,6 +357,9 @@ async def _coordinator(
     context_snapshot_validator: ContextSnapshotValidator = (
         frozen_context_snapshot_is_valid
     ),
+    conversation_factory: Callable[
+        [SQLiteConversationRepositories], ConversationService
+    ] = lambda repositories: ConversationService(store=repositories),
 ) -> tuple[
     TurnCoordinator,
     ConversationService,
@@ -344,7 +372,7 @@ async def _coordinator(
     _ACTIVE_DATABASES.append(database)
     await database.initialize()
     repositories = SQLiteConversationRepositories(database)
-    conversation = ConversationService(store=repositories)
+    conversation = conversation_factory(repositories)
     thread = await conversation.create_thread("workspace_1")
     sink = event_sink or CollectingEventSink()
     emitter = EventEmitter(
@@ -393,6 +421,261 @@ async def _coordinator(
         context_snapshot_validator=context_snapshot_validator,
     )
     return coordinator, conversation, sink, checkpoints, repositories, thread.id
+
+
+async def _completed_source_turn(
+    conversation: ConversationService,
+    thread_id: str,
+    *,
+    config: TurnConfig | None = None,
+) -> Turn:
+    turn = await conversation.begin_turn(
+        thread_id,
+        "inspect",
+        config or _config(),
+        client_message_id="client_source",
+    )
+    return await conversation.complete_turn(
+        turn.id,
+        "source answer",
+        UsageSummary(input_tokens=2, output_tokens=1),
+        "completed",
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_blocks_fresh_execution_until_transition_is_published(
+    tmp_path: Path,
+) -> None:
+    order: list[str] = []
+    graph = FakeGraph(_result(final_answer="retried", reason="completed"))
+    sink = OrderingSink(order)
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+        event_sink=sink,
+    )
+    frozen_config = TurnConfig(
+        provider="deepseek",
+        model="deepseek/deepseek-v4-flash",
+        thinking_enabled=False,
+        skill_mode="off",
+        budgets=BudgetConfig(model_calls=7, tool_calls=9, web_requests=1),
+    )
+    source = await _completed_source_turn(
+        conversation,
+        thread_id,
+        config=frozen_config,
+    )
+    await conversation.set_model(thread_id, "kimi/kimi-k2.6")
+    await conversation.set_thinking(thread_id, True)
+    await conversation.set_skill_mode(thread_id, "auto")
+    publish_entered = asyncio.Event()
+    publish_release = asyncio.Event()
+    captured: list[RetryPreparation] = []
+
+    def before_start() -> None:
+        order.append("permission.reset")
+
+    async def started(
+        preparation: RetryPreparation,
+        accepted: OperationAccepted,
+    ) -> OperationAccepted:
+        captured.append(preparation)
+        order.append("transition.publish")
+        publish_entered.set()
+        await publish_release.wait()
+        order.append("transition.published")
+        return accepted
+
+    retry = asyncio.create_task(
+        coordinator.retry_turn(
+            thread_id,
+            source.id,
+            before_start=before_start,
+            started=started,
+        )
+    )
+    await publish_entered.wait()
+
+    assert order == [
+        "permission.reset",
+        EventType.OPERATION_STARTED.value,
+        "transition.publish",
+    ]
+    assert graph.inputs == []
+    assert EventType.TURN_STARTED not in [event.event_type for event in sink.events]
+    preparation = captured[0]
+    assert preparation.turn.model == frozen_config.model
+    assert preparation.turn.thinking_enabled is frozen_config.thinking_enabled
+    assert preparation.turn.skill_mode == frozen_config.skill_mode
+    assert preparation.turn.budgets == frozen_config.budgets
+
+    publish_release.set()
+    accepted = await retry
+    await coordinator.wait(accepted.operation_id)
+
+    assert accepted.thread_id == preparation.view.thread.id
+    assert accepted.turn_id == preparation.turn.id
+    assert len(graph.inputs) == 1
+    assert graph.inputs[0]["pending_tool_calls"] == []
+    assert graph.inputs[0]["tool_results"] == []
+    assert graph.configs[0]["configurable"]["thread_id"] == preparation.turn.id
+    assert checkpoints.deleted == [preparation.turn.id]
+    retried = await conversation.read_thread(preparation.view.thread.id)
+    assert retried.turns[-1].status is TurnStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_retry_operation_start_failure_marks_new_turn_failed(
+    tmp_path: Path,
+) -> None:
+    graph = FakeGraph(_result(final_answer="must not run", reason="completed"))
+    sink = FailOnOperationStartedSink()
+    coordinator, conversation, _, _, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+        event_sink=sink,
+    )
+    source = await _completed_source_turn(conversation, thread_id)
+    callbacks: list[str] = []
+
+    async def started(
+        preparation: RetryPreparation,
+        accepted: OperationAccepted,
+    ) -> OperationAccepted:
+        del preparation, accepted
+        callbacks.append("published")
+        raise AssertionError("transition publication must not run")
+
+    with pytest.raises(BrokenPipeError, match="protocol output closed"):
+        await coordinator.retry_turn(
+            thread_id,
+            source.id,
+            before_start=lambda: callbacks.append("permission.reset"),
+            started=started,
+        )
+
+    retries = tuple(
+        thread
+        for thread in await conversation.list_threads("workspace_1")
+        if thread.lineage is not None and thread.lineage.kind == "retry"
+    )
+    assert len(retries) == 1
+    retry_turn = (await conversation.read_thread(retries[0].id)).turns[-1]
+    assert (retry_turn.status, retry_turn.error_code) == (
+        TurnStatus.FAILED,
+        "operation_start_failed",
+    )
+    assert callbacks == ["permission.reset"]
+    assert coordinator.active_operation_id is None
+    assert graph.inputs == []
+
+
+@pytest.mark.asyncio
+async def test_retry_publish_failure_cancels_blocked_turn_and_releases_operation(
+    tmp_path: Path,
+) -> None:
+    graph = FakeGraph(_result(final_answer="must not run", reason="completed"))
+    coordinator, conversation, sink, _, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+    )
+    source = await _completed_source_turn(conversation, thread_id)
+    captured: list[RetryPreparation] = []
+
+    async def fail_publish(
+        preparation: RetryPreparation,
+        accepted: OperationAccepted,
+    ) -> OperationAccepted:
+        del accepted
+        captured.append(preparation)
+        raise RuntimeError("transition publication failed")
+
+    with pytest.raises(RuntimeError, match="transition publication failed"):
+        await coordinator.retry_turn(
+            thread_id,
+            source.id,
+            before_start=lambda: None,
+            started=fail_publish,
+        )
+
+    retry_view = await conversation.read_thread(captured[0].view.thread.id)
+    assert retry_view.turns[-1].status is TurnStatus.CANCELLED
+    assert coordinator.active_operation_id is None
+    assert graph.inputs == []
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        EventType.OPERATION_CANCELLED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retry_caller_cancellation_during_materialization_compensates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = FakeGraph(_result(final_answer="must not run", reason="completed"))
+    coordinator, conversation, sink, _, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+    )
+    source = await _completed_source_turn(conversation, thread_id)
+    prepare_retry = conversation.prepare_retry
+    materialized = asyncio.Event()
+    release = asyncio.Event()
+    captured: list[RetryPreparation] = []
+
+    async def blocking_prepare_retry(
+        workspace_key: str,
+        source_thread_id: str,
+        source_turn_id: str | None = None,
+    ) -> RetryPreparation:
+        assert coordinator.active_operation_id is not None
+        preparation = await prepare_retry(
+            workspace_key,
+            source_thread_id,
+            source_turn_id,
+        )
+        captured.append(preparation)
+        materialized.set()
+        await release.wait()
+        return preparation
+
+    monkeypatch.setattr(conversation, "prepare_retry", blocking_prepare_retry)
+    before_start: list[str] = []
+    retry = asyncio.create_task(
+        coordinator.retry_turn(
+            thread_id,
+            source.id,
+            before_start=lambda: before_start.append("permission.reset"),
+            started=lambda preparation, accepted: _return_accepted(
+                preparation,
+                accepted,
+            ),
+        )
+    )
+    await materialized.wait()
+    retry.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await retry
+
+    retry_view = await conversation.read_thread(captured[0].view.thread.id)
+    assert retry_view.turns[-1].status is TurnStatus.CANCELLED
+    assert before_start == []
+    assert coordinator.active_operation_id is None
+    assert sink.events == []
+    assert graph.inputs == []
+
+
+async def _return_accepted(
+    preparation: RetryPreparation,
+    accepted: OperationAccepted,
+) -> OperationAccepted:
+    del preparation
+    return accepted
 
 
 @pytest.mark.asyncio

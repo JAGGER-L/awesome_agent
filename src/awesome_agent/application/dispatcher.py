@@ -33,6 +33,8 @@ _OBSERVATION_COMMANDS = frozenset(
     }
 )
 
+_OPERATION_START_COMMANDS = frozenset({CommandName.RETRY})
+
 
 class InvalidCommandInventory(ValueError):
     pass
@@ -107,6 +109,21 @@ class CommandDispatcher:
                 )
             )
         if observation:
+            return await handler(intent)
+        if intent.name in _OPERATION_START_COMMANDS:
+            if self._mutation_guard is not None:
+                await self._mutation_guard()
+            if (
+                foreground.closing
+                or foreground.exclusive_active
+                or foreground.operation_active
+            ):
+                return _operation_busy()
+            if self._has_pending_interaction():
+                return error(
+                    "interaction_busy",
+                    "Resolve the pending interaction before changing state.",
+                )
             return await handler(intent)
         try:
             lease = foreground.acquire_exclusive()

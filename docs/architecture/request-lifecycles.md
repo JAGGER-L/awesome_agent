@@ -45,7 +45,7 @@ and an uncertain external action is never replayed without a user decision.
 ```text
 awesome [workspace]
   -> Ink starts one private awesome-core
-  -> initialize(protocol=3, client identity)
+  -> initialize(protocol=4, client identity)
   -> resolve candidate workspace identity
   -> shared-lease read-only state preflight
   -> if migration_required:
@@ -70,14 +70,15 @@ user decides. Acceptance (or an existing trust record) is followed by acquiring
 both leases and rechecking identity before activation. A rejected trust
 decision exits and is not persisted as a denial.
 
-The production migration floor and current schema are both 7, with no registered
-steps. Schemas 1–6 therefore produce a typed reset-or-exit interaction. A
-future migration-required schema follows the exclusive sequence above and keeps
-`application.db.pre-migration.bak` for manual recovery. Migration never triggers
-automatic reset or restore. Newer, unknown, corrupt, unreadable, or locked state
-stops safely and is never silently deleted. A confirmed reset runs under the
-bootstrap lock, a foreground interaction-resolution lease, and an exclusive
-cross-process state lease.
+The production migration floor is 7 and the current schema is 8. The one
+registered 7→8 step adds nullable Thread lineage while preserving existing
+Threads with `lineage = null`. Schemas 1–6 therefore produce a typed
+reset-or-exit interaction. Migration keeps
+`application.db.pre-migration.bak` for manual recovery and never triggers an
+automatic reset or restore. Newer, unknown, corrupt, unreadable, or locked
+state stops safely and is never silently deleted. A confirmed reset runs under
+the bootstrap lock, a foreground interaction-resolution lease, and an
+exclusive cross-process state lease.
 
 Failure before `ready` restores or leaves the Application-owned
 `ApplicationBootstrap` in a non-ready phase. The protocol handshake is only an
@@ -205,6 +206,21 @@ natural-language Turn:
   -> exhaustive Presenter
 ```
 
+Fork and retry use the same command boundary and exclusive foreground
+admission. The source is re-read and fingerprinted before one SQLite
+transaction materializes a prefix with new identities. Fork publishes a
+`thread_transition` only after the independent Thread exists. Retry first
+creates the independent prefix and fresh in-progress Turn, then starts the
+ordinary Turn path and returns one combined `thread_retry` payload containing
+both the transition and Operation acceptance. No checkpoint, ToolActivity, or
+ChangeSet is copied, and no old tool call is replayed.
+
+Retry Events may reach stdio before the command response. Ink therefore gates
+them before sequence reduction, applies the authoritative retry transition,
+binds the accepted Operation to the new Thread generation, and only then
+replays the buffered Events in sequence. Identity mismatch fails the protocol
+instead of projecting an Event into the old Thread.
+
 During an active Operation, only the following side-effect-free observations
 may cross the Core gate:
 
@@ -297,6 +313,11 @@ never retry automatically: the interaction defaults to Abort, while an
 explicit Retry may continue the old checkpoint and repeat the pending call.
 Changing a same-named tool contract must therefore account for checkpoint
 compatibility.
+
+This recovery Retry is distinct from `/retry [turn_id]`. Recovery may continue
+one unfinished checkpoint after explicit approval; the slash command requires
+a terminal Turn, creates a fresh Thread and Turn, and never reuses or copies the
+source checkpoint.
 
 ## Shutdown
 

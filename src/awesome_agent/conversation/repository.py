@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from pydantic import JsonValue
 
@@ -16,6 +16,12 @@ from awesome_agent.conversation.models import (
     Turn,
     TurnStatus,
 )
+
+if TYPE_CHECKING:
+    from awesome_agent.conversation.materialization import (
+        RetryPreparation,
+        ThreadMaterializationPlan,
+    )
 
 
 class ConversationError(RuntimeError):
@@ -106,6 +112,15 @@ class ConversationStore(Protocol):
         query: str,
         thread_id: str,
     ) -> bool: ...
+    async def materialize_fork(
+        self,
+        plan: ThreadMaterializationPlan,
+    ) -> ThreadView: ...
+    async def materialize_retry(
+        self,
+        plan: ThreadMaterializationPlan,
+        preparation: RetryPreparation,
+    ) -> RetryPreparation: ...
     async def read_thread(self, thread_id: str) -> ThreadView: ...
     async def read_thread_page(
         self,

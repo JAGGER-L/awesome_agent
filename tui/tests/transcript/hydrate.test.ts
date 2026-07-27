@@ -15,6 +15,7 @@ function page(): MethodValue["thread.read"] {
         title_source: "automatic",
         thinking_enabled: false,
         skill_mode: "auto",
+        lineage: null,
         created_at: now,
         updated_at: now,
       },

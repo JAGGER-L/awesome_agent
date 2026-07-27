@@ -245,11 +245,28 @@ Params are a closed `CommandIntent`:
 {"name":"mcp","arguments":["status","repository-index"]}
 ```
 
-Only the 22 Application-owned names are normally sent over this method. Ink
+Only the 26 Application-owned names are normally sent over this method. Ink
 owns `help`, `theme`, `copy`, and `quit` locally. A `CommandOutcome` contains
 exactly one branch: typed `result`, typed `interaction`, or stable command
 `error`. Exact grammar and foreground snapshot exceptions are in
 [Slash Commands](commands.md).
+
+Every Protocol v4 Thread projection has a required nullable `lineage` field.
+It is `null` for a root Thread, or a strict object with `kind` (`fork` or
+`retry`), `source_thread_id`, and `source_turn_id` for one immediate parent.
+This field records provenance only; clients must not infer a shared transcript
+DAG or fetch history through it.
+
+`thread_transition` carries one authoritative Application/Thread snapshot. Its
+`reason` is `new`, `resume`, or `fork`: `new` requires null lineage, `fork`
+requires fork lineage, and `resume` may select a root or materialized Thread. A
+plain transition with reason `retry` is invalid. Retry instead returns the
+strict combined `thread_retry` payload: a transition whose reason and lineage
+are both retry, plus an `operation` containing non-null `operation_id`,
+`thread_id`, `turn_id`, and `client_message_id`. The transition Thread must be
+the Operation Thread, and the Operation Turn must already exist in that
+transition. This atomic result prevents a surface from installing a new Thread
+without also knowing the foreground Operation it owns.
 
 The `thread_export` command result contains only `kind`, `thread_id`, `path`
 (1–1,000),
@@ -430,6 +447,16 @@ correlation IDs rather than assuming response/event arrival order across
 concurrent requests. In particular, `operation.started` for an accepted Turn or
 Direct command precedes its acceptance response, and subsequent events may
 arrive before that response is handled.
+
+The same ordering applies to `thread_retry`, but its Thread identity does not
+exist on the surface until the combined command response is installed. A v4
+surface therefore opens a local retry gate before issuing the command, buffers
+events in sequence, installs the returned transition, binds the new generation
+to the returned Operation/Thread/Turn identities, and then replays the buffer.
+The gate accepts at most 1,024 events and 4 MiB of encoded content. Capacity or
+identity violations are protocol desynchronization and must fail closed; an
+event must never be rendered on the source Thread merely because it arrived
+first.
 
 ## Concurrency and backpressure
 

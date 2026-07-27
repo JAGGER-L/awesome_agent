@@ -80,6 +80,12 @@ the query when more exist. An exhausted scan returns `result_too_large`.
 characters and whose nonempty `change_set_id` is present exactly when bytes
 changed; the exhaustive presenter does not read raw files or private metadata.
 
+`/fork` reuses `thread_transition` with reason `fork`; `/retry` uses one strict
+combined `thread_retry` payload containing both a retry transition and its
+accepted Operation. Every Thread projection carries required nullable lineage,
+so root, fork, and retry identities remain explicit across Python, fixtures,
+Zod, effects, and hydration without adding another RPC or surface model.
+
 ## Cross-language evidence
 
 Python owns serialization of method results, `CommandOutcome` variants, and
@@ -179,6 +185,16 @@ Application can return `OperationAccepted`; later lifecycle events may then
 race the matching response. The TUI installs the event consumer before issuing
 requests and treats event correlation IDs as authoritative, so early events do
 not depend on response-first buffering.
+
+Retry adds one local ordering gate because its events name a Thread the surface
+cannot install until the combined response arrives. `ConnectedSurface` opens
+the gate before `command.execute`, buffers the event stream in sequence, and
+releases it only after the authoritative retry transition has incremented the
+Thread generation and the returned Operation identity has been bound to that
+generation. The local gate is capped at 1,024 events and 4 MiB of encoded
+content. A capacity or Operation/Thread/Turn identity violation is fatal
+protocol desynchronization. A rejected retry replays valid source-Thread
+events instead of dropping them.
 
 `thread.read` first shrinks its page under its application byte budget. The
 writer is the final invariant boundary for every method and event: if any
@@ -346,7 +362,8 @@ terminal inputs. The queue is deliberately session-only:
 - each head is parsed only when promoted;
 - an empty Composer can recall the tail with Up;
 - a picker or approval pauses promotion;
-- `/new` and `/resume` change which Thread receives the following item;
+- `/new`, `/resume`, `/fork`, and `/retry` change which Thread receives the
+  following item;
 - queued `/quit` is an ordered terminal barrier;
 - a retryable busy race requeues the same identity at the head.
 
@@ -364,6 +381,11 @@ detail, duration, and error code.
 entries. Thread replacement increments a generation, clears the active frame,
 installs the authoritative Application/Thread snapshot, and rejects late events
 from the previous generation. Event sequence detects duplicates and gaps.
+
+For retry, replacement is installed before any buffered event is projected.
+The accepted Operation's start and later deltas therefore enter the new
+generation even when they arrived on stdio before the command response; they
+can never appear on the source Thread.
 
 After reconnect or resume, `thread.read` is the durable source. Live projections
 are merged by stable identity instead of appended blindly, preventing duplicate

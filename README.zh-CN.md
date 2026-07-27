@@ -22,6 +22,7 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 - 实现功能、调试问题、重构代码和运行测试；
 - 通过 `/diff`、`/undo`、`/redo` 检查和撤销受控文件修改；
 - 搜索当前 Workspace 的会话历史，并恢复匹配结果；
+- 在终态 Turn 处分叉会话，或在新的分支 Thread 中重试该 Turn；
 - 通过 Change Journal 将当前 Thread 确定性导出为 Markdown 或 JSON；
 - 继续最近的 Thread，或通过 ID 恢复指定 Thread；
 - 以确定性的文本或 JSON 输出非交互运行一个 Agent Turn；
@@ -98,6 +99,11 @@ awesome --help
 如果启动时发现未完成的 Turn，Awesome 会先询问再继续。已验证的本地 checkpoint
 默认提供 Retry；如果 shell 或 MCP 调用结果不确定，则默认提供 Abort，并且绝不会
 自动重放该外部操作。
+
+`/fork [turn_id]` 会把截至某个终态 Turn 的会话历史物化到新 Thread；
+`/retry [turn_id]` 会物化该 Turn 之前的前缀，再使用原 Turn 冻结的模型、Thinking、
+Skill 与预算重新执行其请求。两者都会创建独立记录，而不是共享历史 DAG；不会复制
+checkpoint、Tool activity 或 ChangeSet。retry 也不会重放旧工具调用或撤销既有副作用。
 
 ## 第一个任务
 

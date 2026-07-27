@@ -319,13 +319,14 @@ Memory cannot grant Tool capabilities or become a hidden provider fallback.
 ## Change storage or recovery
 
 Storage changes require more than adding a column. Determine whether absence
-has a safe interpretation under Schema 7. If not, increment schema identity and
-define product behavior for older/newer state. Add each supported upgrade as
+has a safe interpretation under the current Schema 8. If not, increment schema
+identity and define product behavior for older/newer state. Add each supported upgrade as
 one adjacent `N -> N+1` operation in the Storage-owned migration registry. The
 registry must remain a complete linear chain from its explicit floor to current;
 do not add branches, gaps, historical adapters, or migration logic outside that
-owner. Schema 7 is currently both floor and current, so production has no steps
-and Schemas 1–6 remain migration-unavailable.
+owner. The current production chain has floor 7, current 8, and one `7 -> 8`
+step that adds nullable Thread lineage; Schemas 1–6 remain
+migration-unavailable.
 
 Migration code must preserve the startup protocol: shared-lease read-only
 preflight, exclusive lease, compatibility recheck, validated WAL-aware SQLite
