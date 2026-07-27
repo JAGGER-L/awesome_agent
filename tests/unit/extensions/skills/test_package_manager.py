@@ -1133,6 +1133,34 @@ def _remove_directory_link(link: Path) -> None:
         link.unlink()
 
 
+def test_layout_rejects_linked_ancestor_without_mutating_external_target(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_text("outside", encoding="utf-8")
+    linked_ancestor = tmp_path / "linked-ancestor"
+    try:
+        _directory_link(outside, linked_ancestor)
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("directory links are unavailable")
+    manager = SkillPackageManager(
+        linked_ancestor / "home",
+        linked_ancestor / "home" / "skills",
+    )
+
+    try:
+        with pytest.raises(SkillPackageError) as raised:
+            manager.list()
+
+        assert raised.value.code == "transaction_failed"
+        assert sentinel.read_text(encoding="utf-8") == "outside"
+        assert tuple(item.name for item in outside.iterdir()) == ("sentinel.txt",)
+    finally:
+        _remove_directory_link(linked_ancestor)
+
+
 def test_pinned_root_swap_cannot_redirect_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

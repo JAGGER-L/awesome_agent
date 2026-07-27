@@ -594,7 +594,13 @@ class SkillPackageManager:
                 mount_boundary=self._skills_root,
             ):
                 pass
-        except (FileChangedError, OSError, UnsafePathError, ValueError) as error:
+        except (
+            FileChangedError,
+            OSError,
+            UnsafePathError,
+            UnsafeWorkspacePath,
+            ValueError,
+        ) as error:
             raise _transaction_failed() from error
 
     def _write_marker(
