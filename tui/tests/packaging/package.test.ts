@@ -79,7 +79,7 @@ describe("awesome package", () => {
           "--ignore-scripts",
           "--no-audit",
           "--no-fund",
-          "--prefer-offline",
+          "--offline",
           tarball,
         ],
         root,
