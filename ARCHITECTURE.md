@@ -581,7 +581,17 @@ does not import Memory or know Mem0 types.
   clipboard, session-only pending input, and local presentation preferences.
 - **Does not own:** models, LangGraph, tools, storage, Memory, Skills, or MCP.
 - **Primary files:** `protocol/jsonrpc.py`, `protocol/stdio.py`,
-  `tui/src/core/process.ts`, `tui/src/app/App.tsx`.
+  `tui/src/core/process.ts`, `tui/src/app/App.tsx`,
+  `tui/src/app/submission-coordinator.ts`, and
+  `tui/src/cli/startup-session-controller.ts`.
+
+Two session-local controllers keep asynchronous sequencing out of the React
+render tree without creating another state framework. `StartupSessionController`
+continues typed trust, state-reset, and startup Thread-selection results; it
+does not reproduce Application bootstrap phases. `SubmissionCoordinator`
+owns one input's parse, Core-admission, optimistic identity, and generation
+fence. The existing React queue still owns only pending presentation input,
+while Core remains the sole foreground execution authority.
 
 `TerminalInput.tsx` is the only keyboard subscriber. A single discriminated UI
 mode routes Enter, Escape, Tab, arrows, and global cancellation without

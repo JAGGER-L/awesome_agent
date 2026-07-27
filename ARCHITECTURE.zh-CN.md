@@ -497,7 +497,15 @@ client、使候选 generation 失效、移除该 server namespace，并发布脱
   transcript 投影、主题、剪贴板、仅会话 pending input 和本地展示偏好。
 - **不负责：** 模型、LangGraph、tool、storage、Memory、Skills 或 MCP。
 - **主要文件：** `protocol/jsonrpc.py`、`protocol/stdio.py`、
-  `tui/src/core/process.ts`、`tui/src/app/App.tsx`。
+  `tui/src/core/process.ts`、`tui/src/app/App.tsx`、
+  `tui/src/app/submission-coordinator.ts` 和
+  `tui/src/cli/startup-session-controller.ts`。
+
+两个仅属于 session 的 controller 把异步时序移出 React render tree，但不创建另一套状态
+框架。`StartupSessionController` 继续处理类型化的 trust、state reset 和启动 Thread
+selection 结果；它不复制 Application bootstrap phase。`SubmissionCoordinator` 负责单条
+输入的解析、Core 准入、乐观 identity 和 generation fence。既有 React queue 仍只拥有
+pending 展示输入，而 Core 仍是唯一的前台执行权威。
 
 `TerminalInput.tsx` 是唯一 keyboard subscriber。一个可辨识 UI mode 路由 Enter、Escape、
 Tab、方向键和全局取消，不会有相互竞争的 component listener。乐观 user message 使用

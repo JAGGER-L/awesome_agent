@@ -222,6 +222,24 @@ The distinction prevents restoring a Thread from also restoring stale UI
 controls. A new surface can adapt the same facade/events while choosing a
 different presentation model.
 
+## Session-local orchestration
+
+Two concrete controllers keep request sequencing out of large React
+components without introducing a global store or a second product runtime:
+
+- `StartupSessionController` binds one connected Surface and launch intent. It
+  continues typed trust, state-reset, and startup Thread-selection outcomes by
+  calling the existing startup protocol functions. It does not own or infer
+  Application bootstrap phases.
+- `SubmissionCoordinator` owns the transaction for one promoted terminal
+  input: parse at promotion time, capture the Thread generation, correlate an
+  optimistic `client_message_id`, request Core admission, and reject late
+  projection after a Thread replacement.
+
+Composer history, modal selection, notices, and the pending-input queue remain
+React presentation state. The coordinator never drains input independently;
+Core still admits the single foreground Operation.
+
 ## Input ownership
 
 `TerminalInput.tsx` is the only Ink `useInput` subscriber. One root key router

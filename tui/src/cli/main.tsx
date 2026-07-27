@@ -54,13 +54,7 @@ import {
   connectSurface,
   type ConnectedSurface,
 } from "../surface/controller.js";
-import {
-  beginStartup,
-  respondStartupStateReset,
-  respondStartupTrust,
-  selectStartupThread,
-  type StartupResult,
-} from "../surface/startup.js";
+import { beginStartup, type StartupResult } from "../surface/startup.js";
 import { PRODUCT_VERSION } from "../version.js";
 import {
   CLI_HELP,
@@ -74,6 +68,7 @@ import {
   resolveCoreExecutable,
   RuntimeCheckError,
 } from "./runtime-checks.js";
+import { StartupSessionController } from "./startup-session-controller.js";
 
 export type CliRenderOutcome =
   | { readonly kind: "quit"; readonly exitCode: 0 }
@@ -407,6 +402,10 @@ function RunningCliApplication({
     () => new CommandController(surface),
     [surface],
   );
+  const startupSession = useMemo(
+    () => new StartupSessionController(surface, intent),
+    [intent, surface],
+  );
   const exitController = useMemo(
     () =>
       new ExitController(surface.session, {
@@ -483,12 +482,13 @@ function RunningCliApplication({
     (decision: "trust" | "deny") => {
       if (startup.kind !== "trust_required") return;
       dispatchTerminal({ type: "mode.trust.submitting", submitting: true });
-      void respondStartupTrust(surface, intent, startup.interactionId, decision)
-        .then((result) => {
-          if (result.kind === "denied") {
-            void requestExit("trust_denied");
+      void startupSession
+        .respondTrust(startup, decision)
+        .then((outcome) => {
+          if (outcome.kind === "exit") {
+            void requestExit(outcome.reason);
           } else {
-            setStartup(result);
+            setStartup(outcome.startup);
           }
         })
         .catch((error: unknown) => {
@@ -502,7 +502,7 @@ function RunningCliApplication({
           });
         });
     },
-    [dispatchTerminal, intent, requestExit, startup, surface],
+    [dispatchTerminal, requestExit, startup, startupSession],
   );
 
   const submitStartupStateReset = useCallback(
@@ -512,17 +512,13 @@ function RunningCliApplication({
         type: "mode.state_reset.submitting",
         submitting: true,
       });
-      void respondStartupStateReset(
-        surface,
-        intent,
-        startup.interactionId,
-        decision,
-      )
-        .then((result) => {
-          if (result.kind === "denied") {
-            void requestExit("state_reset_denied");
+      void startupSession
+        .respondStateReset(startup, decision)
+        .then((outcome) => {
+          if (outcome.kind === "exit") {
+            void requestExit(outcome.reason);
           } else {
-            setStartup(result);
+            setStartup(outcome.startup);
           }
         })
         .catch((error: unknown) => {
@@ -537,7 +533,7 @@ function RunningCliApplication({
           });
         });
     },
-    [dispatchTerminal, intent, requestExit, startup, surface],
+    [dispatchTerminal, requestExit, startup, startupSession],
   );
 
   const reconnectSurface = useCallback(async () => {
@@ -627,9 +623,7 @@ function RunningCliApplication({
       ) {
         const threadId = mode.selection.options[mode.selected]?.value;
         if (!threadId) return;
-        void selectStartupThread(surface, threadId).then((thread) =>
-          setStartup({ ...startup, thread }),
-        );
+        void startupSession.selectThread(startup, threadId).then(setStartup);
       }
     },
     [
@@ -637,9 +631,9 @@ function RunningCliApplication({
       requestExit,
       reconnectSurface,
       startup,
+      startupSession,
       submitStartupStateReset,
       submitStartupTrust,
-      surface,
       terminalUiRef,
     ],
   );

@@ -6,8 +6,8 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "0bd8824cb73dba0951077fef482c9a0431c1e42ae8bc47994229b4343ab4212b",
-      "chinese_sha256": "cba1245ef19db6f17a28eb72fc3e99f725b5eec36d05d84ee6eb0eebf49f0ad7"
+      "english_sha256": "06462f9d3d9c177e465bcb6aa61046adaefb9ddc36fb9a7258d5a10ca64614ab",
+      "chinese_sha256": "536a70ecd3ce5d88dfb5fa87d1b5f3980aca6163eb111fdc4730bec6f94e3f46"
     },
     {
       "english_source": "README.md",
@@ -42,8 +42,8 @@
     {
       "english_source": "docs/architecture/protocol-and-tui.md",
       "chinese_source": "docs/architecture/protocol-and-tui.zh-CN.md",
-      "english_sha256": "484a1c255b4d55d242ca584310041e46f09411416746b1b00016a62fa24e99f5",
-      "chinese_sha256": "a0561bbd31852b629691f3c4b7d464c8d80f0e96b9d891b3d6bdb307ada5660c"
+      "english_sha256": "fa9d65aedd265aa447e1b12058d5578197de3baa36e4a7623a3ca1a6d196815d",
+      "chinese_sha256": "d77f55afd3286b21a49368e2752ee29d71c21e8e64f49b0752953b0ab5915e85"
     },
     {
       "english_source": "docs/architecture/request-lifecycles.md",

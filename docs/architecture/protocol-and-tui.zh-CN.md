@@ -192,6 +192,21 @@ Effect 与 Presenter 相互分离。Effect 可以安装权威 Thread replacement
 这种区分确保恢复 Thread 时不会同时恢复过时的 UI 控件。新界面可以适配相同的
 facade/event，同时选择不同的展示模型。
 
+## 仅属于会话的编排
+
+两个具体 controller 把请求时序移出大型 React component，同时不引入全局 store 或第二套
+产品 runtime：
+
+- `StartupSessionController` 绑定一个 connected Surface 和 launch intent。它调用既有启动
+  protocol 函数，继续处理类型化的 trust、state reset 和启动 Thread selection outcome；
+  它不拥有或推断 Application bootstrap phase。
+- `SubmissionCoordinator` 负责一条被提升终端输入的事务：在提升时解析、捕获 Thread
+  generation、关联乐观 `client_message_id`、请求 Core 准入，并在 Thread replacement 后
+  拒绝迟到投影。
+
+Composer history、modal selection、notice 和 pending-input queue 仍是 React 展示状态。
+Coordinator 不会独立 drain 输入；Core 继续只准入一个前台 Operation。
+
 ## 输入所有权
 
 `TerminalInput.tsx` 是唯一的 Ink `useInput` subscriber。唯一的根 key router 将按键分发
