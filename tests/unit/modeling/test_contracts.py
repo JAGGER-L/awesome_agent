@@ -138,6 +138,18 @@ def test_opaque_continuation_is_excluded_from_request_and_turn_dumps() -> None:
     assert "secret-provider-token" not in repr(turn)
 
 
+def test_continuation_rejects_unknown_schema_versions() -> None:
+    with pytest.raises(ValidationError):
+        ContinuationState.model_validate(
+            {
+                "provider": "deepseek",
+                "kind": "chat.reasoning_content",
+                "schema_version": 2,
+                "data": {"reasoning_content": "opaque"},
+            }
+        )
+
+
 def test_usage_addition_uses_zero_defaults() -> None:
     usage = ModelUsage(input_tokens=10, output_tokens=3, reasoning_tokens=2)
 

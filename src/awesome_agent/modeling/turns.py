@@ -32,7 +32,7 @@ class ContinuationState(BaseModel):
 
     provider: ProviderId
     kind: str = Field(min_length=1, max_length=128)
-    schema_version: int = Field(default=1, ge=1, le=32)
+    schema_version: Literal[1] = 1
     data: JsonValue
 
 
