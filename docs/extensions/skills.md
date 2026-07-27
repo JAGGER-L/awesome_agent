@@ -9,11 +9,11 @@ executable plugins, and they cannot grant tool authority.
 
 Awesome discovers three sources after workspace trust:
 
-| Source | Location | Typical owner | Strict workspace identity checks |
+| Source | Location | Typical owner | Session identity pinning |
 | --- | --- | --- | --- |
-| Bundled | inside the installed Python package | Awesome release | No |
-| User | `<AWESOME_HOME>/skills/<name>/` | Current OS user | No |
-| Workspace | `<workspace>/.awesome/skills/<name>/` | Repository/workspace | Yes |
+| Bundled | inside the installed Python package | Awesome release | Yes |
+| User | `<AWESOME_HOME>/skills/<name>/` | Current OS user | Yes |
+| Workspace | `<workspace>/.awesome/skills/<name>/` | Repository/workspace | Yes, including the trusted workspace chain |
 
 Discovery runs bundled, then user, then workspace. A later package with the
 same name shadows the earlier package and produces a diagnostic, so effective
@@ -65,16 +65,16 @@ The table gives the normative authoring types:
 | --- | --- | --- |
 | `name` | Yes | Lowercase letter followed by up to 63 lowercase letters, digits, or hyphens; exactly equals the directory name |
 | `description` | Yes | 1–500 characters |
-| `allowed-tools` | No | One string or a list of strings; descriptive metadata only |
+| `allowed-tools` | No | One string or a list of at most 128 unique tool names matching `[a-z][a-z0-9_.-]{0,199}`; descriptive metadata only |
 | `license` | No | String, at most 500 characters |
 | `compatibility` | No | String, at most 500 characters |
 | `metadata` | No | Mapping whose values are JSON-compatible |
 
-The current parser is more permissive than those normative scalar types: it
-normalizes several scalar fields and `allowed-tools` entries with `str()`, so
-values such as a numeric description or boolean list item may be accepted as
-text. Do not rely on that coercion; use strings as shown. Strict scalar
-frontmatter validation remains a runtime contract-hardening gap.
+The current parser still normalizes several non-tool scalar fields with
+`str()`, so a numeric description may be accepted as text. Do not rely on that
+coercion; use strings as shown. `allowed-tools` is additionally bounded,
+deduplicated, and name-validated so malformed metadata cannot inflate or
+destabilize the automatic catalog.
 
 The file must start with `---` YAML frontmatter. The YAML parser is bounded to
 64 levels, 4,096 nodes, and 64 aliases; recursive aliases are invalid. `SKILL.md`
@@ -93,21 +93,25 @@ large background material in resources so it is loaded only when needed.
 /skills review-api
 ```
 
-The selection is stored on the current Thread and applies to future Turns. A
-named selection loads up to 5,000 estimated tokens from that Skill body as
-mandatory system context. Skill bodies and resources can also be read lazily
-through the bounded `load_skill` and `read_skill_resource` tools. Their argument
-objects are strict and closed: unknown fields and non-string scalar substitutes
-are rejected as `invalid_arguments`.
+The selection is stored on the current Thread and applies to future Turns. The
+three modes have distinct, closed behavior:
 
-In the current release, `auto` and `off` have the same observable execution
-behavior: neither eagerly injects a named Skill, both read tools remain in the
-registry, and there is no automatic catalog selector that chooses a Skill for
-the model. The two values reserve an explicit product choice for future
-selection behavior; they must not be read as a present-day automation
-guarantee. `off` is therefore not a package isolation boundary. If a package
-must not be resolvable, disable its name in configuration or remove it from the
-relevant user source.
+| Mode | Frozen context | Model-visible Skill tools |
+| --- | --- | --- |
+| `auto` | A deterministic catalog of at most 64 effective Skills, bounded to 32 KiB and 4,096 estimated tokens | `load_skill`, `read_skill_resource` |
+| `off` | No Skill catalog or body | None |
+| `<name>` | Up to 5,000 estimated tokens from that Skill body as mandatory system context | `read_skill_resource` for that Skill only |
+
+To keep Turn preparation bounded, `auto` considers only the first 256 effective
+Skills after deterministic name sorting when selecting the final 64. The
+catalog marks itself incomplete when later candidates exist or a candidate is
+excluded by the byte or token limit.
+
+`auto` lets the model choose from the bounded catalog; it does not silently run
+a Skill. `off` is a runtime isolation boundary: even a forged call is rejected
+by hard admission before permission policy or the handler. Tool argument
+objects are strict and closed, so unknown fields and non-string scalar
+substitutes are rejected as `invalid_arguments`.
 
 ```yaml
 version: 2
@@ -126,33 +130,43 @@ starts; restart Awesome after adding, replacing, or removing a package.
 discover directories
   -> parse bounded frontmatter
   -> resolve shadowing + disabled names
+  -> pin package + SKILL.md identity
   -> immutable session catalog + diagnostics
-  -> select named Skill or call load_skill
+  -> freeze selected identities in Turn context/checkpoint
+  -> expose tools allowed by the frozen Skill mode
   -> strip frontmatter + 5,000-token bound
   -> Context Builder
 ```
 
-`allowed-tools` is returned as diagnostic metadata when a Skill loads. It does
-not filter the model's tool catalog and does not bypass or tighten
+`allowed-tools` is frozen and returned as diagnostic metadata when a Skill
+loads. It does not filter the model's tool catalog and does not bypass or tighten
 [permission policy](../reference/permission-modes.md). Put tool expectations in
 the body, but enforce real authority at the Tool Executor boundary.
+
+Skill reads use the built-in `context.read` capability. Permission modes allow
+that capability without a prompt only after hard admission proves that the
+requested package and operation occur in the Turn's frozen Skill scope. A
+Runtime rebuild, recovery, or on-disk package change cannot widen that scope;
+an identity mismatch returns `conflict`. Package changes take effect only in a
+new session.
 
 Resources use package-relative paths, reject absolute paths and `..`, and must
 be UTF-8 non-binary text no larger than 1 MiB. `read_skill_resource` returns at
 most 5,000 estimated tokens per call and reports whether truncation occurred.
 
-## Workspace Skill safety
+## Skill identity and Workspace safety
 
 Workspace packages are repository-controlled, so discovery starts from the
 trusted workspace anchor and verifies every component of `.awesome/skills`, the
 package directory, and `SKILL.md`. Symlinks, junctions, and other reparse points
 are rejected before content is accepted.
 
-The catalog records the workspace anchor and directory identities through the
-package, plus the initial `SKILL.md` identity and hash. A later body load reopens
-that pinned chain and compares the opened `SKILL.md` with the discovered file.
-Replacing the workspace, skills root, package, or `SKILL.md` therefore fails
-closed.
+Every catalog entry has a versioned identity derived from normalized descriptor
+metadata and the discovered `SKILL.md` fingerprint and content. Later admission
+and handler reads reopen the package without following links and require that
+identity. Workspace entries additionally record the workspace anchor and every
+directory identity through the package. Replacing a package or `SKILL.md`, or
+replacing the workspace chain for a Workspace Skill, therefore fails closed.
 
 A resource read revalidates the pinned chain and containment, rejects every
 symlink/junction/reparse component below the package, and uses an
@@ -163,10 +177,9 @@ observed; a nested reparse point or replacement during the checked open fails
 closed. This distinction prevents path redirection and check/open races without
 claiming that the complete package is an immutable content snapshot.
 
-These strict reparse and identity rules intentionally apply only to workspace
-sources. Bundled and user packages retain their existing compatibility
-behavior, although individual resource traversal still rejects escaping and
-symlink components.
+Bundled and User packages use the same package/`SKILL.md` identity requirement;
+Workspace packages add the stronger trusted-anchor chain. All resource
+traversal rejects escaping and symlink/reparse components.
 
 ## Diagnostics and recovery
 

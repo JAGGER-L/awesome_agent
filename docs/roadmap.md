@@ -44,8 +44,6 @@ future features and not guarantees that the limitation is desirable:
 - Skill frontmatter still normalizes several scalar values with `str()`, and
   configured disabled names permit `_` while discoverable Skill names do not.
   See [Skills](extensions/skills.md#create-a-skill).
-- Skill modes `auto` and `off` currently have the same observable behavior; no
-  automatic selector exists. See [Skill selection](extensions/skills.md#select-and-load-skills).
 - `/auth mem0` stores locally valid input without remotely verifying the Mem0
   credential; failure appears on the first cloud operation. See
   [Memory configuration](extensions/memory.md#configuration).

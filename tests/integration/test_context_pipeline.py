@@ -1,4 +1,5 @@
 import asyncio
+import copy
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
@@ -12,7 +13,11 @@ from awesome_agent.application.command_results import (
     ContextCommandPayload,
 )
 from awesome_agent.application.commands import CommandIntent, CommandName
-from awesome_agent.application.context import ApplicationContextService
+from awesome_agent.application.context import (
+    ApplicationContextService,
+    frozen_context_manifests_share_lineage,
+    frozen_context_snapshot_is_valid,
+)
 from awesome_agent.application.operations import OperationController
 from awesome_agent.application.turns import (
     TurnCoordinator,
@@ -26,11 +31,13 @@ from awesome_agent.context import (
     Mem0ContextResult,
     ThreadCompressor,
     estimate_messages,
+    estimate_text,
 )
 from awesome_agent.conversation import ConversationService, UsageSummary
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
 from awesome_agent.core.tools import ToolResult, ToolStatus
 from awesome_agent.core.workspace import resolve_workspace
+from awesome_agent.extensions.skills import SkillLoader, discover_skills
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
@@ -81,11 +88,12 @@ class SummaryGateway:
         yield TurnCompleted(turn=await self.complete(selected, request))
 
 
-def _config() -> TurnConfig:
+def _config(*, skill_mode: str = "auto") -> TurnConfig:
     return TurnConfig(
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
         budgets=BudgetConfig(),
+        skill_mode=skill_mode,
     )
 
 
@@ -954,3 +962,335 @@ async def test_compact_failure_keeps_history_and_summary_unchanged(
         model="deepseek/deepseek-v4-flash",
     )
     assert isinstance(invalid, CommandError)
+
+
+@pytest.mark.asyncio
+async def test_auto_skill_catalog_is_mandatory_bounded_and_deterministic(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    workspace_path = tmp_path / "workspace-auto-skills"
+    workspace_path.mkdir()
+    user_skills = tmp_path / "user-skills"
+    oversized = user_skills / "a-oversized"
+    oversized.mkdir(parents=True)
+    oversized_tools = ", ".join(
+        f"tool.{index:03d}.{'x' * 180}" for index in range(128)
+    )
+    (oversized / "SKILL.md").write_text(
+        "---\n"
+        "name: a-oversized\n"
+        "description: Individually valid metadata must not starve later Skills\n"
+        f"allowed-tools: [{oversized_tools}]\n"
+        "---\n"
+        "oversized catalog item\n",
+        encoding="utf-8",
+    )
+    for index in range(70):
+        name = f"skill-{index:02d}"
+        package = user_skills / name
+        package.mkdir(parents=True)
+        (package / "SKILL.md").write_text(
+            "---\n"
+            f"name: {name}\n"
+            f"description: Deterministic Skill {index:02d}\n"
+            "allowed-tools: [read_file]\n"
+            "---\n"
+            f"body {index}\n",
+            encoding="utf-8",
+        )
+    loader = SkillLoader(
+        discover_skills(
+            bundled_root=None,
+            user_root=user_skills,
+            workspace_root=None,
+            workspace_trusted=False,
+        )
+    )
+    workspace = resolve_workspace(workspace_path)
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(application_database)
+    )
+    thread = await conversation.create_thread(workspace.key)
+    turn = await conversation.begin_turn(
+        thread.id,
+        "choose a skill",
+        _config(skill_mode="auto"),
+        client_message_id="client_auto_skill_catalog",
+    )
+    context_service = ApplicationContextService(
+        conversation=conversation,
+        workspace=workspace,
+        builder=ContextBuilder(),
+        compressor=ThreadCompressor(cast(Any, SummaryGateway())),
+        configured_total_tokens=262_144,
+        model_context_limit=262_144,
+        product_instructions="product policy",
+        skill_loader=loader,
+    )
+
+    context_service.prepare_turn(turn, "choose a skill")
+    state = new_agent_state(
+        thread_id=thread.id,
+        turn_id=turn.id,
+        workspace_key=workspace.key,
+        provider=turn.provider,
+        model=turn.model,
+        thinking_enabled=turn.thinking_enabled,
+    )
+    prepared = await context_service.build(state)
+    context_service.prepare_turn(turn, "choose a skill")
+    repeated = await context_service.build(state)
+
+    catalog_indexes = [
+        index
+        for index, item in enumerate(prepared.manifest)
+        if item["kind"] == ContextSourceKind.SKILL_CATALOG
+    ]
+    assert len(catalog_indexes) == 1
+    catalog_index = catalog_indexes[0]
+    catalog = prepared.manifest[catalog_index]
+    identities = cast(list[dict[str, object]], catalog["skill_identities"])
+    catalog_content = prepared.messages[catalog_index].content.split("\n", 1)[1]
+    assert len(identities) == 64
+    identity_names = [str(item["name"]) for item in identities]
+    assert identity_names == sorted(identity_names)
+    assert "a-oversized" not in identity_names
+    assert "skill-00" in identity_names
+    assert len(catalog_content.encode("utf-8")) <= 32 * 1024
+    assert estimate_text(catalog_content) <= 4_096
+    assert '"catalog_complete":false' in catalog_content
+    assert prepared.messages[catalog_index].role == "system"
+    assert repeated.manifest == prepared.manifest
+    assert repeated.messages == prepared.messages
+
+    state["messages"] = [
+        message.model_dump(mode="json") for message in prepared.messages
+    ]
+    state["context_manifest"] = list(prepared.manifest)
+    state["context_estimated_tokens"] = prepared.estimated_input_tokens
+    state["context_effective_limit"] = prepared.effective_input_limit
+    await conversation.store_context_manifest(turn.id, prepared.manifest)
+    view = await conversation.read_thread(thread.id)
+    persisted_turn = next(item for item in view.turns if item.id == turn.id)
+    assert context_service.validate_frozen_snapshot(
+        state,
+        turn=persisted_turn,
+        view=view,
+    )
+    assert not context_service.validate_frozen_snapshot(
+        state,
+        turn=persisted_turn.model_copy(update={"skill_mode": "off"}),
+        view=view,
+    )
+
+
+@pytest.mark.asyncio
+async def test_named_and_off_skill_modes_freeze_distinct_context_shapes(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
+    workspace_path = tmp_path / "workspace-skill-modes"
+    workspace_path.mkdir()
+    user_skills = tmp_path / "named-user-skills"
+    package = user_skills / "review"
+    package.mkdir(parents=True)
+    skill_file = package / "SKILL.md"
+    skill_file.write_text(
+        "---\n"
+        "name: review\n"
+        "description: Review code\n"
+        "allowed-tools: [read_file]\n"
+        "---\n"
+        "frozen review instructions\n",
+        encoding="utf-8",
+    )
+    loader = SkillLoader(
+        discover_skills(
+            bundled_root=None,
+            user_root=user_skills,
+            workspace_root=None,
+            workspace_trusted=False,
+        )
+    )
+    workspace = resolve_workspace(workspace_path)
+    conversation = ConversationService(
+        store=SQLiteConversationRepositories(application_database)
+    )
+    context_service = ApplicationContextService(
+        conversation=conversation,
+        workspace=workspace,
+        builder=ContextBuilder(),
+        compressor=ThreadCompressor(cast(Any, SummaryGateway())),
+        configured_total_tokens=262_144,
+        model_context_limit=262_144,
+        product_instructions="product policy",
+        skill_loader=loader,
+    )
+
+    named_thread = await conversation.create_thread(workspace.key)
+    named_turn = await conversation.begin_turn(
+        named_thread.id,
+        "review this",
+        _config(skill_mode="review"),
+        client_message_id="client_named_skill",
+    )
+    context_service.prepare_turn(named_turn, "review this")
+    skill_file.write_text(
+        "---\nname: review\ndescription: Changed\n---\nchanged instructions\n",
+        encoding="utf-8",
+    )
+    named_state = new_agent_state(
+        thread_id=named_thread.id,
+        turn_id=named_turn.id,
+        workspace_key=workspace.key,
+        provider=named_turn.provider,
+        model=named_turn.model,
+        thinking_enabled=named_turn.thinking_enabled,
+    )
+    named = await context_service.build(named_state)
+    named_items = [
+        item for item in named.manifest if item["kind"] == ContextSourceKind.SKILL
+    ]
+    assert len(named_items) == 1
+    frozen_identities = cast(
+        list[dict[str, object]], named_items[0]["skill_identities"]
+    )
+    assert len(frozen_identities) == 1
+    assert frozen_identities[0]["name"] == "review"
+    assert any("frozen review instructions" in item.content for item in named.messages)
+    assert all("changed instructions" not in item.content for item in named.messages)
+
+    named_state["messages"] = [
+        message.model_dump(mode="json") for message in named.messages
+    ]
+    named_state["context_manifest"] = list(named.manifest)
+    named_state["context_estimated_tokens"] = named.estimated_input_tokens
+    named_state["context_effective_limit"] = named.effective_input_limit
+    await conversation.store_context_manifest(named_turn.id, named.manifest)
+    named_view = await conversation.read_thread(named_thread.id)
+    persisted_named = next(
+        item for item in named_view.turns if item.id == named_turn.id
+    )
+    assert context_service.validate_frozen_snapshot(
+        named_state,
+        turn=persisted_named,
+        view=named_view,
+    )
+    legacy_named_manifest = copy.deepcopy(list(named.manifest))
+    legacy_named_item = next(
+        item
+        for item in legacy_named_manifest
+        if item["kind"] == ContextSourceKind.SKILL
+    )
+    legacy_named_item["skill_identities"] = []
+    legacy_named_state = copy.deepcopy(named_state)
+    legacy_named_state["context_manifest"] = legacy_named_manifest
+    legacy_named_turn = persisted_named.model_copy(
+        update={"context_manifest": tuple(legacy_named_manifest)}
+    )
+
+    assert not frozen_context_snapshot_is_valid(
+        legacy_named_state,
+        turn=legacy_named_turn,
+        view=named_view,
+    )
+    assert frozen_context_snapshot_is_valid(
+        legacy_named_state,
+        turn=legacy_named_turn,
+        view=named_view,
+        allow_legacy_skill_snapshot=True,
+    )
+    assert context_service.validate_frozen_snapshot(
+        legacy_named_state,
+        turn=legacy_named_turn,
+        view=named_view,
+    )
+    rebuilt_legacy_named = await context_service._build_from_frozen(
+        legacy_named_state
+    )
+    assert any(
+        "frozen review instructions" in item.content
+        for item in rebuilt_legacy_named.messages
+    )
+    rebuilt_legacy_item = next(
+        item
+        for item in rebuilt_legacy_named.manifest
+        if item["kind"] == ContextSourceKind.SKILL
+    )
+    assert rebuilt_legacy_item["skill_identities"] == []
+
+    restarted = ApplicationContextService(
+        conversation=conversation,
+        workspace=workspace,
+        builder=ContextBuilder(),
+        compressor=ThreadCompressor(cast(Any, SummaryGateway())),
+        configured_total_tokens=262_144,
+        model_context_limit=262_144,
+        product_instructions="changed policy",
+    )
+    rebuilt = await restarted._build_from_frozen(named_state)
+    assert rebuilt.manifest == named.manifest
+    changed_manifest = copy.deepcopy(list(named.manifest))
+    changed_skill = cast(
+        list[dict[str, object]],
+        next(
+            item["skill_identities"]
+            for item in changed_manifest
+            if item["kind"] == ContextSourceKind.SKILL
+        ),
+    )
+    changed_skill[0]["identity"] = f"skill-v1-sha256:{'f' * 64}"
+    assert not frozen_context_manifests_share_lineage(
+        tuple(changed_manifest),
+        named.manifest,
+    )
+
+    off_thread = await conversation.create_thread(workspace.key)
+    off_turn = await conversation.begin_turn(
+        off_thread.id,
+        "no skills",
+        _config(skill_mode="off"),
+        client_message_id="client_skill_off",
+    )
+    context_service.prepare_turn(off_turn, "no skills")
+    off_state = new_agent_state(
+        thread_id=off_thread.id,
+        turn_id=off_turn.id,
+        workspace_key=workspace.key,
+        provider=off_turn.provider,
+        model=off_turn.model,
+        thinking_enabled=off_turn.thinking_enabled,
+    )
+    off = await context_service.build(off_state)
+    assert not any(
+        item["kind"] in {ContextSourceKind.SKILL, ContextSourceKind.SKILL_CATALOG}
+        for item in off.manifest
+    )
+    off_state["messages"] = [
+        message.model_dump(mode="json") for message in off.messages
+    ]
+    off_state["context_manifest"] = list(off.manifest)
+    off_state["context_estimated_tokens"] = off.estimated_input_tokens
+    off_state["context_effective_limit"] = off.effective_input_limit
+    await conversation.store_context_manifest(off_turn.id, off.manifest)
+    off_view = await conversation.read_thread(off_thread.id)
+    persisted_off = next(item for item in off_view.turns if item.id == off_turn.id)
+    legacy_auto = persisted_off.model_copy(update={"skill_mode": "auto"})
+
+    assert not frozen_context_snapshot_is_valid(
+        off_state,
+        turn=legacy_auto,
+        view=off_view,
+    )
+    assert frozen_context_snapshot_is_valid(
+        off_state,
+        turn=legacy_auto,
+        view=off_view,
+        allow_legacy_skill_snapshot=True,
+    )
+    assert context_service.validate_frozen_snapshot(
+        off_state,
+        turn=legacy_auto,
+        view=off_view,
+    )

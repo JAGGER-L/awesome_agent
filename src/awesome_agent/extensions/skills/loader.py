@@ -23,7 +23,8 @@ from awesome_agent.core.workspace.path_syntax import (
 from awesome_agent.extensions.skills.models import (
     SkillCatalog,
     SkillDescriptor,
-    _WorkspaceSkillBoundary,
+    SkillIdentitySnapshot,
+    _SkillBoundary,
 )
 
 _MAX_RESOURCE_BYTES = 1024 * 1024
@@ -71,33 +72,28 @@ class SkillLoader:
     def __init__(self, catalog: SkillCatalog) -> None:
         self._catalog = catalog
 
-    def admit_load(self, name: str) -> None:
-        descriptor = self._catalog.resolve(name)
-        boundary = self._catalog._workspace_boundary(name)
-        if boundary is None:
-            try:
-                with PinnedPlainDirectory(descriptor.root, descriptor.root) as pinned:
-                    _preflight_regular_file(pinned, Path("SKILL.md"))
-            except SkillResourceError:
-                raise
-            except FileNotFoundError as error:
-                raise SkillResourceError(
-                    "Skill was not found.",
-                    kind=SkillResourceErrorKind.NOT_FOUND,
-                ) from error
-            except (FileChangedError, OSError, UnsafePathError, ValueError) as error:
-                raise SkillResourceError(
-                    "Skill could not be opened safely.",
-                    kind=SkillResourceErrorKind.PERMISSION_DENIED,
-                ) from error
-            return
+    def descriptors(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> tuple[SkillDescriptor, ...]:
+        return self._catalog.descriptors(limit=limit)
+
+    def identity_snapshot(self, name: str) -> SkillIdentitySnapshot:
+        return self._catalog.identity_snapshot(name)
+
+    def identity_snapshots(
+        self,
+        *,
+        limit: int | None = None,
+    ) -> tuple[SkillIdentitySnapshot, ...]:
+        return self._catalog.identity_snapshots(limit=limit)
+
+    def admit_load(self, name: str, *, expected_identity: str) -> None:
+        _, boundary = self._target(name, expected_identity=expected_identity)
         try:
-            with _pinned_workspace_package(boundary) as pinned:
-                _preflight_regular_file(
-                    pinned,
-                    Path("SKILL.md"),
-                    expected=boundary.skill_file_fingerprint,
-                )
+            with _pinned_skill_package(boundary) as pinned:
+                _read_pinned_skill_file(pinned, boundary)
         except SkillResourceError:
             raise
         except FileNotFoundError as error:
@@ -107,26 +103,28 @@ class SkillLoader:
             ) from error
         except FileChangedError as error:
             raise SkillResourceError(
-                "Workspace Skill changed after discovery.",
+                "Skill changed after discovery.",
                 kind=SkillResourceErrorKind.CONFLICT,
             ) from error
         except (OSError, UnsafePathError, ValueError) as error:
             raise SkillResourceError(
-                "Workspace Skill could not be opened safely.",
+                "Skill could not be opened safely.",
                 kind=SkillResourceErrorKind.PERMISSION_DENIED,
             ) from error
 
-    def admit_resource(self, name: str, relative_path: str) -> None:
-        descriptor = self._catalog.resolve(name)
+    def admit_resource(
+        self,
+        name: str,
+        relative_path: str,
+        *,
+        expected_identity: str,
+    ) -> None:
+        _, boundary = self._target(name, expected_identity=expected_identity)
         requested = _resource_path(relative_path)
-        boundary = self._catalog._workspace_boundary(name)
         try:
-            if boundary is None:
-                with PinnedPlainDirectory(descriptor.root, descriptor.root) as pinned:
-                    _preflight_regular_file(pinned, requested)
-            else:
-                with _pinned_workspace_package(boundary) as pinned:
-                    _preflight_regular_file(pinned, requested)
+            with _pinned_skill_package(boundary) as pinned:
+                _read_pinned_skill_file(pinned, boundary)
+                _preflight_regular_file(pinned, requested)
         except SkillResourceError:
             raise
         except FileNotFoundError as error:
@@ -136,7 +134,7 @@ class SkillLoader:
             ) from error
         except FileChangedError as error:
             raise SkillResourceError(
-                "Workspace Skill changed after discovery.",
+                "Skill changed after discovery.",
                 kind=SkillResourceErrorKind.CONFLICT,
             ) from error
         except (OSError, UnsafePathError, ValueError) as error:
@@ -145,46 +143,39 @@ class SkillLoader:
                 kind=SkillResourceErrorKind.PERMISSION_DENIED,
             ) from error
 
-    def load(self, name: str, *, token_limit: int = 5_000) -> LoadedSkill:
-        descriptor = self._catalog.resolve(name)
-        boundary = self._catalog._workspace_boundary(name)
-        if boundary is None:
-            text = _read_standard_resource(Path("SKILL.md"), descriptor.root)
-        else:
-            try:
-                with _pinned_workspace_package(boundary) as pinned:
-                    bounded = pinned.read_file(
-                        Path("SKILL.md"),
-                        max_bytes=_MAX_RESOURCE_BYTES,
-                        expected=boundary.skill_file_fingerprint,
-                    )
-                    if (
-                        sha256(bounded.data).hexdigest()
-                        != boundary.skill_file_content_hash
-                    ):
-                        raise FileChangedError(
-                            "SKILL.md content changed after discovery."
-                        )
-                    text = _decode_text(bounded.data)
-            except FileChangedError as error:
-                raise SkillResourceError(
-                    "Workspace Skill changed after discovery.",
-                    kind=SkillResourceErrorKind.CONFLICT,
-                ) from error
-            except FileNotFoundError as error:
-                raise SkillResourceError(
-                    "Skill was not found.",
-                    kind=SkillResourceErrorKind.NOT_FOUND,
-                ) from error
-            except (OSError, UnsafePathError) as error:
-                raise SkillResourceError(
-                    "Workspace Skill could not be read safely.",
-                    kind=SkillResourceErrorKind.PERMISSION_DENIED,
-                ) from error
-            except (FileTooLargeError, UnicodeError, ValueError) as error:
-                raise SkillResourceError(
-                    "Workspace Skill content is invalid."
-                ) from error
+    def load(
+        self,
+        name: str,
+        *,
+        expected_identity: str,
+        token_limit: int = 5_000,
+    ) -> LoadedSkill:
+        descriptor, boundary = self._target(
+            name,
+            expected_identity=expected_identity,
+        )
+        try:
+            with _pinned_skill_package(boundary) as pinned:
+                text = _decode_text(_read_pinned_skill_file(pinned, boundary))
+        except SkillResourceError:
+            raise
+        except FileChangedError as error:
+            raise SkillResourceError(
+                "Skill changed after discovery.",
+                kind=SkillResourceErrorKind.CONFLICT,
+            ) from error
+        except FileNotFoundError as error:
+            raise SkillResourceError(
+                "Skill was not found.",
+                kind=SkillResourceErrorKind.NOT_FOUND,
+            ) from error
+        except (OSError, UnsafePathError) as error:
+            raise SkillResourceError(
+                "Skill could not be read safely.",
+                kind=SkillResourceErrorKind.PERMISSION_DENIED,
+            ) from error
+        except (FileTooLargeError, UnicodeError, ValueError) as error:
+            raise SkillResourceError("Skill content is invalid.") from error
         parts = text.split("---", 2)
         if len(parts) != 3:
             raise SkillResourceError("SKILL.md frontmatter is incomplete.")
@@ -201,15 +192,48 @@ class SkillLoader:
         name: str,
         relative_path: str,
         *,
+        expected_identity: str,
         token_limit: int,
     ) -> SkillResource:
-        descriptor = self._catalog.resolve(name)
+        _, boundary = self._target(name, expected_identity=expected_identity)
         requested = _resource_path(relative_path)
-        boundary = self._catalog._workspace_boundary(name)
-        if boundary is None:
-            content = _read_standard_resource(requested, descriptor.root)
-        else:
-            content = _read_workspace_resource(requested, boundary)
+        try:
+            with _pinned_skill_package(boundary) as pinned:
+                _read_pinned_skill_file(pinned, boundary)
+                content = _decode_text(
+                    pinned.read_file(
+                        requested,
+                        max_bytes=_MAX_RESOURCE_BYTES,
+                    ).data
+                )
+        except SkillResourceError:
+            raise
+        except FileChangedError as error:
+            raise SkillResourceError(
+                "Skill changed after discovery.",
+                kind=SkillResourceErrorKind.CONFLICT,
+            ) from error
+        except FileTooLargeError as error:
+            raise SkillResourceError(
+                "Skill resource exceeds the 1 MiB limit."
+            ) from error
+        except UnicodeDecodeError as error:
+            raise SkillResourceError("Skill resource is not UTF-8 text.") from error
+        except (FileNotFoundError, NotADirectoryError) as error:
+            raise SkillResourceError(
+                "Skill resource was not found.",
+                kind=SkillResourceErrorKind.NOT_FOUND,
+            ) from error
+        except UnsafePathError as error:
+            raise SkillResourceError(
+                "Skill resources cannot traverse links or reparse points.",
+                kind=SkillResourceErrorKind.PERMISSION_DENIED,
+            ) from error
+        except OSError as error:
+            raise SkillResourceError(
+                "Skill resource could not be opened safely.",
+                kind=SkillResourceErrorKind.PERMISSION_DENIED,
+            ) from error
         bounded, truncated = _bounded(content, token_limit)
         return SkillResource(
             skill_name=name,
@@ -219,92 +243,65 @@ class SkillLoader:
             truncated=truncated,
         )
 
-
-def _read_standard_resource(relative: Path, root: Path) -> str:
-    try:
-        with PinnedPlainDirectory(root, root) as pinned:
-            bounded = pinned.read_file(relative, max_bytes=_MAX_RESOURCE_BYTES)
-            return _decode_text(bounded.data)
-    except SkillResourceError:
-        raise
-    except FileChangedError as error:
-        raise SkillResourceError(
-            "Skill resource changed while it was being read.",
-            kind=SkillResourceErrorKind.CONFLICT,
-        ) from error
-    except FileTooLargeError as error:
-        raise SkillResourceError("Skill resource exceeds the 1 MiB limit.") from error
-    except UnicodeDecodeError as error:
-        raise SkillResourceError("Skill resource is not UTF-8 text.") from error
-    except (FileNotFoundError, NotADirectoryError) as error:
-        raise SkillResourceError(
-            "Skill resource was not found.",
-            kind=SkillResourceErrorKind.NOT_FOUND,
-        ) from error
-    except (OSError, UnsafePathError, ValueError) as error:
-        raise SkillResourceError(
-            "Skill resource could not be opened safely.",
-            kind=SkillResourceErrorKind.PERMISSION_DENIED,
-        ) from error
-
-
-def _read_workspace_resource(
-    relative: Path,
-    boundary: _WorkspaceSkillBoundary,
-) -> str:
-    try:
-        with _pinned_workspace_package(boundary) as pinned:
-            bounded = pinned.read_file(
-                relative,
-                max_bytes=_MAX_RESOURCE_BYTES,
+    def _target(
+        self,
+        name: str,
+        *,
+        expected_identity: str,
+    ) -> tuple[SkillDescriptor, _SkillBoundary]:
+        descriptor = self._catalog.resolve(name)
+        snapshot = self._catalog.identity_snapshot(name)
+        if snapshot.identity != expected_identity:
+            raise SkillResourceError(
+                "Skill identity does not match the frozen Turn snapshot.",
+                kind=SkillResourceErrorKind.CONFLICT,
             )
-            return _decode_text(bounded.data)
-    except FileChangedError as error:
-        raise SkillResourceError(
-            "Workspace Skill changed after discovery.",
-            kind=SkillResourceErrorKind.CONFLICT,
-        ) from error
-    except FileTooLargeError as error:
-        raise SkillResourceError("Skill resource exceeds the 1 MiB limit.") from error
-    except UnicodeDecodeError as error:
-        raise SkillResourceError("Skill resource is not UTF-8 text.") from error
-    except (FileNotFoundError, NotADirectoryError) as error:
-        raise SkillResourceError(
-            "Skill resource was not found.",
-            kind=SkillResourceErrorKind.NOT_FOUND,
-        ) from error
-    except OSError as error:
-        raise SkillResourceError(
-            "Skill resource could not be opened safely.",
-            kind=SkillResourceErrorKind.PERMISSION_DENIED,
-        ) from error
-    except UnsafePathError as error:
-        raise SkillResourceError(
-            "Skill resources cannot traverse links or reparse points.",
-            kind=SkillResourceErrorKind.PERMISSION_DENIED,
-        ) from error
+        boundary = self._catalog._boundary(name)
+        if boundary is None:
+            raise SkillResourceError(
+                "Skill identity is unavailable.",
+                kind=SkillResourceErrorKind.CONFLICT,
+            )
+        return descriptor, boundary
 
 
-def _pinned_workspace_package(
-    boundary: _WorkspaceSkillBoundary,
-) -> PinnedPlainDirectory:
+def _read_pinned_skill_file(
+    pinned: PinnedPlainDirectory,
+    boundary: _SkillBoundary,
+) -> bytes:
+    _preflight_regular_file(
+        pinned,
+        Path("SKILL.md"),
+        expected=boundary.skill_file_fingerprint,
+    )
+    bounded = pinned.read_file(
+        Path("SKILL.md"),
+        max_bytes=_MAX_RESOURCE_BYTES,
+        expected=boundary.skill_file_fingerprint,
+    )
+    if sha256(bounded.data).hexdigest() != boundary.skill_file_content_hash:
+        raise FileChangedError("SKILL.md content changed after discovery.")
+    return bounded.data
+
+
+def _pinned_skill_package(boundary: _SkillBoundary) -> PinnedPlainDirectory:
     try:
-        root_relative = boundary.skills_root.relative_to(boundary.workspace_anchor)
-        package_relative = boundary.package_root.relative_to(boundary.workspace_anchor)
-        boundary.package_root.relative_to(boundary.skills_root)
+        root_relative = boundary.source_root.relative_to(boundary.anchor)
+        package_relative = boundary.package_root.relative_to(boundary.anchor)
+        boundary.package_root.relative_to(boundary.source_root)
     except ValueError as error:
-        raise UnsafePathError("Workspace Skill escapes its trusted anchor.") from error
+        raise UnsafePathError("Skill escapes its trusted source root.") from error
     identities = boundary.package_component_identities
     root_index = len(root_relative.parts)
     if (
         len(identities) != len(package_relative.parts) + 1
-        or identities[0] != boundary.workspace_anchor_identity
-        or identities[root_index] != boundary.skills_root_identity
+        or identities[0] != boundary.anchor_identity
+        or identities[root_index] != boundary.source_root_identity
         or identities[-1] != boundary.package_root_identity
     ):
-        raise FileChangedError("Workspace Skill boundary is inconsistent.")
+        raise FileChangedError("Skill boundary is inconsistent.")
     return PinnedPlainDirectory(
-        boundary.workspace_anchor,
+        boundary.anchor,
         boundary.package_root,
         expected_identities=identities,
     )
@@ -355,7 +352,14 @@ def _preflight_regular_file(
             kind=SkillResourceErrorKind.INVALID_ARGUMENTS,
         )
     with pinned.descend(Path(*parts[:-1])):
-        info = pinned.child_status(parts[-1])
+        try:
+            info = pinned.child_status(parts[-1])
+        except FileNotFoundError as error:
+            if expected is not None:
+                raise FileChangedError(
+                    "Skill file disappeared after discovery."
+                ) from error
+            raise
         attributes = int(getattr(info, "st_file_attributes", 0))
         reparse = bool(
             attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
@@ -370,17 +374,17 @@ def _preflight_regular_file(
                 "Skill resource is not a plain regular file.",
                 kind=SkillResourceErrorKind.PERMISSION_DENIED,
             )
-        if int(info.st_size) > _MAX_RESOURCE_BYTES:
-            raise SkillResourceError("Skill resource exceeds the 1 MiB limit.")
         if expected is not None and (
             file_identity(info) != expected.identity
             or int(info.st_size) != expected.size
             or int(info.st_mtime_ns) != expected.modified_ns
         ):
             raise SkillResourceError(
-                "Workspace Skill changed after discovery.",
+                "Skill changed after discovery.",
                 kind=SkillResourceErrorKind.CONFLICT,
             )
+        if int(info.st_size) > _MAX_RESOURCE_BYTES:
+            raise SkillResourceError("Skill resource exceeds the 1 MiB limit.")
 
 
 def _bounded(content: str, token_limit: int) -> tuple[str, bool]:

@@ -44,6 +44,7 @@ _ALWAYS_MANDATORY = frozenset(
         ContextSourceKind.PRODUCT_INSTRUCTIONS,
         ContextSourceKind.WORKSPACE_INSTRUCTIONS,
         ContextSourceKind.SKILL,
+        ContextSourceKind.SKILL_CATALOG,
         ContextSourceKind.EXPLICIT_PATH,
         ContextSourceKind.CURRENT_INPUT,
         ContextSourceKind.OPEN_TOOL_CHAIN,
@@ -164,6 +165,7 @@ class ContextBuilder:
                     content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
                     covered_sequence_start=source.covered_sequence_start,
                     covered_sequence_end=source.covered_sequence_end,
+                    skill_identities=source.skill_identities,
                 )
             )
         estimated = estimate_messages(tuple(messages))
@@ -386,6 +388,7 @@ def _message(source: ContextSource, content: str) -> ModelMessage:
     if source.role == "system" or source.kind in {
         ContextSourceKind.PRODUCT_INSTRUCTIONS,
         ContextSourceKind.WORKSPACE_INSTRUCTIONS,
+        ContextSourceKind.SKILL_CATALOG,
     }:
         return SystemMessage(content=rendered)
     if source.role == "assistant":

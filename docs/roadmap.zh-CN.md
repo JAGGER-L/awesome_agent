@@ -37,8 +37,6 @@ Awesome 目前提供：
 
 - Skill frontmatter 仍会使用 `str()` 规范化多个标量值，并且配置允许被禁用名称包含 `_`，
   而可发现 Skill 的名称不允许。参见 [Skills](extensions/skills.zh-CN.md#创建-skill)。
-- Skill 模式 `auto` 与 `off` 当前具有相同的可观察行为；尚不存在自动选择器。参见
-  [Skill 选择](extensions/skills.zh-CN.md#选择和加载-skills)。
 - `/auth mem0` 会保存本地格式有效的输入，而不远程验证 Mem0 凭据；失败会在第一次
   云操作时出现。参见 [Memory 配置](extensions/memory.zh-CN.md#配置)。
 

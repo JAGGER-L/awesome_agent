@@ -597,16 +597,24 @@ parallel output object for ordinary file changes.
 
 ### Skills and MCP
 
-- **Responsibility:** discover trusted bundled/user/workspace Skills, load
-  bounded instructions, connect configured MCP stdio servers, and adapt MCP
-  tools into the shared registry.
+- **Responsibility:** discover bundled/user/trusted-workspace Skills, assign and
+  verify immutable session identities, load bounded instructions, connect
+  configured MCP stdio servers, and adapt extension tools into the shared
+  registry.
 - **Does not own:** permissions or an alternate execution path.
 - **Primary files:** `extensions/skills/discovery.py`,
   `extensions/skills/loader.py`, `extensions/mcp/manager.py`,
   `extensions/mcp/adapter.py`.
 
-Workspace Skill paths and opened identities are revalidated without following
-links or reparse points; one invalid package remains an isolated diagnostic.
+Every effective Skill freezes a versioned package/`SKILL.md` identity. The
+Turn manifest and checkpoint retain the identities selected by `auto` or a
+named mode; `off` retains none. Model-visible Skill tools are filtered by that
+frozen mode, and `context.read` hard admission verifies the operation and
+identity before policy and again before content is returned. Workspace Skill
+paths additionally revalidate the complete trusted-anchor chain without
+following links or reparse points. One invalid package remains an isolated
+diagnostic, and Runtime rebuild or package drift cannot widen a recovering
+Turn's Skill scope.
 MCP consumes the complete paginated catalog under page, tool-count, byte, and
 deadline bounds, then compiles its JSON Schemas and complete namespaced tool
 names before building every generation-bound Registry entry. While holding the

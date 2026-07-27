@@ -7,11 +7,11 @@ Journal capture, timeouts, or OS isolation.
 
 ## Exact matrix
 
-| Mode | Workspace read | Create/modify | Delete | Shell | Network read | MCP/unknown extension |
-| --- | --- | --- | --- | --- | --- | --- |
-| Request approval | Allow | Ask | Ask | Ask | Ask | Ask |
-| Accept edits | Allow | Allow | Ask | Ask | Ask | Ask |
-| Full access | Allow | Allow | Allow | Allow | Ask | Ask |
+| Mode | Workspace read | Frozen Skill context read | Create/modify | Delete | Shell | Network read | MCP/unknown extension |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Request approval | Allow | Allow after hard admission | Ask | Ask | Ask | Ask | Ask |
+| Accept edits | Allow | Allow after hard admission | Allow | Ask | Ask | Ask | Ask |
+| Full access | Allow | Allow after hard admission | Allow | Allow | Allow | Ask | Ask |
 
 The matrix applies to Agent tool calls in the selected Thread permission
 session. A direct `! command` is explicit authority for that exact command and
@@ -55,14 +55,20 @@ Tool safety is split across admission and the concrete handler. Before an
 approval can be requested, Core performs:
 
 1. registry lookup and registered Pydantic/schema validation;
-2. lexical path-syntax checks for the built-in path tools;
-3. the shell circuit breaker against the requested lexical working directory;
-4. capability policy: a valid temporary grant, then the current mode matrix;
-5. one interaction bound to the Tool call when the result is `ask`.
+2. registration-owned hard admission, including lexical path checks, the shell
+   circuit breaker, and frozen Skill identity/scope checks;
+3. capability policy: a valid temporary grant, then the current mode matrix;
+4. one interaction bound to the Tool call when the result is `ask`.
 
 `network.read` is an explicit matrix exception: without a current Thread grant,
 it returns `ask` in all three modes. A permission mode cannot silently authorize
 transmission of a Search query or requested Fetch URL to Tavily.
+
+`context.read` is the opposite kind of exception: policy returns `allow` in all
+three modes only after Skill admission proves that the package identity and
+operation are present in the Turn's frozen context scope. `off`, a different
+Skill name, a changed package, Direct execution, or a forged checkpoint is
+denied before policy and never produces an approval prompt.
 
 After admission, but before the effect, the handler applies backend-specific
 checks. Filesystem handlers resolve containment, link/reparse state, object

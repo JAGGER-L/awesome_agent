@@ -115,6 +115,49 @@ async def _trusted_application(
     return application, backend
 
 
+def test_legacy_auto_snapshot_hides_skill_tools() -> None:
+    legacy_manifest: tuple[dict[str, Any], ...] = (
+        {
+            "kind": "product_instructions",
+            "source_id": "product",
+            "order": 0,
+            "estimated_tokens": 1,
+            "truncated": False,
+            "content_hash": "a" * 64,
+            "covered_sequence_start": None,
+            "covered_sequence_end": None,
+        },
+    )
+
+    assert composition._skill_tool_catalog_mode((), skill_mode="auto") == "auto"
+    assert (
+        composition._skill_tool_catalog_mode(
+            legacy_manifest,
+            skill_mode="auto",
+        )
+        == "off"
+    )
+    legacy_named_manifest: tuple[dict[str, Any], ...] = (
+        {
+            "kind": "skill",
+            "source_id": "review",
+            "order": 0,
+            "estimated_tokens": 1,
+            "truncated": False,
+            "content_hash": "b" * 64,
+            "covered_sequence_start": None,
+            "covered_sequence_end": None,
+        },
+    )
+    assert (
+        composition._skill_tool_catalog_mode(
+            legacy_named_manifest,
+            skill_mode="review",
+        )
+        == "off"
+    )
+
+
 @pytest.mark.asyncio
 async def test_composed_application_flushes_strict_session_diagnostics(
     tmp_path: Path,
@@ -1103,7 +1146,95 @@ async def test_activation_passes_union_of_disabled_skills_to_discovery(
 
     assert initialized.ok is True
     assert discovered == [{"user_only", "workspace_only", "shared"}]
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+    initial_catalog = backend._skill_catalog
+    late_package = AwesomePaths.from_home(home).skills_dir / "late-skill"
+    late_package.mkdir(parents=True)
+    (late_package / "SKILL.md").write_text(
+        "---\n"
+        "name: late-skill\n"
+        "description: Installed after this Core session started\n"
+        "---\n"
+        "late instructions\n",
+        encoding="utf-8",
+    )
+
+    await backend._apply_web_configuration(backend._load_provider_configuration())
+
+    assert discovered == [{"user_only", "workspace_only", "shared"}]
+    assert backend._skill_catalog is initial_catalog
+    assert initial_catalog is not None
+    assert all(item.name != "late-skill" for item in initial_catalog.descriptors())
     await application.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_skill_discovery_is_reused_and_drained(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application, backend = await _trusted_application(tmp_path)
+    application_config = backend._load_provider_configuration()[1]
+    original_discovery = discover_skills
+    started = threading.Event()
+    release = threading.Event()
+    counter_lock = threading.Lock()
+    calls = 0
+    active = 0
+    max_active = 0
+
+    def blocking_discovery(**kwargs: Any) -> SkillCatalog:
+        nonlocal active, calls, max_active
+        with counter_lock:
+            calls += 1
+            active += 1
+            max_active = max(max_active, active)
+        started.set()
+        try:
+            if not release.wait(timeout=5):
+                raise TimeoutError("Skill discovery fixture was not released.")
+            return original_discovery(**kwargs)
+        finally:
+            with counter_lock:
+                active -= 1
+
+    monkeypatch.setattr(composition, "discover_skills", blocking_discovery)
+    first = asyncio.create_task(backend._session_skill_catalog(application_config))
+    second: asyncio.Task[SkillCatalog] | None = None
+    shutdown: asyncio.Task[Any] | None = None
+    try:
+        assert await asyncio.wait_for(asyncio.to_thread(started.wait, 1), timeout=2)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        second = asyncio.create_task(
+            backend._session_skill_catalog(application_config)
+        )
+        await asyncio.sleep(0.05)
+        assert calls == 1
+        assert max_active == 1
+        assert not second.done()
+
+        shutdown = asyncio.create_task(application.shutdown())
+        await asyncio.sleep(0.05)
+        assert not shutdown.done()
+        release.set()
+
+        catalog = await asyncio.wait_for(second, timeout=2)
+        stopped = await asyncio.wait_for(shutdown, timeout=2)
+        assert catalog is backend._skill_catalog
+        assert stopped.ok is True
+        assert calls == 1
+        assert max_active == 1
+    finally:
+        release.set()
+        if not first.done():
+            first.cancel()
+        if second is not None and not second.done():
+            second.cancel()
+        if shutdown is None or not shutdown.done():
+            await application.shutdown()
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from awesome_agent.extensions.skills.models import (
     SkillCatalog,
     SkillDescriptor,
     SkillDiagnostic,
+    SkillIdentitySnapshot,
     SkillNotFound,
     SkillSource,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "SkillCatalog",
     "SkillDescriptor",
     "SkillDiagnostic",
+    "SkillIdentitySnapshot",
     "SkillLoader",
     "SkillNotFound",
     "SkillResource",

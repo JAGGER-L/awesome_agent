@@ -34,7 +34,7 @@ Context 代码不能导入 Application 或提供商实现。Agent 代码不能�
 
 1. 产品指令；
 2. 工作区根指令；
-3. 已选择的 Skill；
+3. 有界自动 Skill catalog 或一个已选择的 Skill；
 4. 用户 memory；
 5. 工作区 memory；
 6. Mem0 recall；
@@ -47,10 +47,11 @@ Context 代码不能导入 Application 或提供商实现。Agent 代码不能�
 顺序具有语义。指令必须先于对话；summary 不得改变直接命令的顺序；当前输入必须是普通
 基础来源中的最后一个。因此，改变 enum 顺序就会改变提示词行为与冻结 manifest 的校验。
 
-以下来源一经选中即为 mandatory：产品和模型身份、工作区指令、已选择的 Skill、显式
-路径、当前输入，以及未闭合的工具链。系统绝不会为了让提示词容纳它们而静默截断。
-如果 mandatory 来源加预留上下文超过生效输入上限，Turn 会以 context overflow 失败，
-而不会改变指令含义或丢弃工具 observation。
+以下来源一经选中即为 mandatory：产品和模型身份、工作区指令、有界自动 Skill catalog
+或已选择的 Skill、显式路径、当前输入，以及未闭合的工具链。系统绝不会为了让提示词容纳
+它们而静默截断；Skill catalog 在成为 mandatory 前已受边界约束。如果 mandatory 来源加
+预留上下文超过生效输入上限，Turn 会以 context overflow 失败，而不会改变指令含义或
+丢弃工具 observation。
 
 ## 预算计算
 
@@ -75,6 +76,8 @@ Context 代码不能导入 Application 或提供商实现。Agent 代码不能�
 
 每个保留的来源都会生成一个 `ContextManifestItem`，其中包含 kind、source ID、顺序、
 估算 token、截断状态、SHA-256 内容哈希，以及它所覆盖的 transcript 序列范围（如有）。
+Skill 来源还携带严格的版本化 package identity tuple 与说明性 `allowed-tools` 值。该 tuple
+会持久化到 Turn 和 checkpoint，并在压缩后保留。
 
 只有在语义允许时才按内容去重：
 
@@ -183,7 +186,8 @@ Provider factory 组合起来。
 ## Skills
 
 Skills 提供有界的指令包。发现优先级依次为 bundled、user、workspace；后出现的同名来源
-会遮蔽先前 descriptor，并产生诊断。禁用的名称会被排除。
+会遮蔽先前 descriptor，并产生诊断。禁用的名称会被排除。每个有效 descriptor 都会获得
+版本化 identity，由规范化 metadata、已固定的 `SKILL.md` fingerprint 与内容派生。
 
 Workspace Skills 的路径由受信项目控制，因此处理更严格：
 
@@ -197,18 +201,24 @@ workspace anchor
 
 每个组件都必须是普通目录或文件，不能是 symlink、junction 或其他 reparse point。
 发现过程会存储 anchor、root、package 身份以及初始 `SKILL.md` fingerprint。加载和资源
-读取会重新打开固定的目录树，校验这些身份与包含关系，再进行有界 UTF-8 读取。因此，
-发现后替换 package 会 fail closed。一个无效 package 只产生诊断，不会抑制有效 package。
+读取会重新打开固定的目录树，校验这些身份与包含关系，再进行有界 UTF-8 读取。Bundled
+和 User package 固定 package 与 `SKILL.md` identity；Workspace package 还固定完整的受信任
+anchor 链。因此，发现后替换 package 会 fail closed。一个无效 package 只产生诊断，不会
+抑制有效 package。
 
 发现时 fingerprint 适用于 `SKILL.md`，而非所有资源。一次资源遍历会证明其组件是普通、
 受包含的，并在该次受检打开的前后保持稳定；但它不会把普通嵌套目录或资源内容与发现时
 身份比较。因此，在资源读取开始前已经安全完成的替换可以被读取到。
 
-Bundled 和 user Skills 保留原有、更宽松的来源行为。严格 reparse 策略被有意限制在
-workspace 内容，以免意外重新定义用户管理的扩展布局。
+`auto` 会冻结最多 64 个 identity 的确定性 catalog，并暴露 `load_skill` 与
+`read_skill_resource`；它不会执行 Skill。`off` 不冻结 Skill 来源，也不暴露两个工具。
+具名模式会 eagerly 冻结正文和 identity 作为 mandatory system context，并且只为该 package
+暴露 `read_skill_resource`。
 
-选中的 Skill 会成为 mandatory system context。它的 `allowed-tools` metadata 描述预期
-兼容性，但绝不会授予权限或绕过共享 Tool Executor。
+两个工具都使用 `context.read`。Registration 自有的硬准入会在 permission policy 之前把
+操作和 package identity 与冻结 Turn scope 匹配，handler 在返回内容前再次检查 identity。
+因此，即使重建后的 Runtime 发现了不同 package，恢复仍会保留 checkpoint 的 authority。
+`allowed-tools` 只描述预期兼容性，绝不会授予权限或绕过共享 Tool Executor。
 
 ## 本地与云端 Memory
 

@@ -13,6 +13,7 @@ from awesome_agent.core.tools.permissions import (
 @pytest.mark.parametrize(
     ("capability", "expected"),
     [
+        (ToolCapability.CONTEXT_READ, PolicyAction.ALLOW),
         (ToolCapability.WORKSPACE_READ, PolicyAction.ALLOW),
         (ToolCapability.WORKSPACE_WRITE, PolicyAction.ASK),
         (ToolCapability.WORKSPACE_DELETE, PolicyAction.ASK),
@@ -37,6 +38,7 @@ def test_request_approval_policy_table(
 @pytest.mark.parametrize(
     "capability",
     [
+        ToolCapability.CONTEXT_READ,
         ToolCapability.WORKSPACE_READ,
         ToolCapability.WORKSPACE_WRITE,
         ToolCapability.WORKSPACE_DELETE,
@@ -91,6 +93,7 @@ def test_network_read_allows_exact_current_thread_grant(
 @pytest.mark.parametrize(
     ("capability", "expected"),
     [
+        (ToolCapability.CONTEXT_READ, PolicyAction.ALLOW),
         (ToolCapability.WORKSPACE_READ, PolicyAction.ALLOW),
         (ToolCapability.WORKSPACE_WRITE, PolicyAction.ALLOW),
         (ToolCapability.WORKSPACE_DELETE, PolicyAction.ASK),
@@ -162,6 +165,15 @@ def test_builtin_memory_defers_to_its_own_explicit_user_policy(
             capability=capability,
             mode=PermissionMode.REQUEST_APPROVAL,
         )
+    )
+
+    assert decision.action is PolicyAction.ALLOW
+
+
+@pytest.mark.parametrize("mode", list(PermissionMode))
+def test_context_read_always_allows_after_hard_admission(mode: PermissionMode) -> None:
+    decision = PermissionPolicy().evaluate(
+        PolicyRequest(capability=ToolCapability.CONTEXT_READ, mode=mode)
     )
 
     assert decision.action is PolicyAction.ALLOW

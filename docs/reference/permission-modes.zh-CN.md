@@ -6,11 +6,11 @@ Journal 捕获、超时或操作系统隔离。
 
 ## 精确矩阵
 
-| 模式 | Workspace 读取 | 创建/修改 | 删除 | Shell | 网络读取 | MCP/未知扩展 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Request approval | Allow | Ask | Ask | Ask | Ask | Ask |
-| Accept edits | Allow | Allow | Ask | Ask | Ask | Ask |
-| Full access | Allow | Allow | Allow | Allow | Ask | Ask |
+| 模式 | Workspace 读取 | 冻结 Skill 上下文读取 | 创建/修改 | 删除 | Shell | 网络读取 | MCP/未知扩展 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Request approval | Allow | 硬准入后 Allow | Ask | Ask | Ask | Ask | Ask |
+| Accept edits | Allow | 硬准入后 Allow | Allow | Ask | Ask | Ask | Ask |
+| Full access | Allow | 硬准入后 Allow | Allow | Allow | Allow | Ask | Ask |
 
 该矩阵适用于已选中 Thread 权限会话中的 Agent 工具调用。直接 `! command` 是对该精确命令的
 显式授权，并使用独立的 Direct Full-access 会话，因此不显示普通 shell prompt；所有 schema、
@@ -42,13 +42,17 @@ capability 仍然逐次询问，因为 Core 无法推断它们的外部权限或
 工具安全分布在准入与具体 handler 中。请求审批前，Core 会执行：
 
 1. registry lookup 和已注册的 Pydantic/schema 验证；
-2. 内置路径工具的词法路径语法检查；
-3. 针对请求的词法 working directory 执行 shell circuit breaker；
-4. capability policy：先检查有效 temporary grant，再检查当前模式矩阵；
-5. 结果为 `ask` 时，创建一个与 Tool call 绑定的 interaction。
+2. registration 自有的硬准入，包括词法路径检查、shell circuit breaker 与冻结 Skill
+   identity/scope 检查；
+3. capability policy：先检查有效 temporary grant，再检查当前模式矩阵；
+4. 结果为 `ask` 时，创建一个与 Tool call 绑定的 interaction。
 
 `network.read` 是显式的矩阵例外：如果当前没有 Thread grant，它在三种模式下都返回
 `ask`。Permission mode 不能静默授权把 Search query 或请求的 Fetch URL 发送给 Tavily。
+
+`context.read` 是相反类型的例外：只有 Skill 准入证明包 identity 与操作存在于 Turn 冻结的
+context scope 中后，策略才会在三种模式下都返回 `allow`。`off`、不同 Skill 名称、变化后的
+包、Direct 执行或伪造 checkpoint 都会在策略前被拒绝，并且不会产生 approval prompt。
 
 准入后、产生效果前，handler 会应用特定后端的检查。Filesystem handler 解析包含关系、
 link/reparse 状态、对象身份、敏感名称和受保护删除目标。`execute` 解析其实际 working

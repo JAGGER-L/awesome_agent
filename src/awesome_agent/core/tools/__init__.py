@@ -1,5 +1,9 @@
 from awesome_agent.core.citations import Citation
-from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
+from awesome_agent.core.tools.context import (
+    ToolExecutionContext,
+    ToolHandler,
+    ToolResourceGrant,
+)
 from awesome_agent.core.tools.contracts import (
     ToolActivityDraft,
     ToolActivityWriter,
@@ -70,6 +74,7 @@ __all__ = [
     "ToolRegistry",
     "ToolReplaySafety",
     "ToolRequest",
+    "ToolResourceGrant",
     "ToolResult",
     "ToolSpec",
     "ToolStatus",

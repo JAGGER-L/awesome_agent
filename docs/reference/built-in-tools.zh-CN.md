@@ -26,8 +26,10 @@ registered model validation -> lexical hard checks -> permission policy
                                   bounded result + terminal event
 ```
 
-Catalog 始终包含四个读取工具和两个 Skill 支持工具。正常本地 composition 还包含文件修改和
-shell 工具。只有启用 Local Memory 时才会出现 Local Memory 工具，有效 MCP catalog 会添加
+Runtime registry 始终包含四个 Workspace 读取工具和两个 Skill 支持 registration。每个
+Turn 的模型可见 catalog 会按冻结模式过滤 Skill 工具：`auto` 包含两个，`off` 均不包含，
+具名 Skill 只包含 `read_skill_resource`。正常本地 composition 还包含文件修改和 shell 工具。
+只有启用 Local Memory 时才会出现 Local Memory 工具，有效 MCP catalog 会添加
 namespaced tool。动态 MCP 行为在 [MCP](../extensions/mcp.zh-CN.md)中单独说明。只有 user Web
 config 已启用且存在有效 `TAVILY_API_KEY` 时，才会出现 `web_search` 与 `web_fetch`。
 
@@ -327,15 +329,17 @@ result body 或凭据。
 
 ## Skill 支持工具
 
-这些只读工具始终注册，使模型可以渐进加载指令。Skill mode 控制 eager/named context，而
-不是工具注册。
+这些只读工具使用 `context.read`。它们保留在唯一的 Runtime registry 中，而冻结的 Turn
+mode 控制模型可见性与硬准入。
 
 | 工具 | 参数 | 结果 |
 | --- | --- | --- |
 | `load_skill` | `name`：小写连字符名称，最多 64 个字符 | 有界 Skill 正文，以及 source、truncation 和说明性 `allowed_tools` metadata |
 | `read_skill_resource` | `name`；1–2,000 个字符的 `relative_path` | 一个有界文本资源，最多 5,000 个估算 token |
 
-Workspace Skill 包每次加载时都接受严格的 anti-link 与身份检查。详情见
+`auto` 对冻结 catalog 中的 identity 暴露两个工具；具名模式只对该 identity 暴露
+`read_skill_resource`；`off` 两者都不暴露。每次调用都会重新检查发现时的 package identity，
+因此 Runtime 重建或包漂移会返回 `conflict`，而不会扩大访问。详情见
 [Skills](../extensions/skills.zh-CN.md)。
 
 ## Local Memory 工具

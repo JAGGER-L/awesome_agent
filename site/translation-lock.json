@@ -6,8 +6,8 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "a50b5f53dc0e42fb35cf8e53d4952cbc601f226eea92cf3a039c1b0691e3388b",
-      "chinese_sha256": "3219da9ce983dba30b5d7ca8684bb08c53fe4aef3a812e2bea314142b2ee9310"
+      "english_sha256": "feeb113c09e39ab8d0dc6291cec72f32ad3c887d95722dfb33c035274b39bed8",
+      "chinese_sha256": "71573442454a8df5a0bec73c4066a9a7100ddff4b47b7bef2db017686fef0cc0"
     },
     {
       "english_source": "README.md",
@@ -36,8 +36,8 @@
     {
       "english_source": "docs/architecture/context-model-and-extensions.md",
       "chinese_source": "docs/architecture/context-model-and-extensions.zh-CN.md",
-      "english_sha256": "f629d0829f4623fd8694ba7c19979af8f35b85d38f1f0fc76eb009d09ef8c502",
-      "chinese_sha256": "2b71e045bb33035e73fc0ee22067435f301d142015b5de32e69487e941253d39"
+      "english_sha256": "6c5d8f657825634e3d16c152e8ebdb58c07451c9eb4b4ab3ffcd900eb1633683",
+      "chinese_sha256": "8125bfc6ef8f0f0e3ac7bcfe3d1960fb53365cc72139b81040a82678f4d58978"
     },
     {
       "english_source": "docs/architecture/protocol-and-tui.md",
@@ -150,8 +150,8 @@
     {
       "english_source": "docs/extensions/skills.md",
       "chinese_source": "docs/extensions/skills.zh-CN.md",
-      "english_sha256": "b14641682b4e55c85ce2fb50d70701b4bd90821ff3a94f199913600cdf649ac5",
-      "chinese_sha256": "80e1c1c8de5c87f3e4fc5cc2e1f5018f77a2126a285acb9cfaf15e0400b4c373"
+      "english_sha256": "a4092f2ac45a2d132bf57840f5703fcbdc5af1b5f77814d7d6188a8297061bbc",
+      "chinese_sha256": "84c1a019a2c3a03a773518e031766e869cf24f3e04a039dc1ebcff25cb9c1034"
     },
     {
       "english_source": "docs/getting-started/README.md",
@@ -180,8 +180,8 @@
     {
       "english_source": "docs/reference/built-in-tools.md",
       "chinese_source": "docs/reference/built-in-tools.zh-CN.md",
-      "english_sha256": "5c8abb13007bc6d7f687c62d0cec2d027281eb11bca7ea6d0e2bb9f0dd39f3e4",
-      "chinese_sha256": "e8cf379a11bc7d7bd39ccf3c9302719fcab0ec461fd27c224c86201c8a499e2b"
+      "english_sha256": "dbdd8dd0cd2d9ea839e8f8b7c47567c9eef21af102328d68d2b8c97a5a8e86b6",
+      "chinese_sha256": "516636234910c7ed6c7c2f93245eda32db5c30a38c098fa282827a020893a0b5"
     },
     {
       "english_source": "docs/reference/cli.md",
@@ -210,8 +210,8 @@
     {
       "english_source": "docs/reference/permission-modes.md",
       "chinese_source": "docs/reference/permission-modes.zh-CN.md",
-      "english_sha256": "ad0fa427bcc393080083b9a5ccdbfaa583eb9c6fae2b693ab204ae30ee0e8fc5",
-      "chinese_sha256": "4e2b6286ea6c5df2b66c5f6af94b5a0e7bdc3b11d5d6ab8c1730b896874e8a65"
+      "english_sha256": "2677b571670eeba47bda167bd1ce6f9f6f84dcda52a5c55909239d2930e77cf0",
+      "chinese_sha256": "9c112f84270ac5d48b8384eed3b4edd0bc4e4a0bdc682ac80e9d263177f95a05"
     },
     {
       "english_source": "docs/reference/protocol.md",
@@ -222,8 +222,8 @@
     {
       "english_source": "docs/roadmap.md",
       "chinese_source": "docs/roadmap.zh-CN.md",
-      "english_sha256": "19d41e7820dab6baf904f9f8c54af39afaf03d50295bf88fc23ee79aec78325b",
-      "chinese_sha256": "f112b3118a79ba9e4225992487f06b7b5d46e0f5c0cb038e89704fc77d7b9146"
+      "english_sha256": "0d660d2680de5a0a62fd9abcb98525b746667fd66301564b89d0868aa73eed45",
+      "chinese_sha256": "4ddb761217a3e11459eaefd3eac8e9ae87fd3bf24d1f288b7a4e7398ec5db8fd"
     },
     {
       "english_source": "docs/user-guide/README.md",

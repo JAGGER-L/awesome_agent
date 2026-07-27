@@ -139,6 +139,20 @@ def fail_closed_replay_safety(tool_name: str) -> ToolReplaySafety:
     return ToolReplaySafety.NON_REPLAYABLE
 
 
+def recovery_context_snapshot_is_valid(
+    state: AgentState,
+    *,
+    turn: Turn,
+    view: ThreadView,
+) -> bool:
+    return frozen_context_snapshot_is_valid(
+        state,
+        turn=turn,
+        view=view,
+        allow_legacy_skill_snapshot=True,
+    )
+
+
 class TurnCoordinator:
     def __init__(
         self,
@@ -158,7 +172,7 @@ class TurnCoordinator:
             disabled_turn_extension_preparer
         ),
         context_snapshot_validator: ContextSnapshotValidator = (
-            frozen_context_snapshot_is_valid
+            recovery_context_snapshot_is_valid
         ),
         tool_replay_safety: ToolReplaySafetyResolver = fail_closed_replay_safety,
     ) -> None:
@@ -1338,7 +1352,7 @@ async def _reconcile_frozen_context_snapshot(
     candidate = Turn.model_validate(
         turn.model_copy(update={"context_manifest": checkpoint_manifest}).model_dump()
     )
-    if not frozen_context_snapshot_is_valid(state, turn=candidate, view=view):
+    if not recovery_context_snapshot_is_valid(state, turn=candidate, view=view):
         return None
     if not validator(state, turn=candidate, view=view):
         return None

@@ -252,6 +252,7 @@ def _config() -> TurnConfig:
     return TurnConfig(
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
+        skill_mode="off",
         budgets=BudgetConfig(),
     )
 

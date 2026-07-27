@@ -5,6 +5,7 @@ from enum import StrEnum
 
 
 class ToolCapability(StrEnum):
+    CONTEXT_READ = "context.read"
     WORKSPACE_READ = "workspace.read"
     WORKSPACE_WRITE = "workspace.write"
     WORKSPACE_DELETE = "workspace.delete"
@@ -127,6 +128,11 @@ class PermissionPolicy:
             return PolicyDecision(
                 PolicyAction.ASK,
                 "Network reads require explicit approval for the active Thread.",
+            )
+        if capability == ToolCapability.CONTEXT_READ:
+            return PolicyDecision(
+                PolicyAction.ALLOW,
+                "Frozen context resources are governed by hard admission.",
             )
         if capability == ToolCapability.WORKSPACE_READ:
             return PolicyDecision(

@@ -34,6 +34,7 @@ APPLICATION_DB_ADAPTERS = {
 }
 COMPOSITION_TO_THREAD_TARGETS = {
     "_git_branch",
+    "discover_skills",
     "reconcile_provider_credential_transaction",
 }
 APPLICATION_TABLES = {

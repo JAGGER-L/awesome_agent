@@ -131,6 +131,7 @@ from awesome_agent.context import (
     CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
     ContextManifestItem,
+    ContextSourceKind,
     Mem0ContextResult,
     ThreadCompressor,
     WorkspaceInstructionSnapshot,
@@ -138,6 +139,7 @@ from awesome_agent.context import (
     estimate_messages,
     load_workspace_instructions,
     mem0_context_source,
+    skill_identities_from_manifest,
 )
 from awesome_agent.conversation import (
     ConversationService,
@@ -178,6 +180,8 @@ from awesome_agent.core.tools import (
     ToolExecutionOrigin,
     ToolExecutor,
     ToolRequest,
+    ToolResourceGrant,
+    ToolSpec,
 )
 from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
@@ -193,6 +197,7 @@ from awesome_agent.core.tools.permissions import (
     PermissionSession,
     ToolApprovalDecision,
     ToolApprovalRequest,
+    ToolCapability,
 )
 from awesome_agent.core.tools.process import ProcessRunner
 from awesome_agent.core.tools.registry import ToolRegistry
@@ -213,6 +218,7 @@ from awesome_agent.extensions.mcp import (
 )
 from awesome_agent.extensions.mcp.manager import McpClient
 from awesome_agent.extensions.skills import (
+    SkillCatalog,
     SkillLoader,
     discover_skills,
     register_skill_tools,
@@ -284,6 +290,8 @@ _MAX_THREAD_RESULT_BYTES = 900_000
 _APPLICATION_SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 45.0
 _RECOVERY_EVENT_DELIVERY_ATTEMPTS = 2
 _RECOVERY_EVENT_DELIVERY_TIMEOUT_SECONDS = 5.0
+_SKILL_DISCOVERY_DRAIN_TIMEOUT_SECONDS = 5.0
+_SKILL_TOOL_NAMES = frozenset({"load_skill", "read_skill_resource"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -309,6 +317,87 @@ _CAPABILITIES = (
     "web",
     "citations",
 )
+
+
+def _tool_catalog_for_skill_mode(
+    registry: ToolRegistry,
+    skill_mode: str,
+) -> tuple[ToolSpec, ...]:
+    specifications = registry.specifications()
+    if skill_mode == "auto":
+        return specifications
+    visible_skill_tools = (
+        frozenset()
+        if skill_mode in {"off", "direct"}
+        else frozenset({"read_skill_resource"})
+    )
+    return tuple(
+        specification
+        for specification in specifications
+        if specification.name not in _SKILL_TOOL_NAMES
+        or specification.name in visible_skill_tools
+    )
+
+
+def _skill_resource_grants(
+    manifest: tuple[dict[str, JsonValue], ...],
+    *,
+    skill_mode: str,
+) -> tuple[ToolResourceGrant, ...]:
+    try:
+        items = tuple(ContextManifestItem.model_validate(item) for item in manifest)
+    except ValueError:
+        return ()
+    skill_items = tuple(
+        item
+        for item in items
+        if item.kind in {ContextSourceKind.SKILL, ContextSourceKind.SKILL_CATALOG}
+    )
+    operations: tuple[str, ...]
+    if skill_mode == "auto":
+        if (
+            len(skill_items) != 1
+            or skill_items[0].kind is not ContextSourceKind.SKILL_CATALOG
+        ):
+            return ()
+        operations = ("load", "read")
+    elif skill_mode in {"off", "direct"}:
+        return ()
+    else:
+        if (
+            len(skill_items) != 1
+            or skill_items[0].kind is not ContextSourceKind.SKILL
+            or skill_items[0].source_id != skill_mode
+        ):
+            return ()
+        operations = ("read",)
+    identities = skill_identities_from_manifest(manifest)
+    if skill_mode != "auto":
+        identities = tuple(
+            identity for identity in identities if identity.name == skill_mode
+        )
+    return tuple(
+        ToolResourceGrant(
+            capability=ToolCapability.CONTEXT_READ.value,
+            resource_type="skill",
+            resource_id=identity.name,
+            identity=identity.identity,
+            operations=operations,
+        )
+        for identity in identities
+    )
+
+
+def _skill_tool_catalog_mode(
+    manifest: tuple[dict[str, JsonValue], ...],
+    *,
+    skill_mode: str,
+) -> str:
+    if not manifest or skill_mode in {"off", "direct"}:
+        return skill_mode
+    if _skill_resource_grants(manifest, skill_mode=skill_mode):
+        return skill_mode
+    return "off"
 
 
 async def compose_local_application(
@@ -538,6 +627,11 @@ class _LocalApplicationBackend:
         self._recovery_event_deliveries: set[asyncio.Task[None]] = set()
         self._permission_session = PermissionSession()
         self._web_configuration_control = WebConfigurationControl()
+        self._skill_catalog: SkillCatalog | None = None
+        self._skill_catalog_task: asyncio.Task[SkillCatalog] | None = None
+        self._process_resources.push_async_callback(
+            self._drain_skill_catalog_discovery
+        )
         self._bootstrap_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
 
@@ -2290,22 +2384,7 @@ class _LocalApplicationBackend:
             )
             await change_scope.reconcile()
 
-            bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
-            catalog = discover_skills(
-                bundled_root=bundled,
-                user_root=self._paths.skills_dir,
-                workspace_root=self._workspace.canonical_path / ".awesome" / "skills",
-                workspace_trusted=True,
-                workspace_anchor=self._workspace.canonical_path,
-                disabled={
-                    skill.name
-                    for skill in (
-                        *application_config.user_skills,
-                        *application_config.workspace_skills,
-                    )
-                    if not skill.enabled
-                },
-            )
+            catalog = await self._session_skill_catalog(application_config)
             skill_loader = SkillLoader(catalog)
             register_skill_tools(registry, skill_loader)
 
@@ -2467,6 +2546,11 @@ class _LocalApplicationBackend:
                                 for item in agent_state["citations"]
                             )
                         ),
+                        skill_mode=turn.skill_mode,
+                        resource_grants=_skill_resource_grants(
+                            tuple(agent_state["context_manifest"]),
+                            skill_mode=turn.skill_mode,
+                        ),
                     )
 
                 async def record_context_snapshot(
@@ -2494,7 +2578,13 @@ class _LocalApplicationBackend:
                         turn.model,
                     ),
                     executor=executor,
-                    tool_catalog=registry.specifications,
+                    tool_catalog=lambda: _tool_catalog_for_skill_mode(
+                        registry,
+                        _skill_tool_catalog_mode(
+                            turn.context_manifest,
+                            skill_mode=turn.skill_mode,
+                        ),
+                    ),
                     tool_context_factory=tool_context,
                     event_projector=projector,
                     context_builder=context_service.build,
@@ -2554,6 +2644,7 @@ class _LocalApplicationBackend:
                     permission_session=PermissionSession(
                         mode=PermissionMode.FULL_ACCESS
                     ),
+                    skill_mode="direct",
                 )
 
             direct = DirectCommandService(
@@ -2845,6 +2936,79 @@ class _LocalApplicationBackend:
             workspace_trusted=workspace_trusted,
             environ=self._environ,
         )
+
+    async def _session_skill_catalog(
+        self,
+        application_config: ApplicationConfig,
+    ) -> SkillCatalog:
+        catalog = self._skill_catalog
+        if catalog is not None:
+            return catalog
+        task = self._skill_catalog_task
+        if task is None:
+            bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    discover_skills,
+                    bundled_root=bundled,
+                    user_root=self._paths.skills_dir,
+                    workspace_root=(
+                        self._workspace.canonical_path / ".awesome" / "skills"
+                    ),
+                    workspace_trusted=True,
+                    workspace_anchor=self._workspace.canonical_path,
+                    disabled={
+                        skill.name
+                        for skill in (
+                            *application_config.user_skills,
+                            *application_config.workspace_skills,
+                        )
+                        if not skill.enabled
+                    },
+                ),
+                name=f"awesome-skill-discovery-{self._session_id}",
+            )
+            self._skill_catalog_task = task
+            task.add_done_callback(self._skill_catalog_discovery_finished)
+        return await asyncio.shield(task)
+
+    def _skill_catalog_discovery_finished(
+        self,
+        task: asyncio.Task[SkillCatalog],
+    ) -> None:
+        if task.cancelled():
+            if self._skill_catalog_task is task:
+                self._skill_catalog_task = None
+            return
+        error = task.exception()
+        if error is not None:
+            if self._skill_catalog_task is task:
+                self._skill_catalog_task = None
+            logger.warning(
+                "Skill Catalog discovery failed.",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            return
+        if self._skill_catalog_task is task:
+            self._skill_catalog = task.result()
+
+    async def _drain_skill_catalog_discovery(self) -> None:
+        task = self._skill_catalog_task
+        if task is None:
+            return
+        try:
+            async with asyncio.timeout(_SKILL_DISCOVERY_DRAIN_TIMEOUT_SECONDS):
+                await asyncio.shield(task)
+        except TimeoutError:
+            logger.warning(
+                "Skill Catalog discovery did not finish during bounded shutdown."
+            )
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                raise
+        except Exception:
+            # The done callback records and consumes the concrete failure.
+            return
 
     def _load_provider_configuration(self) -> ProviderConfigurationSnapshot:
         sources = self._load_sources(workspace_trusted=True)

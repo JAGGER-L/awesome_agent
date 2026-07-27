@@ -60,6 +60,10 @@ def _workspace_catalog(tmp_path: Path) -> SkillCatalog:
     )
 
 
+def _identity(loader: SkillLoader, name: str = "review") -> str:
+    return loader.identity_snapshot(name).identity
+
+
 def _directory_link(target: Path, link: Path) -> None:
     if os.name == "nt":
         subprocess.run(
@@ -84,14 +88,107 @@ def test_loader_is_lazy_bounded_and_allowed_tools_are_diagnostic(
 ) -> None:
     loader = SkillLoader(_catalog(tmp_path))
 
-    loaded = loader.load("review", token_limit=5_000)
-    resource = loader.read_resource("review", "guide.md", token_limit=10)
+    expected_identity = _identity(loader)
+    loaded = loader.load(
+        "review",
+        expected_identity=expected_identity,
+        token_limit=5_000,
+    )
+    resource = loader.read_resource(
+        "review",
+        "guide.md",
+        expected_identity=expected_identity,
+        token_limit=10,
+    )
 
     assert loaded.truncated is True
     assert loaded.estimated_tokens <= 5_000
     assert loaded.descriptor.allowed_tools == ("execute",)
     assert resource.truncated is True
     assert resource.estimated_tokens <= 10
+
+
+def test_loader_rejects_an_identity_outside_the_frozen_turn_snapshot(
+    tmp_path: Path,
+) -> None:
+    loader = SkillLoader(_catalog(tmp_path))
+    wrong_identity = f"skill-v1-sha256:{'0' * 64}"
+
+    with pytest.raises(SkillResourceError) as admitted_load:
+        loader.admit_load("review", expected_identity=wrong_identity)
+    with pytest.raises(SkillResourceError) as admitted_resource:
+        loader.admit_resource(
+            "review",
+            "guide.md",
+            expected_identity=wrong_identity,
+        )
+    with pytest.raises(SkillResourceError) as loaded:
+        loader.load("review", expected_identity=wrong_identity)
+    with pytest.raises(SkillResourceError) as read:
+        loader.read_resource(
+            "review",
+            "guide.md",
+            expected_identity=wrong_identity,
+            token_limit=100,
+        )
+
+    assert admitted_load.value.kind is SkillResourceErrorKind.CONFLICT
+    assert admitted_resource.value.kind is SkillResourceErrorKind.CONFLICT
+    assert loaded.value.kind is SkillResourceErrorKind.CONFLICT
+    assert read.value.kind is SkillResourceErrorKind.CONFLICT
+
+
+@pytest.mark.parametrize("source", [SkillSource.USER, SkillSource.BUNDLED])
+def test_standard_skill_root_is_identity_pinned_after_discovery(
+    tmp_path: Path,
+    source: SkillSource,
+) -> None:
+    root = tmp_path / source.value
+    root.mkdir()
+    package = root / "review"
+    package.mkdir()
+    (package / "SKILL.md").write_text(
+        "---\nname: review\ndescription: original\n---\ninstruction",
+        encoding="utf-8",
+    )
+    catalog = discover_skills(
+        bundled_root=root if source is SkillSource.BUNDLED else None,
+        user_root=root if source is SkillSource.USER else None,
+        workspace_root=None,
+        workspace_trusted=False,
+    )
+    loader = SkillLoader(catalog)
+    original = root.with_name(f"{root.name}.original")
+    root.rename(original)
+    replacement = root / "review"
+    replacement.mkdir(parents=True)
+    (replacement / "SKILL.md").write_text(
+        "---\nname: review\ndescription: replacement\n---\nexternal",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SkillResourceError) as captured:
+        loader.load("review", expected_identity=_identity(loader))
+
+    assert captured.value.kind is SkillResourceErrorKind.CONFLICT
+
+
+def test_resource_read_revalidates_the_discovered_skill_file(tmp_path: Path) -> None:
+    catalog = _catalog(tmp_path)
+    loader = SkillLoader(catalog)
+    skill_file = catalog.resolve("review").root / "SKILL.md"
+    original = skill_file.read_text(encoding="utf-8")
+    skill_file.write_text(original.replace("execute", "read_file"), encoding="utf-8")
+
+    with pytest.raises(SkillResourceError) as captured:
+        loader.read_resource(
+            "review",
+            "guide.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
+
+    assert captured.value.kind is SkillResourceErrorKind.CONFLICT
 
 
 def test_resource_rejects_escape_binary_symlink_and_missing(tmp_path: Path) -> None:
@@ -104,7 +201,12 @@ def test_resource_rejects_escape_binary_symlink_and_missing(tmp_path: Path) -> N
 
     for path in ("../outside.md", "binary.bin", "missing.md"):
         with pytest.raises(SkillResourceError):
-            loader.read_resource("review", path, token_limit=100)
+            loader.read_resource(
+                "review",
+                path,
+                expected_identity=_identity(loader),
+                token_limit=100,
+            )
 
     link = root / "link.md"
     try:
@@ -112,7 +214,12 @@ def test_resource_rejects_escape_binary_symlink_and_missing(tmp_path: Path) -> N
     except OSError:
         pytest.skip("symlink creation is unavailable")
     with pytest.raises(SkillResourceError):
-        loader.read_resource("review", "link.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "link.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
 
 
 def test_workspace_loader_rejects_package_replaced_after_discovery(
@@ -132,7 +239,7 @@ def test_workspace_loader_rejects_package_replaced_after_discovery(
     replacement.rename(package)
 
     with pytest.raises(SkillResourceError, match="changed after discovery"):
-        loader.load("review")
+        loader.load("review", expected_identity=_identity(loader))
 
 
 def test_workspace_loader_rejects_skills_root_replaced_after_discovery(
@@ -155,9 +262,14 @@ def test_workspace_loader_rejects_skills_root_replaced_after_discovery(
     )
 
     with pytest.raises(SkillResourceError, match="changed after discovery"):
-        loader.load("review")
+        loader.load("review", expected_identity=_identity(loader))
     with pytest.raises(SkillResourceError, match="changed after discovery"):
-        loader.read_resource("review", "guide.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "guide.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
 
 
 def test_workspace_loader_rejects_workspace_anchor_replaced_after_discovery(
@@ -180,9 +292,14 @@ def test_workspace_loader_rejects_workspace_anchor_replaced_after_discovery(
     )
 
     with pytest.raises(SkillResourceError, match="changed after discovery"):
-        loader.load("review")
+        loader.load("review", expected_identity=_identity(loader))
     with pytest.raises(SkillResourceError, match="changed after discovery"):
-        loader.read_resource("review", "guide.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "guide.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
 
 
 def test_workspace_loader_rejects_skill_md_replaced_after_discovery(
@@ -200,7 +317,7 @@ def test_workspace_loader_rejects_skill_md_replaced_after_discovery(
     replacement.rename(skill_md)
 
     with pytest.raises(SkillResourceError, match="changed after discovery"):
-        loader.load("review")
+        loader.load("review", expected_identity=_identity(loader))
 
 
 def test_workspace_resource_revalidates_package_boundary(tmp_path: Path) -> None:
@@ -213,7 +330,12 @@ def test_workspace_resource_revalidates_package_boundary(tmp_path: Path) -> None
     (package / "guide.md").write_text("replacement", encoding="utf-8")
 
     with pytest.raises(SkillResourceError, match="changed after discovery"):
-        loader.read_resource("review", "guide.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "guide.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
 
 
 def test_workspace_resource_maps_permission_error_as_permission_denied(
@@ -229,7 +351,12 @@ def test_workspace_resource_maps_permission_error_as_permission_denied(
     monkeypatch.setattr(safe_files_module.PinnedPlainDirectory, "read_file", deny_read)
 
     with pytest.raises(SkillResourceError) as captured:
-        loader.read_resource("review", "guide.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "guide.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
 
     assert captured.value.kind is SkillResourceErrorKind.PERMISSION_DENIED
     assert "private operating-system detail" not in str(captured.value)
@@ -245,7 +372,12 @@ def test_workspace_resource_rejects_nested_reparse_point(tmp_path: Path) -> None
     _directory_link(outside, package / "references")
 
     with pytest.raises(SkillResourceError, match="links or reparse points"):
-        loader.read_resource("review", "references/secret.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "references/secret.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
 
 
 @pytest.mark.parametrize(
@@ -268,7 +400,12 @@ def test_workspace_resource_preserves_size_and_text_boundaries(
     resource.write_bytes(data)
 
     with pytest.raises(SkillResourceError, match=message):
-        loader.read_resource("review", "bounded.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "bounded.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
 
 
 def test_workspace_resource_rejects_file_replaced_before_open(
@@ -304,7 +441,12 @@ def test_workspace_resource_rejects_file_replaced_before_open(
     )
 
     with pytest.raises(SkillResourceError, match="changed after discovery"):
-        loader.read_resource("review", "guide.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "guide.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
     assert replaced is True
 
 
@@ -370,7 +512,12 @@ def test_workspace_resource_rejects_package_aba_through_directory_link(
     )
 
     try:
-        resource = loader.read_resource("review", "guide.md", token_limit=100)
+        resource = loader.read_resource(
+            "review",
+            "guide.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
     except SkillResourceError:
         resource = None
 
@@ -437,12 +584,17 @@ def test_workspace_resource_rejects_parent_aba_through_directory_link(
     )
 
     with pytest.raises(SkillResourceError):
-        loader.read_resource("review", "references/guide.md", token_limit=100)
+        loader.read_resource(
+            "review",
+            "references/guide.md",
+            expected_identity=_identity(loader),
+            token_limit=100,
+        )
     assert attacked is True
 
 
 @pytest.mark.parametrize("source", [SkillSource.USER, SkillSource.BUNDLED])
-def test_non_workspace_package_directory_links_keep_existing_behavior(
+def test_non_workspace_package_directory_links_are_rejected(
     tmp_path: Path,
     source: SkillSource,
 ) -> None:
@@ -464,11 +616,7 @@ def test_non_workspace_package_directory_links_keep_existing_behavior(
         workspace_root=None,
         workspace_trusted=False,
     )
-    loader = SkillLoader(catalog)
-
-    assert catalog.resolve("review").source is source
-    assert loader.load("review").body == "instruction"
-    assert (
-        loader.read_resource("review", "guide.md", token_limit=100).content
-        == "linked guide"
-    )
+    assert catalog.descriptors() == ()
+    assert [(item.code, item.source) for item in catalog.diagnostics()] == [
+        ("unsafe_skill_path", source)
+    ]

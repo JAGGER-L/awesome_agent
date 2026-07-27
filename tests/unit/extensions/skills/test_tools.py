@@ -2,6 +2,7 @@ import os
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import BaseModel, JsonValue
@@ -15,9 +16,11 @@ from awesome_agent.core.tools import (
     ToolExecutionOrigin,
     ToolInvocationDescription,
     ToolRequest,
+    ToolResourceGrant,
     ToolStatus,
 )
 from awesome_agent.core.tools.executor import ToolExecutor
+from awesome_agent.core.tools.permissions import ToolCapability
 from awesome_agent.core.tools.registry import ToolRegistry
 from awesome_agent.core.workspace import resolve_workspace
 from awesome_agent.extensions.skills import (
@@ -36,19 +39,35 @@ class RecordingSkillLoader(SkillLoader):
         self.load_calls = 0
         self.resource_calls = 0
 
-    def load(self, name: str, *, token_limit: int = 5_000) -> LoadedSkill:
+    def load(
+        self,
+        name: str,
+        *,
+        expected_identity: str,
+        token_limit: int = 5_000,
+    ) -> LoadedSkill:
         self.load_calls += 1
-        return super().load(name, token_limit=token_limit)
+        return super().load(
+            name,
+            expected_identity=expected_identity,
+            token_limit=token_limit,
+        )
 
     def read_resource(
         self,
         name: str,
         relative_path: str,
         *,
+        expected_identity: str,
         token_limit: int,
     ) -> SkillResource:
         self.resource_calls += 1
-        return super().read_resource(name, relative_path, token_limit=token_limit)
+        return super().read_resource(
+            name,
+            relative_path,
+            expected_identity=expected_identity,
+            token_limit=token_limit,
+        )
 
 
 class CollectingActivityWriter:
@@ -95,6 +114,9 @@ def _workspace_catalog(tmp_path: Path) -> SkillCatalog:
 
 def _execution_context(
     workspace_path: Path,
+    *,
+    skill_mode: str,
+    resource_grants: tuple[ToolResourceGrant, ...],
 ) -> tuple[
     ToolExecutionContext,
     CollectingEventSink,
@@ -126,10 +148,41 @@ def _execution_context(
             activity_writer=writer,
             monotonic=time.monotonic,
             approval_resolver=approve,
+            skill_mode=skill_mode,
+            resource_grants=resource_grants,
         ),
         sink,
         writer,
         approvals,
+    )
+
+
+def _skill_grant(
+    catalog: SkillCatalog,
+    name: str,
+    *,
+    operations: tuple[str, ...] = ("load", "read"),
+) -> ToolResourceGrant:
+    return ToolResourceGrant(
+        capability=ToolCapability.CONTEXT_READ.value,
+        resource_type="skill",
+        resource_id=name,
+        identity=catalog.identity_snapshot(name).identity,
+        operations=operations,
+    )
+
+
+def _forged_skill_grant(
+    name: str,
+    *,
+    operations: tuple[str, ...] = ("load", "read"),
+) -> ToolResourceGrant:
+    return ToolResourceGrant(
+        capability=ToolCapability.CONTEXT_READ.value,
+        resource_type="skill",
+        resource_id=name,
+        identity=f"skill-v1-sha256:{'0' * 64}",
+        operations=operations,
     )
 
 
@@ -180,6 +233,9 @@ def test_skill_tools_register_as_read_only_without_granting_capabilities(
     specs = {item.name: item for item in registry.specifications()}
     assert set(specs) == {"load_skill", "read_skill_resource"}
     assert all(item.read_only for item in specs.values())
+    assert all(
+        item.capability == ToolCapability.CONTEXT_READ.value for item in specs.values()
+    )
     assert registry.resolve("execute") is None
 
 
@@ -221,11 +277,22 @@ async def test_skill_hard_admission_fails_before_description_or_handler(
     arguments: dict[str, JsonValue],
     error_code: str,
 ) -> None:
-    loader = RecordingSkillLoader(_user_catalog(tmp_path))
+    catalog = _user_catalog(tmp_path)
+    loader = RecordingSkillLoader(catalog)
     registry = ToolRegistry()
     register_skill_tools(registry, loader)
     describe_calls = _track_description(registry, tool_name)
-    context, sink, writer, approvals = _execution_context(tmp_path / "workspace")
+    name = cast(str, arguments["name"])
+    grant = (
+        _skill_grant(catalog, name)
+        if name == "review"
+        else _forged_skill_grant(name)
+    )
+    context, sink, writer, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode="auto",
+        resource_grants=(grant,),
+    )
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -273,7 +340,11 @@ async def test_workspace_skill_identity_swap_fails_in_hard_admission(
     registry = ToolRegistry()
     register_skill_tools(registry, loader)
     describe_calls = _track_description(registry, tool_name)
-    context, sink, writer, approvals = _execution_context(tmp_path / "workspace")
+    context, sink, writer, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode="auto",
+        resource_grants=(_skill_grant(catalog, "review"),),
+    )
     arguments: dict[str, JsonValue] = (
         {"name": "review"}
         if tool_name == "load_skill"
@@ -308,10 +379,15 @@ async def test_workspace_skill_identity_swap_fails_in_hard_admission(
 async def test_skill_tools_preserve_normal_load_and_resource_behavior(
     tmp_path: Path,
 ) -> None:
-    loader = RecordingSkillLoader(_user_catalog(tmp_path))
+    catalog = _user_catalog(tmp_path)
+    loader = RecordingSkillLoader(catalog)
     registry = ToolRegistry()
     register_skill_tools(registry, loader)
-    context, sink, writer, approvals = _execution_context(tmp_path / "workspace")
+    context, sink, writer, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode="auto",
+        resource_grants=(_skill_grant(catalog, "review"),),
+    )
 
     loaded = await ToolExecutor(registry).execute(
         ToolRequest(
@@ -347,6 +423,219 @@ async def test_skill_tools_preserve_normal_load_and_resource_behavior(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skill_mode", "tool_name", "arguments", "granted_name", "operations"),
+    [
+        ("off", "load_skill", {"name": "review"}, "review", ("load", "read")),
+        (
+            "direct",
+            "read_skill_resource",
+            {"name": "review", "relative_path": "guide.md"},
+            "review",
+            ("read",),
+        ),
+        (
+            "review",
+            "load_skill",
+            {"name": "review"},
+            "review",
+            ("load", "read"),
+        ),
+        (
+            "review",
+            "read_skill_resource",
+            {"name": "other", "relative_path": "guide.md"},
+            "other",
+            ("read",),
+        ),
+        ("auto", "load_skill", {"name": "review"}, None, ()),
+    ],
+)
+async def test_skill_tools_fail_closed_outside_frozen_turn_scope(
+    tmp_path: Path,
+    skill_mode: str,
+    tool_name: str,
+    arguments: dict[str, JsonValue],
+    granted_name: str | None,
+    operations: tuple[str, ...],
+) -> None:
+    catalog = _user_catalog(tmp_path)
+    loader = RecordingSkillLoader(catalog)
+    registry = ToolRegistry()
+    register_skill_tools(registry, loader)
+    describe_calls = _track_description(registry, tool_name)
+    grants: tuple[ToolResourceGrant, ...] = ()
+    if granted_name is not None:
+        grant = (
+            _skill_grant(catalog, granted_name, operations=operations)
+            if granted_name == "review"
+            else _forged_skill_grant(granted_name, operations=operations)
+        )
+        grants = (grant,)
+    context, sink, writer, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode=skill_mode,
+        resource_grants=grants,
+    )
+
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="call_out_of_scope_skill",
+            tool_name=tool_name,
+            arguments=arguments,
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code == "permission_denied"
+    assert describe_calls == []
+    assert loader.load_calls == 0
+    assert loader.resource_calls == 0
+    assert approvals == []
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    assert len(writer.activities) == 1
+
+
+@pytest.mark.asyncio
+async def test_named_skill_mode_can_only_read_its_frozen_resource(
+    tmp_path: Path,
+) -> None:
+    catalog = _user_catalog(tmp_path)
+    loader = RecordingSkillLoader(catalog)
+    registry = ToolRegistry()
+    register_skill_tools(registry, loader)
+    context, _, _, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode="review",
+        resource_grants=(
+            _skill_grant(catalog, "review", operations=("read",)),
+        ),
+    )
+
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="call_named_skill_resource",
+            tool_name="read_skill_resource",
+            arguments={"name": "review", "relative_path": "guide.md"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.SUCCESS
+    assert result.content == "safe guide"
+    assert loader.resource_calls == 1
+    assert approvals == []
+
+
+@pytest.mark.asyncio
+async def test_skill_handler_rechecks_frozen_identity_after_admission(
+    tmp_path: Path,
+) -> None:
+    catalog = _user_catalog(tmp_path)
+    loader = RecordingSkillLoader(catalog)
+    registry = ToolRegistry()
+    register_skill_tools(registry, loader)
+    context, _, writer, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode="auto",
+        resource_grants=(_skill_grant(catalog, "review"),),
+    )
+    skill_file = catalog.resolve("review").root / "SKILL.md"
+
+    class IdentitySwapSink(CollectingEventSink):
+        async def emit(self, event):  # type: ignore[no-untyped-def]
+            await super().emit(event)
+            if event.event_type is EventType.TOOL_STARTED:
+                skill_file.write_text(
+                    "---\nname: review\ndescription: Changed\n---\nchanged",
+                    encoding="utf-8",
+                )
+
+    sink = IdentitySwapSink()
+    context = replace(
+        context,
+        emitter=EventEmitter(
+            session_id="session_skills_identity_swap",
+            workspace_key=context.workspace.key,
+            sink=sink,
+        ),
+    )
+
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="call_changed_identity",
+            tool_name="read_skill_resource",
+            arguments={"name": "review", "relative_path": "guide.md"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code == "conflict"
+    assert loader.resource_calls == 1
+    assert approvals == []
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    assert len(writer.activities) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovered_frozen_identity_rejects_rediscovered_skill(
+    tmp_path: Path,
+) -> None:
+    frozen_catalog = _user_catalog(tmp_path)
+    frozen_grant = _skill_grant(frozen_catalog, "review")
+    skill_file = frozen_catalog.resolve("review").root / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: review\ndescription: Replacement\n---\nreplacement",
+        encoding="utf-8",
+    )
+    current_catalog = discover_skills(
+        bundled_root=None,
+        user_root=tmp_path / "skills",
+        workspace_root=None,
+        workspace_trusted=False,
+    )
+    loader = RecordingSkillLoader(current_catalog)
+    registry = ToolRegistry()
+    register_skill_tools(registry, loader)
+    describe_calls = _track_description(registry, "load_skill")
+    context, sink, _, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode="auto",
+        resource_grants=(frozen_grant,),
+    )
+
+    result = await ToolExecutor(registry).execute(
+        ToolRequest(
+            call_id="call_recovered_old_identity",
+            tool_name="load_skill",
+            arguments={"name": "review"},
+        ),
+        context=context,
+    )
+
+    assert result.status is ToolStatus.ERROR
+    assert result.error is not None
+    assert result.error.code == "conflict"
+    assert describe_calls == []
+    assert loader.load_calls == 0
+    assert approvals == []
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["user", "workspace"])
 @pytest.mark.parametrize("link_kind", ["hardlink", "symlink"])
 async def test_skill_handler_rejects_link_swap_after_started(
@@ -363,7 +652,11 @@ async def test_skill_handler_rejects_link_swap_after_started(
     resource = catalog.resolve("review").root / "guide.md"
     outside = tmp_path / "outside-secret.md"
     outside.write_text("EXTERNAL-SECRET", encoding="utf-8")
-    context, _, writer, approvals = _execution_context(tmp_path / "workspace")
+    context, _, writer, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode="auto",
+        resource_grants=(_skill_grant(catalog, "review"),),
+    )
 
     class LinkSwapSink(CollectingEventSink):
         async def emit(self, event):  # type: ignore[no-untyped-def]
@@ -426,7 +719,11 @@ async def test_skill_hard_admission_rejects_ntfs_alternate_stream(
     registry = ToolRegistry()
     register_skill_tools(registry, loader)
     describe_calls = _track_description(registry, "read_skill_resource")
-    context, sink, writer, approvals = _execution_context(tmp_path / "workspace")
+    context, sink, writer, approvals = _execution_context(
+        tmp_path / "workspace",
+        skill_mode="auto",
+        resource_grants=(_skill_grant(catalog, "review"),),
+    )
 
     result = await ToolExecutor(registry).execute(
         ToolRequest(

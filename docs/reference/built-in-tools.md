@@ -28,8 +28,11 @@ registered model validation -> lexical hard checks -> permission policy
                                   bounded result + terminal event
 ```
 
-The catalog always contains four read tools and the two Skill support tools.
-It contains file mutation and shell tools in the normal local composition.
+The Runtime registry always contains four workspace read tools and the two
+Skill support registrations. A Turn's model-visible catalog filters the Skill
+tools by its frozen mode: both in `auto`, neither in `off`, and only
+`read_skill_resource` for a named Skill. The registry also contains file
+mutation and shell tools in the normal local composition.
 Local Memory tools appear only while Local Memory is enabled, and valid MCP
 catalogs add namespaced tools. Dynamic MCP behavior is documented separately
 in [MCP](../extensions/mcp.md). `web_search` and `web_fetch` appear only when
@@ -369,16 +372,20 @@ do not record the query, result URL, result body, or credentials.
 
 ## Skill support tools
 
-These read-only tools are always registered so the model can progressively load
-instructions. Skill mode controls eager/named context, not tool registration.
+These read-only tools use `context.read`. They remain in the one Runtime
+registry, while the frozen Turn mode controls model visibility and hard
+admission.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
 | `load_skill` | `name`: lowercase hyphenated name, at most 64 characters | Bounded Skill body plus source, truncation, and descriptive `allowed_tools` metadata |
 | `read_skill_resource` | `name`; `relative_path` of 1–2,000 characters | One bounded text resource, at most 5,000 estimated tokens |
 
-Workspace Skill packages receive strict anti-link and identity checks on every
-load. Details are in [Skills](../extensions/skills.md).
+`auto` exposes both tools for the identities in its frozen catalog. A named
+mode exposes only `read_skill_resource` for that one identity; `off` exposes
+neither. Every call rechecks the discovered package identity, so Runtime rebuild
+or package drift fails with `conflict` instead of widening access. Details are
+in [Skills](../extensions/skills.md).
 
 ## Local Memory tools
 

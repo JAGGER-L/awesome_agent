@@ -39,7 +39,7 @@ The current source order is:
 
 1. product instructions;
 2. root workspace instructions;
-3. selected Skill;
+3. the bounded automatic Skill catalog or one selected Skill;
 4. user memory;
 5. workspace memory;
 6. Mem0 recall;
@@ -55,11 +55,12 @@ base sources. Changing enum order therefore changes prompt behavior and frozen
 manifest validation.
 
 The following sources are mandatory once selected: product and model identity,
-workspace instructions, the selected Skill, explicit paths, current input, and
-an open tool chain. They are never silently truncated to make a prompt fit. If
-mandatory plus reserved context exceeds the effective input limit, the Turn
-fails with a context overflow instead of changing instruction meaning or
-dropping a tool observation.
+workspace instructions, the bounded automatic Skill catalog or selected Skill,
+explicit paths, current input, and an open tool chain. They are never silently
+truncated to make a prompt fit. The Skill catalog is bounded before it becomes
+mandatory. If mandatory plus reserved context exceeds the effective input
+limit, the Turn fails with a context overflow instead of changing instruction
+meaning or dropping a tool observation.
 
 ## Budget calculation
 
@@ -86,7 +87,9 @@ directory-entry, and path-count bounds.
 
 Every retained source produces a `ContextManifestItem` containing kind,
 source ID, order, estimated tokens, truncation, SHA-256 content hash, and any
-covered transcript sequence range.
+covered transcript sequence range. Skill sources additionally carry a strict
+tuple of versioned package identities and descriptive `allowed-tools` values.
+That tuple is persisted on the Turn and checkpoint and survives compression.
 
 Content deduplication applies only where semantics permit it:
 
@@ -214,7 +217,9 @@ context limits, identity reporting, and tests agree on the supported product.
 
 Skills provide bounded instruction packages. Discovery precedence is bundled,
 then user, then workspace; a later source with the same name shadows the
-earlier descriptor and emits a diagnostic. Disabled names are excluded.
+earlier descriptor and emits a diagnostic. Disabled names are excluded. Every
+effective descriptor receives a versioned identity derived from normalized
+metadata and the pinned `SKILL.md` fingerprint and content.
 
 Workspace Skills are more strictly handled because their path is controlled by
 the trusted project:
@@ -231,8 +236,10 @@ Every component must be a plain directory or file, never a symlink, junction,
 or other reparse point. Discovery stores anchor, root, package identities, and
 the initial `SKILL.md` fingerprint. Load and resource reads reopen the pinned
 tree, verify those identities and containment, then perform a bounded UTF-8
-read. Replacing a package after discovery therefore fails closed. One invalid
-package produces a diagnostic without suppressing valid packages.
+read. Bundled and User packages pin their package and `SKILL.md` identities;
+Workspace packages additionally pin the complete trusted-anchor chain.
+Replacing a package after discovery therefore fails closed. One invalid package
+produces a diagnostic without suppressing valid packages.
 
 The discovery fingerprint applies to `SKILL.md`, not to every resource. A
 resource traversal proves that its components are plain, contained, and stable
@@ -240,13 +247,18 @@ across that individual checked open, but it does not compare ordinary nested
 directories or resource content with a discovery-time identity. A safe
 replacement completed before the resource read can therefore be observed.
 
-Bundled and user Skills retain their existing, less restrictive source
-behavior. The strict reparse policy is intentionally scoped to workspace
-content so user-managed extension layouts are not redefined accidentally.
+`auto` freezes a deterministic catalog of at most 64 identities and exposes
+`load_skill` plus `read_skill_resource`; it does not execute a Skill. `off`
+freezes no Skill source and exposes neither tool. A named mode eagerly freezes
+the body and identity as mandatory system context and exposes only
+`read_skill_resource` for that package.
 
-A selected Skill becomes mandatory system context. Its `allowed-tools`
-metadata describes intended compatibility but never grants permission or
-bypasses the shared Tool Executor.
+Both tools use `context.read`. Registration-owned hard admission matches the
+operation and package identity against the frozen Turn scope before permission
+policy, and the handler checks the identity again before returning content.
+Recovery therefore keeps the checkpoint's authority even if a rebuilt Runtime
+discovers a different package. `allowed-tools` describes intended compatibility
+but never grants permission or bypasses the shared Tool Executor.
 
 ## Local and cloud Memory
 

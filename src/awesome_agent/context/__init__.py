@@ -18,9 +18,11 @@ from awesome_agent.context.compression import (
 from awesome_agent.context.models import (
     ContextManifestItem,
     ContextRequest,
+    ContextSkillIdentity,
     ContextSource,
     ContextSourceKind,
     PreparedContext,
+    skill_identities_from_manifest,
 )
 from awesome_agent.context.path_refs import (
     ExplicitPathError,
@@ -65,6 +67,7 @@ __all__ = [
     "ContextManifestItem",
     "ContextOverflow",
     "ContextRequest",
+    "ContextSkillIdentity",
     "ContextSource",
     "ContextSourceKind",
     "ExplicitPathError",
@@ -85,5 +88,6 @@ __all__ = [
     "model_identity_context_source",
     "parse_explicit_paths",
     "plan_compression",
+    "skill_identities_from_manifest",
     "snapshot_explicit_paths",
 ]

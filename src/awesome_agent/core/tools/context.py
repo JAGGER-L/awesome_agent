@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from awesome_agent.core.citations import CitationAllocator
 from awesome_agent.core.events import EventEmitter
@@ -25,6 +26,37 @@ from awesome_agent.core.workspace import WorkspaceIdentity
 type ToolApprovalResolver = Callable[
     [ToolApprovalRequest], Awaitable[ToolApprovalDecision]
 ]
+
+
+class ToolResourceGrant(BaseModel):
+    """One frozen, identity-pinned resource scope available to a tool call."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    capability: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,127}$")
+    resource_type: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,127}$")
+    resource_id: str = Field(min_length=1, max_length=512)
+    identity: str = Field(min_length=1, max_length=256)
+    operations: tuple[str, ...] = Field(min_length=1, max_length=16)
+
+    @field_validator("resource_id", "identity")
+    @classmethod
+    def _validate_bounded_value(cls, value: str) -> str:
+        if value != value.strip() or any(character.isspace() for character in value):
+            raise ValueError("resource grant values must not contain whitespace")
+        return value
+
+    @field_validator("operations")
+    @classmethod
+    def _validate_operations(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("resource grant operations must be unique")
+        if any(
+            re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", operation) is None
+            for operation in value
+        ):
+            raise ValueError("resource grant operations must be normalized")
+        return value
 
 
 class CapabilityQuotaLedger:
@@ -119,6 +151,8 @@ class ToolExecutionContext:
         default_factory=CapabilityQuotaLedger
     )
     citation_allocator: CitationAllocator = field(default_factory=CitationAllocator)
+    skill_mode: str = "direct"
+    resource_grants: tuple[ToolResourceGrant, ...] = ()
     turn_active: bool = True
 
     def __post_init__(self) -> None:
@@ -126,6 +160,50 @@ class ToolExecutionContext:
             raise ValueError("agent tool execution requires turn_id")
         if self.origin is ToolExecutionOrigin.DIRECT and self.turn_id is not None:
             raise ValueError("direct tool execution forbids turn_id")
+        if not isinstance(self.skill_mode, str):
+            raise ValueError("skill_mode must be a string")
+        if (
+            re.fullmatch(
+                r"(?:auto|off|direct|[a-z][a-z0-9-]{0,63})",
+                self.skill_mode,
+            )
+            is None
+        ):
+            raise ValueError("skill_mode is invalid")
+        if not isinstance(self.resource_grants, tuple):
+            raise ValueError("resource grants must be an immutable tuple")
+        if any(
+            not isinstance(grant, ToolResourceGrant) for grant in self.resource_grants
+        ):
+            raise ValueError(
+                "resource grants must be validated ToolResourceGrant values"
+            )
+        grant_keys = [
+            (grant.capability, grant.resource_type, grant.resource_id)
+            for grant in self.resource_grants
+        ]
+        if len(grant_keys) != len(set(grant_keys)):
+            raise ValueError("resource grants must have unique resource scopes")
+
+    def resource_grant(
+        self,
+        *,
+        capability: str,
+        resource_type: str,
+        resource_id: str,
+        operation: str,
+    ) -> ToolResourceGrant | None:
+        return next(
+            (
+                grant
+                for grant in self.resource_grants
+                if grant.capability == capability
+                and grant.resource_type == resource_type
+                and grant.resource_id == resource_id
+                and operation in grant.operations
+            ),
+            None,
+        )
 
 
 type ToolHandler = Callable[

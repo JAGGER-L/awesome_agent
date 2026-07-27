@@ -506,15 +506,19 @@ identity 的旧记录与被中断的 pending mutation 无法区分，恢复会�
 
 ### Skills 与 MCP
 
-- **职责：** 发现受信 bundled/user/workspace Skills、加载有界指令、连接配置的 MCP
-  stdio server，并将 MCP tool 适配到共享 registry。
+- **职责：** 发现 bundled/user/受信 workspace Skills，分配并验证不可变 Session identity，
+  加载有界指令、连接配置的 MCP stdio server，并将扩展 tool 适配到共享 registry。
 - **不负责：** 权限或替代执行路径。
 - **主要文件：** `extensions/skills/discovery.py`、
   `extensions/skills/loader.py`、`extensions/mcp/manager.py`、
   `extensions/mcp/adapter.py`。
 
-Workspace Skill path 与已打开 identity 会在不跟随 link 或 reparse point 的情况下重新
-校验；一个无效 package 仍是隔离诊断。MCP 会在 page、tool-count、byte 与 deadline 边界
+每个有效 Skill 都会冻结版本化 package/`SKILL.md` identity。Turn manifest 与 checkpoint
+保留由 `auto` 或具名模式选中的 identity；`off` 不保留任何 identity。模型可见的 Skill 工具
+按该冻结模式过滤，`context.read` 硬准入会在 policy 之前验证操作与 identity，并在返回内容前
+再次验证。Workspace Skill path 还会在不跟随 link 或 reparse point 的情况下重新校验完整的
+受信任 anchor 链。一个无效 package 仍是隔离诊断，Runtime 重建或 package 漂移不能扩大
+恢复中 Turn 的 Skill scope。MCP 会在 page、tool-count、byte 与 deadline 边界
 下消费完整分页 catalog，编译所有 JSON Schema 和完整 namespaced tool name，再构建全部
 generation-bound Registry entry。Manager 持有 server lock 时同步替换完整 Registry
 namespace，并且不经过新的 `await` 就发布相匹配的 client、catalog、generation 与
