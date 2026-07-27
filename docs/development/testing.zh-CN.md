@@ -202,8 +202,9 @@ Provider、Mem0、MCP 和进程测试使用 fake 或本地 fixture。普通 CI �
 
 Candidate installer hook 使 tag 前 release 证据无需先发布 asset 就能执行：在
 `127.0.0.1` 提供 manual-dispatch artifact，再用显式 candidate 变量运行 installer。证据
-仍必须来自 Windows 11 x64、WSL2 Ubuntu 24.04 x64 与 Apple Silicon macOS。Windows
-Server hosted job 不是 Windows 11，普通 Ubuntu runner 也不是 WSL2。
+当前只要求来自 Windows 11 x64 人工真实主机；Windows Server hosted job 不能替代它。
+WSL2 与 Apple Silicon macOS 仍保留自动化 CI/nightly 证据，缺少对应人工实机证据会记录为
+release 残余风险。
 
 ## Required CI
 
@@ -216,7 +217,7 @@ dispatch 时运行。其稳定 `Required` aggregator 依赖：
 | Python tests and coverage | unit + integration + E2E 与 branch coverage |
 | Windows contracts | Windows 敏感的 Core/Application/Protocol/extension 测试加 installer 源代码/解析契约；不是真实下载安装流程 |
 | Structural and packaging contracts | 所有权、inventory、wheel build 与干净安装 |
-| TUI matrix | Ubuntu 上 Node 22.23.1/24 与 Windows 上 22.23.1 |
+| TUI matrix | Ubuntu 上 Node 22.23.1/24，以及 Windows 与 macOS 上 22.23.1 |
 | Docs site | 导航、Astro check、base-aware build、built-link 检查 |
 
 Branch rule 应要求稳定的 `Required` check，而不是 matrix 生成的 job 显示名称。
@@ -267,10 +268,11 @@ Release workflow 从精确 revision 重新构建，运行确定性 Python、TUI�
 
 从 `main` manual dispatch 时，还要求精确 `GITHUB_SHA` 上由 GitHub Actions 生成的最新
 `Required` 与 `Security required` check-run 都成功。它生成的 artifact 会在允许打 tag 前
-通过 loopback 在三台真实支持 host 上运行 installer smoke。缺少该证据时只能合并
-candidate，不能 tag 或 release。Tag workflow 会重新 build，并通过三个待发布 asset hash
-与 tag 前 artifact 做 byte 比较；只要任一项不同，就必须在发布前针对 tag artifact 重跑
-三端实机 loopback smoke。命令与发布后的 rollout recheck 见[发布](release.zh-CN.md)。
+通过 loopback 在真实 Windows 11 x64 主机上运行 installer smoke。Tag workflow 会重新
+build，并通过三个待发布 asset hash 与 tag 前 artifact 做 byte 比较；只要任一项不同，就
+必须在发布前针对 tag artifact 重跑 Windows 实机 loopback smoke。Hosted Windows/macOS
+验证与 nightly 三 OS 覆盖仍是自动化 gate。命令与发布后的 rollout recheck 见
+[发布](release.zh-CN.md)。
 
 本地 release-quality gate 为：
 

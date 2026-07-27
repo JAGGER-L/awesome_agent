@@ -225,16 +225,9 @@ artifact 目录；例如在单独 terminal 中运行：
 python -m http.server 8765 --bind 127.0.0.1 --directory <artifact-directory>
 ```
 
-在每个真实支持 host 上运行 candidate installer。WSL2 Ubuntu 24.04 x64 与 Apple Silicon
-macOS 使用：
-
-```sh
-AWESOME_INSTALL_CANDIDATE=1 \
-AWESOME_INSTALL_CANDIDATE_ASSET_BASE=http://127.0.0.1:8765 \
-sh ./install.sh
-```
-
-Windows 11 x64 使用：
+当前 release line 的人工真实主机 gate 只覆盖 Windows 11 x64。Linux 与 macOS 仍受支持，
+并继续接受 hosted CI 和 nightly 覆盖；由于维护者当前没有可控的 WSL2 或 macOS 主机，缺少
+对应实机证据会记录为残余风险，但不阻塞本次发布。Windows candidate installer 使用：
 
 ```powershell
 $env:AWESOME_INSTALL_CANDIDATE = "1"
@@ -253,14 +246,14 @@ Candidate mode 是 release 测试 hook，不是备用下载功能。只有显式
 workstation（`ProductType == 1`），因此 Windows Server hosted runner 不能冒充 Windows 11
 证据。
 
-收集 host 证据前，运行两个可执行 installer contract harness。Fault injection 必须覆盖旧版本与
-首次安装 rollback、每一种 marker/rollback recovery 形态、延迟的 commit 后清理、同根 staging、
-原子 launcher replacement、活动/崩溃锁、由确定性 barrier 分隔的两个 stale-lock reclaim
-contender，以及保持外部 sentinel 不变的 link/reparse path。Windows harness 要同时在 Windows
-PowerShell 5.1 与当前受支持 PowerShell 下运行；portable `sh` harness 要在用于 release 证据的
-POSIX host 上运行。
+收集 host 证据前，在 Windows PowerShell 5.1 与当前受支持 PowerShell 下运行可执行的 Windows
+installer contract harness。Fault injection 必须覆盖旧版本与首次安装 rollback、每一种
+marker/rollback recovery 形态、延迟的 commit 后清理、同根 staging、原子 launcher
+replacement、活动/崩溃锁、由确定性 barrier 分隔的两个 stale-lock reclaim contender，以及
+保持外部 sentinel 不变的 link/reparse path。Portable `sh` harness 仍是 Ubuntu Required CI
+中的自动化契约，不属于人工真实主机证据。
 
-三台 host 都要验证：
+在 Windows 11 x64 主机上验证：
 
 ```text
 candidate installer succeeds from the loopback-served artifact
@@ -274,9 +267,9 @@ close/restart and --continue restore the expected Thread
 
 使用一次性 OS user 或 VM snapshot 与临时 workspace；安装会修改产品 install root，也可能
 更新用户 PATH 或 shell profile。停止 loopback server，并记录 host OS/architecture、commit
-SHA、artifact checksum、命令与脱敏结果。只有 Windows 11 x64、WSL2 Ubuntu 24.04 x64 与
-Apple Silicon macOS 全部通过后，candidate 才有资格打 tag。缺少任一结果时只能合并 source
-candidate，不得 tag 或 release。
+SHA、artifact checksum、命令与脱敏结果。该 Windows gate 与自动化的 Required、Security、
+Release-gate 平台检查均通过后，candidate 才有资格打 tag。Release 残余风险必须明确记录
+WSL2 与 Apple Silicon macOS 未进行人工真实主机验证。
 
 ## 7. 打 tag 并验证 CI artifact
 
@@ -306,13 +299,13 @@ Protocol v4 生命周期，因此它证明 packaged Core 能在各 CI runtime �
 Ubuntu import。任一平台 verifier 失败都会使 candidate 无效。
 
 Hosted runner 验证与最终用户 host 的 installer 证据回答不同问题。前者在公共 asset 尚未
-存在时验证 candidate bundle；它不能证明已发布的一行 installer，也不能代替 Windows 11、
-WSL2 Ubuntu 24.04 或 Apple Silicon 用户环境。不要把普通 Ubuntu runner 重新标记为 WSL
-证据。
+存在时验证 candidate bundle；它不能证明已发布的一行 installer 或特定最终用户环境。
+本次 release 仅在 Windows 11 x64 收集人工证据；不得把自动化 Ubuntu/macOS 结果重新标记为
+WSL2 或 Apple Silicon 实机证据。
 
 发布前下载成功的 tag artifact，将 `SHA256SUMS` 中全部三个条目与已批准的 tag 前 candidate
-比较。如果每个 asset hash 都完全相同，三端实机证据可用于 tagged byte；如果任一 hash
-不同，必须针对 tag artifact 重新执行第 6 节完整的三端 loopback smoke，之后才能发布。
+比较。如果每个 asset hash 都完全相同，Windows 实机证据可用于 tagged byte；如果任一 hash
+不同，必须针对 tag artifact 重新执行第 6 节完整的 Windows loopback smoke，之后才能发布。
 `SOURCE_DATE_EPOCH` 消除了已知的 wheel timestamp 变化，但 checksum 相等才是证明；不能
 仅因 source SHA 相同就推断 byte 相同。
 
@@ -322,21 +315,22 @@ Workflow 不会自动创建 GitHub Release。Tagged workflow 与 attestation 成
 
 1. 从成功 workflow 下载 `awesome-release-<commit>`；
 2. 在本地再次校验 `SHA256SUMS`；
-3. 在现有 tag 上创建 GitHub Release `v<version>`；
-4. 粘贴经过审查的 release note；
-5. 精确上传该 workflow artifact 中的 `install.sh`、`install.ps1`、
+3. 在现有 tag 上创建 **draft** GitHub Release `v<version>`，并粘贴经过审查的 release note；
+4. 精确上传该 workflow artifact 中的 `install.sh`、`install.ps1`、
    `awesome-<version>.zip` 和 `SHA256SUMS`；
-6. 将远程名称、大小和全部三个 SHA-256 值与已验证 artifact 比较；
-7. 校验已发布 attestation 指向相同 subject。
+5. 保持 draft，先将远程名称、大小和全部三个 SHA-256 值与已验证 artifact 比较，并校验
+   attestation 指向相同 subject；
+6. 将其发布为稳定、非 prerelease 的 Release。该 publication event 是 GitHub Pages 文档站
+   唯一的源代码部署触发器。
 
 CI 验证与上传之间，不要 rebuild、编辑、重新压缩或重新生成任何 asset。
 
 ## 9. Rollout recheck
 
-发布后在 Windows 11 x64、WSL2 Ubuntu 24.04 x64 与 Apple Silicon macOS 上使用文档中的
+发布后，先等待 Release 触发的 Docs site workflow，并验证公共 base URL、代表性英文与中文
+页面、`llms.txt`，以及必须返回 404 的非规范路由。随后在 Windows 11 x64 上使用文档中的
 公共 one-line installer，重新检查 GitHub Release routing、公共 asset 名称、checksum 与
-startup。这是 rollout recheck，不能替代 tag 前 host gate，也不能作为缺少该证据时先发布
-的理由。
+startup。这是 rollout recheck，不能替代 tag 前 Windows gate。
 
 验证：
 
@@ -364,7 +358,7 @@ home、仓库根或未解析的环境变量。Rollout recheck 失败时执行下
 - Action 只限经过审查的 allowlist；
 - GitHub Dependency Graph 与 Dependabot 已启用；
 - secret scanning 与 push protection 已启用；
-- GitHub Pages deployment environment 与权限正确。
+- GitHub Pages deployment environment 允许受保护的 version tag，且权限正确。
 
 仅靠 workflow 文件无法证明这些设置。对于单维护者，rule 可以允许显式 administrative
 break-glass 路径，但普通 merge/release 仍应等待 required check。
@@ -393,7 +387,7 @@ fail closed。
 - Required/Security/Release gate run link；
 - artifact attestation 与 checksum；
 - 确定性和可选 live 证据；
-- tag 前支持 host candidate result、tagged-asset checksum 比较、必要的 tagged-asset smoke
+- tag 前 Windows candidate result、tagged-asset checksum 比较、必要的 tagged-asset smoke
   重跑，以及 rollout recheck；
 - 未验证证据与残余风险；
 - 生成的 compatibility-manifest tuple，以及 state/Protocol 兼容说明；

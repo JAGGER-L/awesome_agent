@@ -222,9 +222,10 @@ nightly three-OS matrix for broader system evidence.
 
 The candidate installer hook makes pre-tag release evidence executable without
 publishing assets: serve the manual-dispatch artifact on `127.0.0.1`, then run
-the installer with the explicit candidate variables. Evidence still has to come
-from Windows 11 x64, WSL2 Ubuntu 24.04 x64, and Apple Silicon macOS. A hosted
-Windows Server job is not Windows 11, and an Ubuntu runner is not WSL2.
+the installer with the explicit candidate variables. The current manual
+real-host gate covers Windows 11 x64 only; a hosted Windows Server job is not a
+substitute. WSL2 and Apple Silicon macOS retain automated CI/nightly evidence,
+and their missing manual real-host evidence is recorded as release residual risk.
 
 ## Required CI
 
@@ -237,7 +238,7 @@ revisions, and manual dispatch. Its stable `Required` aggregator depends on:
 | Python tests and coverage | unit + integration + E2E with branch coverage |
 | Windows contracts | Windows-sensitive Core/Application/Protocol/extension tests plus installer source/parse contracts; not a real download-and-install flow |
 | Structural and packaging contracts | ownership, inventory, wheel build and clean install |
-| TUI matrix | Node 22.23.1/24 on Ubuntu and 22.23.1 on Windows |
+| TUI matrix | Node 22.23.1/24 on Ubuntu and 22.23.1 on Windows and macOS |
 | Docs site | navigation, Astro check, base-aware build, built-link check |
 
 Branch rules should require the stable `Required` check, not matrix-generated
@@ -298,13 +299,13 @@ tag run that passes every unprivileged job reaches attestation.
 
 Manual dispatch from `main` additionally requires the latest GitHub Actions
 `Required` and `Security required` check-runs to be successful for the exact
-`GITHUB_SHA`. Its artifact is served over loopback for installer smoke on all
-three real supported hosts before a tag is allowed. If that evidence is
-missing, the candidate may be merged but cannot be tagged or released. The tag
-workflow rebuild is compared byte-for-byte by the three published asset hashes;
-any difference requires the real-host loopback smoke to be repeated on the tag
-artifact before publication. See [Release](release.md) for the commands and the
-post-publication rollout recheck.
+`GITHUB_SHA`. Its artifact is served over loopback for installer smoke on a real
+Windows 11 x64 host before a tag is allowed. The tag workflow rebuild is
+compared byte-for-byte by the three published asset hashes; any difference
+requires that Windows real-host loopback smoke to be repeated on the tag
+artifact before publication. Hosted Windows/macOS verification and nightly
+three-OS coverage remain automated gates. See [Release](release.md) for the
+commands and the post-publication rollout recheck.
 
 The local release-quality gate is:
 

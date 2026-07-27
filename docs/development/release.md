@@ -268,16 +268,11 @@ for example, in a separate terminal:
 python -m http.server 8765 --bind 127.0.0.1 --directory <artifact-directory>
 ```
 
-Run the candidate installer on each real supported host. The POSIX invocation
-for WSL2 Ubuntu 24.04 x64 and Apple Silicon macOS is:
-
-```sh
-AWESOME_INSTALL_CANDIDATE=1 \
-AWESOME_INSTALL_CANDIDATE_ASSET_BASE=http://127.0.0.1:8765 \
-sh ./install.sh
-```
-
-The Windows 11 x64 invocation is:
+The manual real-host gate for the current release line is Windows 11 x64. Linux
+and macOS remain supported and continue to receive hosted CI and nightly
+coverage, but lack of a maintainer-controlled WSL2 or macOS machine is recorded
+as residual risk rather than blocking this release. Run the Windows candidate
+installer with:
 
 ```powershell
 $env:AWESOME_INSTALL_CANDIDATE = "1"
@@ -298,16 +293,16 @@ normal installer rejects the override. Windows additionally requires a client
 workstation (`ProductType == 1`), so Windows Server hosted runners cannot be
 reported as Windows 11 evidence.
 
-Before collecting host evidence, run both executable installer contract
-harnesses. Their fault injection must cover old-version and first-install
-rollback, every marker/rollback recovery shape, deferred post-commit cleanup,
-same-root staging, atomic launcher replacement, active/crashed locks, two
-stale-lock reclaim contenders separated by a deterministic barrier, and
-link/reparse paths with unchanged external sentinels. Run the Windows harness
-under both Windows PowerShell 5.1 and the current supported PowerShell; run the
-portable `sh` harness on the POSIX hosts used for release evidence.
+Before collecting host evidence, run the executable Windows installer contract
+harness under both Windows PowerShell 5.1 and the current supported PowerShell.
+Its fault injection must cover old-version and first-install rollback, every
+marker/rollback recovery shape, deferred post-commit cleanup, same-root staging,
+atomic launcher replacement, active/crashed locks, two stale-lock reclaim
+contenders separated by a deterministic barrier, and link/reparse paths with
+unchanged external sentinels. The portable `sh` harness remains an automated
+Ubuntu Required-CI contract; it is not manual real-host evidence.
 
-On all three hosts verify:
+On the Windows 11 x64 host verify:
 
 ```text
 candidate installer succeeds from the loopback-served artifact
@@ -323,9 +318,9 @@ Use a disposable OS user or VM snapshot and a temporary workspace; installation
 changes the product install root and may update the user PATH or shell profile.
 Stop the loopback server and record the host OS/architecture, commit SHA,
 artifact checksums, commands, and redacted results. The candidate is eligible
-for a tag only after Windows 11 x64, WSL2 Ubuntu 24.04 x64, and Apple Silicon
-macOS all pass. Without all three results, the source candidate may be merged,
-but it must not be tagged or released.
+for a tag after this Windows gate and the automated Required, Security, and
+Release-gate platform checks pass. Record that WSL2 and Apple Silicon macOS did
+not receive manual real-host validation in the release's residual risks.
 
 ## 7. Tag and verify CI artifacts
 
@@ -358,15 +353,16 @@ failed platform verifier invalidates the candidate.
 
 Hosted-runner verification and end-user-host installer evidence answer
 different questions. The former validates the candidate bundle before public
-assets exist. It does not prove the published one-line installer, Windows 11,
-WSL2 Ubuntu 24.04, or an Apple Silicon user environment. Do not relabel an
-Ubuntu runner as WSL evidence.
+assets exist. It does not prove the published one-line installer or a specific
+end-user environment. This release collects that manual evidence on Windows 11
+x64 only; automated Ubuntu/macOS results must not be relabeled as WSL2 or Apple
+Silicon real-host evidence.
 
 Download the successful tag artifact before publication and compare all three
 entries in `SHA256SUMS` with the approved pre-tag candidate. If every asset hash
-is identical, the three-host evidence applies to the tagged bytes. If any hash
-differs, rerun the complete three-host loopback smoke from section 6 against the
-tag artifact before publishing. `SOURCE_DATE_EPOCH` removes the known wheel
+is identical, the Windows real-host evidence applies to the tagged bytes. If
+any hash differs, rerun the complete Windows loopback smoke from section 6
+against the tag artifact before publishing. `SOURCE_DATE_EPOCH` removes the known wheel
 timestamp variance, but checksum equality remains the proof; never infer byte
 identity merely because the source SHA is the same.
 
@@ -377,24 +373,27 @@ workflow and attestation succeed:
 
 1. download `awesome-release-<commit>` from the successful workflow;
 2. verify `SHA256SUMS` locally once more;
-3. create GitHub Release `v<version>` at the existing tag;
-4. paste the reviewed release notes;
-5. upload exactly `install.sh`, `install.ps1`, `awesome-<version>.zip`, and
+3. create a **draft** GitHub Release `v<version>` at the existing tag and paste
+   the reviewed release notes;
+4. upload exactly `install.sh`, `install.ps1`, `awesome-<version>.zip`, and
    `SHA256SUMS` from that workflow artifact;
-6. compare remote names, sizes, and all three SHA-256 values with the verified
-   artifact;
-7. verify the published attestation refers to the same subjects.
+5. while it is still a draft, compare remote names, sizes, and all three SHA-256
+   values with the verified artifact and verify the attestation refers to the
+   same subjects;
+6. publish it as a stable, non-prerelease Release. This publication event is the
+   only source deployment trigger for the GitHub Pages documentation site.
 
 Do not rebuild, edit, recompress, or regenerate an asset between CI verification
 and upload.
 
 ## 9. Rollout recheck
 
-After publication, use the documented public one-line installer on Windows 11
-x64, WSL2 Ubuntu 24.04 x64, and Apple Silicon macOS to recheck GitHub Release
+After publication, first wait for the Release-triggered Docs site workflow and
+verify the public base URL, representative English and Chinese pages,
+`llms.txt`, and a non-canonical route that must return 404. Then use the
+documented public one-line installer on Windows 11 x64 to recheck GitHub Release
 routing, public asset names, checksums, and startup. This is a rollout recheck,
-not a substitute for the pre-tag host gate and not permission to publish before
-that evidence exists.
+not a substitute for the pre-tag Windows gate.
 
 Verify:
 
@@ -424,7 +423,8 @@ Maintainers must separately verify:
 - Actions are restricted to the reviewed allowlist;
 - GitHub Dependency Graph and Dependabot are enabled;
 - secret scanning and push protection are enabled;
-- GitHub Pages deployment environment and permissions are correct.
+- the GitHub Pages deployment environment permits protected version tags and
+  its permissions are correct.
 
 These settings cannot be proven by workflow files alone. For a single
 maintainer, rules may allow an explicit administrative break-glass path, but a
@@ -456,7 +456,7 @@ Retain in the GitHub Release or maintainer handoff:
 - Required/Security/Release gate run links;
 - artifact attestation and checksums;
 - deterministic and optional live evidence;
-- pre-tag supported-host candidate results, tagged-asset checksum comparison,
+- pre-tag Windows candidate results, tagged-asset checksum comparison,
   any required tagged-asset smoke rerun, and rollout recheck;
 - unverified evidence and residual risk;
 - the generated compatibility-manifest tuple and state/Protocol compatibility
