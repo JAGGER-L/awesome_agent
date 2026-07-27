@@ -1,5 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli, type CliDependencies } from "../../src/cli/main.js";
 import { connectSurface } from "../../src/surface/controller.js";
 import { createCoreWrapper } from "../fixtures/core-wrapper.js";
+import { createCanonicalTemporaryRoot } from "../fixtures/temporary-root.js";
 
 const temporary: string[] = [];
 
@@ -20,7 +20,7 @@ afterEach(async () => {
 
 describe("Skill management CLI through the real private Core", () => {
   it("installs, lists, and removes a User Skill without initialization or Ink", async () => {
-    const root = await mkdtemp(join(tmpdir(), "awesome-skills-"));
+    const root = await createCanonicalTemporaryRoot("awesome-skills-");
     temporary.push(root);
     const home = join(root, "home");
     const workspace = join(root, "workspace");

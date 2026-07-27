@@ -1,5 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +7,7 @@ import { runCli, type CliDependencies } from "../../src/cli/main.js";
 import { connectSurface } from "../../src/surface/controller.js";
 import { beginStartup } from "../../src/surface/startup.js";
 import { createCoreWrapper } from "../fixtures/core-wrapper.js";
+import { createCanonicalTemporaryRoot } from "../fixtures/temporary-root.js";
 
 const temporary: string[] = [];
 
@@ -24,7 +24,7 @@ describe("headless CLI through the real private Core", () => {
     "text",
     "json",
   ] as const)("emits pure %s output from durable state", async (format) => {
-    const root = await mkdtemp(join(tmpdir(), "awesome-headless-"));
+    const root = await createCanonicalTemporaryRoot("awesome-headless-");
     temporary.push(root);
     const home = join(root, "home");
     const workspace = join(root, "workspace");

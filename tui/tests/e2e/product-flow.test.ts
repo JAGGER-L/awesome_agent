@@ -28,6 +28,7 @@ import {
   type StartupResult,
 } from "../../src/surface/startup.js";
 import { createCoreWrapper } from "../fixtures/core-wrapper.js";
+import { createCanonicalTemporaryRoot } from "../fixtures/temporary-root.js";
 
 const temporary: string[] = [];
 const fakeCore = fileURLToPath(
@@ -304,7 +305,7 @@ describe("networkless candidate product flow", () => {
   });
 
   it("configures a clean home through the credential RPC without leaking the key", async () => {
-    const root = await mkdtemp(join(tmpdir(), "awesome-credential-"));
+    const root = await createCanonicalTemporaryRoot("awesome-credential-");
     temporary.push(root);
     const home = join(root, "home");
     const workspace = join(root, "workspace");
@@ -422,7 +423,7 @@ describe("networkless candidate product flow", () => {
   ] as const)(
     "runs the %s flow through CLI, controller, Python, and SQLite",
     async (provider, model) => {
-      const root = await mkdtemp(join(tmpdir(), "awesome-product-"));
+      const root = await createCanonicalTemporaryRoot("awesome-product-");
       temporary.push(root);
       const home = join(root, "home");
       const workspace = join(root, "workspace");
