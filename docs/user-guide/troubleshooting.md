@@ -317,6 +317,23 @@ a destructive prompt. Do not delete the data directory manually.
 
 ## Extensions
 
+### Web search is unavailable or fails
+
+Run `/web status`. `enabled: false` means run `/web on`; a missing credential
+requires a non-empty `TAVILY_API_KEY`. `web_proxy_invalid` means the explicit
+`AWESOME_WEB_PROXY_URL` is not a bounded credential-free `http` or `https` URL.
+Ambient `HTTP_PROXY`/`HTTPS_PROXY` settings are intentionally ignored because
+the Web client uses `trust_env=False`.
+
+If the tool asks despite Full access, that is expected: `network.read` asks on
+first use in every permission mode. Choose once or current Thread, or use
+`--allow-network` for one exact headless Turn. `web_rate_limited`,
+`web_quota_exhausted`, `web_timeout`, `web_connection_failed`, and
+`web_provider_unavailable` are stable provider-boundary failures; Awesome does
+not transparently retry them. `web_malformed_response` means the bounded Tavily
+response did not satisfy the strict contract. Queries and result URLs are
+intentionally absent from structured logs.
+
 ### A Skill is missing or invalid
 
 Run `/skills` and inspect the source and diagnostic. Check the package name,

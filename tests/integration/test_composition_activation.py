@@ -17,7 +17,12 @@ import pytest
 from pydantic import SecretStr
 
 from awesome_agent.application import composition
-from awesome_agent.application.command_results import CommandOutcome
+from awesome_agent.application.command_results import (
+    CommandError,
+    CommandOutcome,
+    CommandResult,
+    WebStatusCommandPayload,
+)
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.contracts import (
     InitializeStatus,
@@ -39,6 +44,7 @@ from awesome_agent.application.turns import (
     RecoveryStatus,
     TurnCoordinator,
 )
+from awesome_agent.application.web_commands import WebRuntimeStatus
 from awesome_agent.config import (
     BudgetConfig,
     CredentialSource,
@@ -71,6 +77,7 @@ from awesome_agent.storage import (
     StatePreflight,
 )
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
+from awesome_agent.web import WebSearchRequest, WebSearchResponse
 
 
 async def _trust_workspaces(home: Path, *workspaces: Path) -> None:
@@ -1378,6 +1385,254 @@ async def test_injected_gateway_and_mem0_resources_are_borrowed(
     assert gateway.exit_calls == 0
     assert mem0.close_calls == 0
     assert mem0.exit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_web_runtime_registers_and_retires_managed_search_client(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    paths = AwesomePaths.from_home(home)
+    UserConfigWriter(paths.config_file).update(
+        lambda current: current.model_copy(
+            update={"web": current.web.model_copy(update={"enabled": True})}
+        )
+    )
+    await _trust_workspaces(home, workspace)
+    closed: list[str] = []
+
+    class FakeSearchProvider:
+        async def search(self, request: WebSearchRequest) -> WebSearchResponse:
+            del request
+            return WebSearchResponse(results=())
+
+    @asynccontextmanager
+    async def web_resources(*_: object, **__: object) -> AsyncIterator[Any]:
+        try:
+            yield FakeSearchProvider()
+        finally:
+            closed.append("web")
+
+    monkeypatch.setattr(
+        composition,
+        "managed_tavily_search_client",
+        web_resources,
+    )
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"TAVILY_API_KEY": "test-tavily-key"},
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+
+    assert (await application.initialize()).ok is True
+    first_runtime = backend._runtime
+    assert first_runtime is not None
+    assert first_runtime.web_available is True
+    assert first_runtime.web_diagnostic_code is None
+    assert first_runtime.tool_registry.resolve("web_search") is not None
+    backend._permission_session.grant_thread_network("thread_test")
+
+    status = await application.execute_command(
+        CommandIntent(name=CommandName.WEB, arguments=("status",))
+    )
+    assert status.ok is True
+    assert isinstance(status.value, CommandResult)
+    assert isinstance(status.value.payload, WebStatusCommandPayload)
+    assert status.value.payload.enabled is True
+    assert status.value.payload.available is True
+    assert status.value.payload.credential_configured is True
+
+    disabled = await application.execute_command(
+        CommandIntent(name=CommandName.WEB, arguments=("off",))
+    )
+    assert disabled.ok is True
+    assert isinstance(disabled.value, CommandResult)
+    assert isinstance(disabled.value.payload, WebStatusCommandPayload)
+    assert disabled.value.payload.enabled is False
+    assert disabled.value.payload.available is False
+    assert backend._runtime is not first_runtime
+    assert backend._runtime is not None
+    assert backend._runtime.tool_registry.resolve("web_search") is None
+    assert backend._permission_session.thread_granted_capabilities == frozenset()
+    for _ in range(20):
+        if closed:
+            break
+        await asyncio.sleep(0)
+    assert closed == ["web"]
+
+    assert (await application.shutdown()).ok is True
+    assert closed == ["web"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_web_publication_restores_config_and_current_runtime(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(
+        tmp_path,
+        environ={"TAVILY_API_KEY": "test-tavily-key"},
+    )
+    assert (await application.initialize()).ok is True
+    original_runtime = backend._runtime
+    assert original_runtime is not None
+    original_apply = original_runtime.web_commands._apply_configuration
+    published = asyncio.Event()
+    release = asyncio.Event()
+
+    async def pause_after_publication(
+        snapshot: ProviderConfigurationSnapshot,
+    ) -> WebRuntimeStatus:
+        status = await original_apply(snapshot)
+        if snapshot[1].web.enabled:
+            published.set()
+            await release.wait()
+        return status
+
+    original_runtime.web_commands._apply_configuration = pause_after_publication
+    running = asyncio.create_task(
+        application.execute_command(
+            CommandIntent(name=CommandName.WEB, arguments=("on",))
+        )
+    )
+    await asyncio.wait_for(published.wait(), timeout=10)
+    published_runtime = backend._runtime
+    assert published_runtime is not None
+    assert published_runtime is not original_runtime
+
+    running.cancel("cancel Web after publication")
+    release.set()
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await running
+
+    assert cancelled.value.args == ("cancel Web after publication",)
+    restored_runtime = backend._runtime
+    assert restored_runtime is not None
+    assert restored_runtime is not published_runtime
+    assert restored_runtime.application_config.web.enabled is False
+    assert restored_runtime.tool_registry.resolve("web_search") is None
+    assert UserConfigWriter(backend._paths.config_file).read().web.enabled is False
+    assert backend._web_configuration_control.recovery_required is False
+    assert (
+        restored_runtime.web_commands._configuration_control
+        is backend._web_configuration_control
+    )
+
+    status = await application.execute_command(
+        CommandIntent(name=CommandName.WEB, arguments=("status",))
+    )
+    assert status.ok is True
+    assert isinstance(status.value, CommandResult)
+    assert isinstance(status.value.payload, WebStatusCommandPayload)
+    assert status.value.payload.enabled is False
+    assert status.value.payload.available is False
+    assert (await application.shutdown()).ok is True
+
+
+@pytest.mark.asyncio
+async def test_failed_web_recovery_fences_current_and_future_runtimes(
+    tmp_path: Path,
+) -> None:
+    application, backend = await _trusted_application(
+        tmp_path,
+        environ={"TAVILY_API_KEY": "test-tavily-key"},
+    )
+    assert (await application.initialize()).ok is True
+    assert (
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    ).ok is True
+    original_runtime = backend._runtime
+    assert original_runtime is not None
+    thread_id = original_runtime.commands.current_thread_id
+    assert thread_id is not None
+    original_apply = original_runtime.web_commands._apply_configuration
+    published = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_recovery_after_publication(
+        snapshot: ProviderConfigurationSnapshot,
+    ) -> WebRuntimeStatus:
+        if not snapshot[1].web.enabled:
+            raise RuntimeError("private recovery failure")
+        status = await original_apply(snapshot)
+        published.set()
+        await release.wait()
+        return status
+
+    original_runtime.web_commands._apply_configuration = (
+        fail_recovery_after_publication
+    )
+    running = asyncio.create_task(
+        application.execute_command(
+            CommandIntent(name=CommandName.WEB, arguments=("on",))
+        )
+    )
+    await asyncio.wait_for(published.wait(), timeout=10)
+    running.cancel("authoritative Web cancellation")
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await running
+
+    assert cancelled.value.args == ("authoritative Web cancellation",)
+    current_runtime = backend._runtime
+    assert current_runtime is not None
+    assert current_runtime.application_config.web.enabled is True
+    assert UserConfigWriter(backend._paths.config_file).read().web.enabled is False
+    assert backend._web_configuration_control.recovery_required is True
+    assert (
+        current_runtime.web_commands._configuration_control
+        is backend._web_configuration_control
+    )
+
+    status = await application.execute_command(
+        CommandIntent(name=CommandName.WEB, arguments=("status",))
+    )
+    assert status.ok is True
+    assert isinstance(status.value, CommandResult)
+    assert isinstance(status.value.payload, WebStatusCommandPayload)
+    assert status.value.payload.enabled is True
+
+    backend._permission_session.grant_thread_network(thread_id)
+    revoked = await application.execute_command(
+        CommandIntent(name=CommandName.WEB, arguments=("revoke",))
+    )
+    assert revoked.ok is True
+    assert isinstance(revoked.value, CommandResult)
+    assert backend._permission_session.thread_granted_capabilities == frozenset()
+
+    blocked = await application.execute_command(
+        CommandIntent(name=CommandName.WEB, arguments=("off",))
+    )
+    assert blocked.ok is True
+    assert isinstance(blocked.value, CommandError)
+    assert blocked.value.code == "web_configuration_recovery_required"
+
+    future_runtime = await backend._build_workspace_runtime(
+        configuration=(
+            current_runtime.sources,
+            current_runtime.application_config,
+        ),
+        selected_thread_id=thread_id,
+    )
+    try:
+        assert (
+            future_runtime.web_commands._configuration_control
+            is backend._web_configuration_control
+        )
+        future_blocked = await future_runtime.web_commands.web(
+            CommandIntent(name=CommandName.WEB, arguments=("off",))
+        )
+        assert isinstance(future_blocked, CommandError)
+        assert future_blocked.code == "web_configuration_recovery_required"
+    finally:
+        await backend._close_workspace_runtime(future_runtime)
+
+    assert (await application.shutdown()).ok is True
 
 
 @pytest.mark.asyncio

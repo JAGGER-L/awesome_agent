@@ -4,42 +4,207 @@ import { commandOutcomeSchema } from "../../src/protocol/commands.js";
 import { productErrorSchema } from "../../src/protocol/base.js";
 import { eventEnvelopeSchema } from "../../src/protocol/events.js";
 import { methodSchemas } from "../../src/protocol/methods.js";
-import { workspaceInstructionDiagnosticSchema } from "../../src/protocol/product-projections.js";
+import {
+  budgetSchema,
+  citationSchema,
+  threadEntrySchema,
+  usageSummarySchema,
+  workspaceInstructionDiagnosticSchema,
+} from "../../src/protocol/product-projections.js";
 import { PRODUCT_VERSION } from "../../src/version.js";
 import { loadFixtureCorpus } from "../contracts/fixture-loader.js";
 
-describe("protocol v3 handshake", () => {
+describe("protocol v4 handshake", () => {
   const params = {
-    protocol_version: 3,
+    protocol_version: 4,
     client_name: "awesome",
     client_version: PRODUCT_VERSION,
   } as const;
   const value = {
     product_version: PRODUCT_VERSION,
-    protocol_version: 3,
+    protocol_version: 4,
     status: "ready",
     session_id: "session_11111111111111111111111111111111",
     workspace: { display_path: "C:\\workspace" },
-    capabilities: ["threads", "turns", "commands"],
+    capabilities: ["threads", "turns", "commands", "web", "citations"],
   } as const;
 
-  it("accepts v3 and rejects old v2 values in both handshake directions", () => {
+  it("accepts v4 and rejects old v3 values in both handshake directions", () => {
     expect(methodSchemas.initialize.params.safeParse(params).success).toBe(
       true,
     );
     expect(
       methodSchemas.initialize.params.safeParse({
         ...params,
-        protocol_version: 2,
+        protocol_version: 3,
       }).success,
     ).toBe(false);
     expect(methodSchemas.initialize.value.safeParse(value).success).toBe(true);
     expect(
       methodSchemas.initialize.value.safeParse({
         ...value,
-        protocol_version: 2,
+        protocol_version: 3,
       }).success,
     ).toBe(false);
+    expect(
+      methodSchemas.initialize.value.safeParse({
+        ...value,
+        capabilities: ["threads", "turns", "commands", "web"],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("protocol v4 Web and citation contracts", () => {
+  const citation = {
+    id: "S1",
+    title: "Primary source",
+    url: "https://example.com/source",
+  } as const;
+  const entry = {
+    id: "entry_1",
+    thread_id: "thread_1",
+    sequence: 1,
+    kind: "assistant_message",
+    content: "Answer [[S1]]",
+    metadata: { citations: [citation] },
+    created_at: "2026-07-27T00:00:00Z",
+  } as const;
+
+  it("validates strict assistant metadata and absolute HTTPS citations", () => {
+    expect(citationSchema.safeParse(citation).success).toBe(true);
+    expect(threadEntrySchema.safeParse(entry).success).toBe(true);
+    expect(
+      threadEntrySchema.safeParse({ ...entry, metadata: {} }).success,
+    ).toBe(false);
+    expect(
+      threadEntrySchema.safeParse({
+        ...entry,
+        metadata: { citations: [citation], private_query: "secret" },
+      }).success,
+    ).toBe(false);
+    expect(
+      citationSchema.safeParse({ ...citation, url: "http://example.com" })
+        .success,
+    ).toBe(false);
+    expect(
+      citationSchema.safeParse({ ...citation, url: "https://user@example.com" })
+        .success,
+    ).toBe(false);
+    expect(
+      threadEntrySchema.safeParse({
+        ...entry,
+        metadata: { citations: [{ ...citation, id: "S2" }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      threadEntrySchema.safeParse({
+        ...entry,
+        metadata: {
+          citations: [citation, { ...citation, id: "S2", title: "Duplicate" }],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("bounds Web budgets while allowing cumulative usage", () => {
+    const budget = {
+      model_calls: 32,
+      tool_calls: 64,
+      provider_retries: 2,
+      compressions: 2,
+      active_execution_seconds: 1_800,
+      total_context_tokens: 262_144,
+      web_requests: 8,
+    };
+    expect(budgetSchema.safeParse(budget).success).toBe(true);
+    expect(budgetSchema.safeParse({ ...budget, web_requests: 9 }).success).toBe(
+      false,
+    );
+    expect(
+      usageSummarySchema.safeParse({
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        model_calls: 0,
+        tool_calls: 0,
+        provider_retries: 0,
+        compressions: 0,
+        web_requests: 10,
+        active_execution_seconds: 0,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts the exact /web status payload and rejects unknown fields", () => {
+    const outcome = {
+      kind: "result",
+      payload: {
+        kind: "web_status",
+        enabled: true,
+        provider: "tavily",
+        available: true,
+        credential_configured: true,
+        proxy_configured: false,
+        thread_authorized: false,
+        requests_per_turn: 8,
+        disclosure: "Queries and URLs are sent to Tavily.",
+      },
+    } as const;
+    expect(commandOutcomeSchema.safeParse(outcome).success).toBe(true);
+    expect(
+      commandOutcomeSchema.safeParse({
+        ...outcome,
+        payload: { ...outcome.payload, query: "private" },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires deny-first network choices and envelope-bound identities", () => {
+    const event = {
+      version: 1,
+      event_id: "event_network1",
+      sequence: 1,
+      session_id: "session_1",
+      workspace_key: "workspace_1",
+      thread_id: "thread_1",
+      turn_id: "turn_1",
+      operation_id: "operation_1",
+      event_type: "interaction.required",
+      timestamp: "2026-07-27T00:00:00Z",
+      payload: {
+        kind: "interaction.required",
+        interaction_id: "interaction_1",
+        interaction_kind: "tool_approval",
+        prompt: "Send this query to Tavily?",
+        operation: "web_search",
+        target: "Tavily",
+        capability: "network.read",
+        choices: [
+          { decision: "deny", label: "Deny" },
+          { decision: "allow_once", label: "Allow once" },
+          {
+            decision: "allow_thread_network",
+            label: "Allow for this Thread",
+          },
+        ],
+      },
+    } as const;
+    expect(eventEnvelopeSchema.safeParse(event).success).toBe(true);
+    expect(
+      eventEnvelopeSchema.safeParse({
+        ...event,
+        payload: {
+          ...event.payload,
+          choices: [...event.payload.choices].reverse(),
+        },
+      }).success,
+    ).toBe(false);
+    const { turn_id: _turnId, ...missingTurn } = event;
+    void _turnId;
+    expect(eventEnvelopeSchema.safeParse(missingTurn).success).toBe(false);
   });
 });
 
@@ -141,6 +306,19 @@ describe("workspace change protocol", () => {
       expect.objectContaining({ kind: "directory" }),
       expect.objectContaining({ kind: "symlink" }),
     ]);
+    if (!result.ok) return;
+    const assistant = result.value.view.entries.find(
+      (entry) => entry.kind === "assistant_message",
+    );
+    expect(assistant?.metadata.citations).toEqual([
+      {
+        id: "S1",
+        title: "Fixture source",
+        url: "https://example.com/source",
+      },
+    ]);
+    expect(result.value.view.turns[0]?.budgets.web_requests).toBe(8);
+    expect(result.value.view.turns[0]?.usage.web_requests).toBe(1);
   });
 });
 
@@ -163,10 +341,10 @@ describe("startup state recovery protocol", () => {
     expect(methodSchemas.initialize.result.parse(initialize?.result)).toEqual({
       ok: true,
       value: {
-        capabilities: ["threads", "turns", "commands"],
+        capabilities: ["threads", "turns", "commands", "web", "citations"],
         interaction_id: "interaction_state_reset",
         product_version: PRODUCT_VERSION,
-        protocol_version: 3,
+        protocol_version: 4,
         session_id: "session_11111111111111111111111111111111",
         status: "state_reset_required",
         workspace: { display_path: "C:\\workspace" },

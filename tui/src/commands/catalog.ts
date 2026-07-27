@@ -38,6 +38,11 @@ const metadata: Readonly<
   undo: entry("undo", "/undo", "Undo the latest reversible change"),
   redo: entry("redo", "/redo", "Redo the latest undone change"),
   tools: entry("tools", "/tools", "List available tools"),
+  web: entry(
+    "web",
+    "/web [on|off|status|revoke]",
+    "Show or configure Tavily Web access",
+  ),
   skills: entry(
     "skills",
     "/skills [auto|off|name]",

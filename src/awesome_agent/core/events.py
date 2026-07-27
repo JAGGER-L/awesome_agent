@@ -19,6 +19,7 @@ type InteractionDecisionValue = Literal[
     "reset_state",
     "allow_once",
     "allow_thread_writes",
+    "allow_thread_network",
     "enable_full_access",
     "retry",
     "abort",
@@ -160,6 +161,7 @@ class UsageUpdatedPayload(BaseModel):
     reasoning_tokens: JsonSafeInteger = Field(default=0, ge=0)
     cache_read_tokens: JsonSafeInteger = Field(default=0, ge=0)
     cache_write_tokens: JsonSafeInteger = Field(default=0, ge=0)
+    web_requests: JsonSafeInteger = Field(default=0, ge=0)
 
 
 class MemoryStatusPayload(BaseModel):

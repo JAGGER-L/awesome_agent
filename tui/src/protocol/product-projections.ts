@@ -16,6 +16,73 @@ const clientMessageIdentifierSchema = identifierSchema.regex(
   /^client_[A-Za-z0-9_-]+$/,
 );
 
+export const citationSchema = z.strictObject({
+  id: z.string().regex(/^S[1-9][0-9]{0,5}$/u),
+  title: boundedText(1, 500).refine(
+    (value) =>
+      value.trim().length > 0 &&
+      !Array.from(value).some((character) => {
+        const codePoint = character.codePointAt(0) ?? 0;
+        return (
+          codePoint < 32 ||
+          (codePoint >= 127 && codePoint <= 159) ||
+          character === "\u2028" ||
+          character === "\u2029"
+        );
+      }),
+    "Expected a non-blank single-line title",
+  ),
+  url: boundedText(1, 8_000).refine((value) => {
+    if (
+      value.includes("\\") ||
+      Array.from(value).some((character) => {
+        const codePoint = character.codePointAt(0) ?? 0;
+        return (
+          codePoint < 32 ||
+          (codePoint >= 127 && codePoint <= 159) ||
+          /\s/u.test(character)
+        );
+      })
+    ) {
+      return false;
+    }
+    try {
+      const parsed = new URL(value);
+      return (
+        parsed.protocol === "https:" &&
+        parsed.hostname.length > 0 &&
+        parsed.username.length === 0 &&
+        parsed.password.length === 0
+      );
+    } catch {
+      return false;
+    }
+  }, "Expected an absolute HTTPS URL"),
+});
+export type Citation = z.infer<typeof citationSchema>;
+
+const assistantMetadataSchema = z
+  .strictObject({
+    citations: z.array(citationSchema).max(128),
+  })
+  .superRefine(({ citations }, context) => {
+    if (citations.some((citation, index) => citation.id !== `S${index + 1}`)) {
+      context.addIssue({
+        code: "custom",
+        message: "Citation identifiers must be contiguous",
+      });
+    }
+    if (
+      new Set(citations.map((citation) => citation.url)).size !==
+      citations.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Citation URLs must be unique",
+      });
+    }
+  });
+
 export const usageSummarySchema = z.strictObject({
   input_tokens: safeIntegerSchema.min(0),
   output_tokens: safeIntegerSchema.min(0),
@@ -26,6 +93,7 @@ export const usageSummarySchema = z.strictObject({
   tool_calls: safeIntegerSchema.min(0),
   provider_retries: safeIntegerSchema.min(0),
   compressions: safeIntegerSchema.min(0),
+  web_requests: safeIntegerSchema.min(0),
   active_execution_seconds: z.number().finite().min(0),
 });
 
@@ -108,31 +176,40 @@ export const threadSchema = z.strictObject({
   updated_at: utcTimestampSchema,
 });
 
-export const threadEntrySchema = z
-  .strictObject({
-    id: identifierSchema,
-    thread_id: identifierSchema,
-    sequence: positiveIntegerSchema,
-    kind: z.enum(["user_message", "assistant_message", "direct_command"]),
-    content: boundedText(0, 200_000),
-    client_message_id: clientMessageIdentifierSchema.optional(),
+const threadEntryBase = {
+  id: identifierSchema,
+  thread_id: identifierSchema,
+  sequence: positiveIntegerSchema,
+  content: boundedText(0, 200_000),
+  created_at: utcTimestampSchema,
+} as const;
+
+export const threadEntrySchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    ...threadEntryBase,
+    kind: z.literal("user_message"),
+    client_message_id: clientMessageIdentifierSchema,
     metadata: z.record(z.string(), jsonValueSchema),
-    created_at: utcTimestampSchema,
-  })
-  .superRefine(({ kind, content, client_message_id }, context) => {
-    if ((kind === "user_message") !== (client_message_id !== undefined)) {
-      context.addIssue({
-        code: "custom",
-        message: "User message identity and entry kind disagree",
-      });
-    }
-    if (kind === "direct_command" && Array.from(content).length > 30_000) {
+  }),
+  z.strictObject({
+    ...threadEntryBase,
+    kind: z.literal("assistant_message"),
+    metadata: assistantMetadataSchema,
+  }),
+  z
+    .strictObject({
+      ...threadEntryBase,
+      kind: z.literal("direct_command"),
+      metadata: z.record(z.string(), jsonValueSchema),
+    })
+    .superRefine(({ content }, context) => {
+      if (Array.from(content).length <= 30_000) return;
       context.addIssue({
         code: "custom",
         message: "Direct command exceeds 30000 code points",
       });
-    }
-  });
+    }),
+]);
 
 export const budgetSchema = z.strictObject({
   model_calls: positiveIntegerSchema.max(256),
@@ -141,6 +218,7 @@ export const budgetSchema = z.strictObject({
   compressions: nonNegativeIntegerSchema.max(10),
   active_execution_seconds: positiveIntegerSchema.max(21_600),
   total_context_tokens: positiveIntegerSchema,
+  web_requests: nonNegativeIntegerSchema.max(8),
 });
 
 export const turnSchema = z

@@ -82,9 +82,10 @@ describe("headless CLI through the real private Core", () => {
     } else {
       expect(stdout).toHaveLength(1);
       expect(JSON.parse(stdout[0] ?? "")).toMatchObject({
-        version: 1,
+        version: 2,
         type: "awesome.run.result",
         text: "fixture done",
+        citations: [],
       });
     }
   }, 60_000);

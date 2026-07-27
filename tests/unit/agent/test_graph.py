@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -21,6 +22,7 @@ from awesome_agent.agent import (
 )
 from awesome_agent.agent.context import DisabledAgentContextCompressor
 from awesome_agent.context import estimate_messages
+from awesome_agent.core.citations import Citation
 from awesome_agent.core.tools import (
     ToolError,
     ToolErrorCode,
@@ -30,6 +32,7 @@ from awesome_agent.core.tools import (
     ToolSpec,
     ToolStatus,
 )
+from awesome_agent.core.tools.context import CapabilityQuotaLedger
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
@@ -70,16 +73,21 @@ class FakeExecutor:
         results: tuple[ToolResult, ...] = (),
         *,
         cancel: bool = False,
+        consume_network: bool = False,
     ) -> None:
         self._results = list(results)
         self._cancel = cancel
+        self._consume_network = consume_network
         self.requests: list[ToolRequest] = []
 
     async def execute(self, request: ToolRequest, *, context: object) -> ToolResult:
-        del context
         self.requests.append(request)
         if self._cancel:
             raise asyncio.CancelledError
+        if self._consume_network:
+            cast(ToolExecutionContext, context).capability_quotas.consume(
+                "network.read"
+            )
         if self._results:
             return self._results.pop(0)
         return ToolResult(
@@ -177,6 +185,8 @@ def _runtime(
     budget: TurnBudget | None = None,
     compressor: SuccessfulCompressor | None = None,
 ) -> AgentRuntimeContext:
+    turn_budget = budget or TurnBudget()
+
     async def context_builder(state: object) -> PreparedAgentContext:
         del state
         return PreparedAgentContext(
@@ -188,9 +198,15 @@ def _runtime(
         state: AgentState,
         request: ToolRequest,
     ) -> ToolExecutionContext:
+        del request
         return cast(
             ToolExecutionContext,
-            {"turn_id": state["turn_id"], "tool_name": request.tool_name},
+            SimpleNamespace(
+                capability_quotas=CapabilityQuotaLedger(
+                    {"network.read": turn_budget.web_requests},
+                    used_counts={"network.read": state["web_requests"]},
+                )
+            ),
         )
 
     return AgentRuntimeContext(
@@ -211,11 +227,18 @@ def _runtime(
                 capability="workspace.write",
                 read_only=False,
             ),
+            ToolSpec(
+                name="web_search",
+                description="Search the Web",
+                input_schema={"type": "object"},
+                capability="network.read",
+                read_only=True,
+            ),
         ),
         tool_context_factory=tool_context_factory,
         event_projector=FakeProjector(),
         context_builder=context_builder,
-        budget=budget or TurnBudget(),
+        budget=turn_budget,
         monotonic=_Monotonic(),
         context_token_estimator=estimate_messages,
         compressor=compressor or DisabledAgentContextCompressor(),
@@ -299,6 +322,47 @@ async def test_three_tools_execute_in_provider_order_one_per_node() -> None:
         "call_1",
         "call_2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_network_usage_and_citations_survive_the_agent_loop() -> None:
+    calls = tuple(
+        ToolCall(
+            call_id=f"call_{index}",
+            name="web_search",
+            arguments_json='{"query":"current"}',
+        )
+        for index in range(1, 3)
+    )
+    citations = (
+        Citation(id="S1", title="First", url="https://example.com/first"),
+        Citation(id="S2", title="Second", url="https://example.com/second"),
+    )
+    executor = FakeExecutor(
+        tuple(
+            ToolResult(
+                call_id=call.call_id,
+                tool_name=call.name,
+                status=ToolStatus.SUCCESS,
+                content=f"source:{citation.id}",
+                citations=(citation,),
+            )
+            for call, citation in zip(calls, citations, strict=True)
+        ),
+        consume_network=True,
+    )
+    gateway = FakeGateway(
+        ((_completed("", tool_calls=calls),), (_completed("done"),))
+    )
+
+    result = await _invoke(_runtime(gateway, executor))
+
+    assert result["web_requests"] == 2
+    assert result["citations"] == [
+        citation.model_dump(mode="json") for citation in citations
+    ]
+    assert result["final_answer"] is not None
+    assert "Sources:" in result["final_answer"]
 
 
 @pytest.mark.asyncio

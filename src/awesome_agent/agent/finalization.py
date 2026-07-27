@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Protocol
 
 from pydantic import (
@@ -101,6 +102,8 @@ class _CitationAggregationInvariantError(RuntimeError):
 
 
 _MAX_TURN_CITATIONS = 128
+_MAX_FINAL_ANSWER_CHARACTERS = 200_000
+_CITATION_MARKER = re.compile(r"\[\[(S[0-9]+)\]\]")
 
 
 def collect_tool_citations(
@@ -110,6 +113,7 @@ def collect_tool_citations(
 
     ordered: list[Citation] = []
     by_id: dict[str, Citation] = {}
+    by_url: dict[str, Citation] = {}
     for raw_result in tool_results:
         result = ToolResult.model_validate(raw_result)
         if result.status is not ToolStatus.SUCCESS:
@@ -117,15 +121,97 @@ def collect_tool_citations(
         for citation in result.citations:
             previous = by_id.get(citation.id)
             if previous is None:
+                same_url = by_url.get(citation.url)
+                if same_url is not None and same_url.id != citation.id:
+                    raise _CitationAggregationInvariantError(
+                        "One source URL cannot have multiple citation IDs."
+                    )
                 if len(ordered) >= _MAX_TURN_CITATIONS:
                     raise _CitationAggregationInvariantError(
                         "Turn citations exceed the 128-source limit."
                     )
                 by_id[citation.id] = citation
+                by_url[citation.url] = citation
                 ordered.append(citation)
                 continue
             if previous != citation:
                 raise _CitationAggregationInvariantError(
                     f"Citation {citation.id} has conflicting values."
                 )
+    if any(citation.id != f"S{index}" for index, citation in enumerate(ordered, 1)):
+        raise _CitationAggregationInvariantError(
+            "Turn citation identities must be contiguous."
+        )
     return tuple(ordered)
+
+
+def validate_answer_citations(
+    final_answer: str,
+    citations: tuple[Citation, ...],
+) -> tuple[str, tuple[PostAnswerDiagnostic, ...]]:
+    """Validate source markers and add a deterministic source list when absent."""
+
+    known = {citation.id for citation in citations}
+    markers = tuple(_CITATION_MARKER.findall(final_answer))
+    referenced = tuple(marker for marker in markers if marker in known)
+    diagnostics: list[PostAnswerDiagnostic] = []
+    if any(marker not in known for marker in markers):
+        diagnostics.append(
+            PostAnswerDiagnostic(
+                code="citation_invalid_id",
+                message="The answer contains a citation ID with no matching source.",
+            )
+        )
+    if citations and not referenced:
+        final_answer, truncated = _append_sources(final_answer, citations)
+        diagnostics.append(
+            PostAnswerDiagnostic(
+                code="citation_sources_appended",
+                message="Web sources were appended because the answer cited none.",
+            )
+        )
+        if truncated:
+            diagnostics.append(
+                PostAnswerDiagnostic(
+                    code="citation_sources_truncated",
+                    message=(
+                        "The appended Web source list was bounded by the answer limit."
+                    ),
+                )
+            )
+    return final_answer, tuple(diagnostics)
+
+
+def _append_sources(
+    final_answer: str,
+    citations: tuple[Citation, ...],
+) -> tuple[str, bool]:
+    answer = final_answer.rstrip()
+    header = "\n\nSources:\n"
+    available = _MAX_FINAL_ANSWER_CHARACTERS - len(answer) - len(header)
+    if available <= 0:
+        required = len(header) + len(f"- [[{citations[0].id}]]")
+        answer = answer[: max(1, _MAX_FINAL_ANSWER_CHARACTERS - required)].rstrip()
+        available = _MAX_FINAL_ANSWER_CHARACTERS - len(answer) - len(header)
+    lines: list[str] = []
+    truncated = False
+    for citation in citations:
+        title = _escape_source_title(citation.title)
+        line = f"- [[{citation.id}]] {title} — {citation.url}\n"
+        if len(line) > available:
+            truncated = True
+            break
+        lines.append(line)
+        available -= len(line)
+    if not lines:
+        fallback = f"- [[{citations[0].id}]]"
+        lines.append(fallback[:available])
+        truncated = True
+    return f"{answer}{header}{''.join(lines).rstrip()}", truncated
+
+
+def _escape_source_title(value: str) -> str:
+    escaped = value.replace("\\", "\\\\")
+    for character in "`*_[]<>#":
+        escaped = escaped.replace(character, f"\\{character}")
+    return escaped

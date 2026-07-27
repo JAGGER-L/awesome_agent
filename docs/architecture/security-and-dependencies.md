@@ -110,6 +110,12 @@ The three permission modes govern known built-in capabilities as documented in
 [Tools and changes](tools-and-changes.md). MCP and unknown capabilities always
 ask once, including in Full access.
 
+`network.read` also asks on first use in every mode. Its approval can apply
+once or to the active Thread only; selecting another Thread, rebuilding the
+runtime, changing permission mode, `/web revoke`, `/web off`, and shutdown
+clear the Thread grant. Headless `--allow-network` can resolve only the exact
+active Turn prompt as allow-once and cannot bypass hard denial.
+
 Approval is bound to the authority that requested it:
 
 - Tool approval: Thread + Turn + Operation + interaction generation;
@@ -190,6 +196,24 @@ Process ownership addresses orphan cleanup. It does not limit filesystem,
 network, device, credential-store, or child-process access while the command is
 running. A deliberately daemonized POSIX process can leave the owned group.
 
+## Web network boundary
+
+Web is user-enabled and defaults off. Only a valid `TAVILY_API_KEY` plus
+`web.enabled: true` publishes `web_search`; Workspace configuration cannot turn
+it on or select credentials. The provider-neutral handler uses one reusable
+Tavily adapter and an explicit `httpx.AsyncClient` with `trust_env=False`,
+redirects disabled, a bounded response, and no opaque retry. Ambient proxy
+variables are ignored; only validated `AWESOME_WEB_PROXY_URL` or its selected
+Awesome secret is accepted.
+
+The destination is fixed at `https://api.tavily.com/search`; the query and
+blocked-domain list leave the process for Tavily. Enabling and first approval
+disclose the [Tavily Privacy Policy](https://www.tavily.com/privacy) and
+[Platform Terms](https://www.tavily.com/terms). The diagnostics allowlist never
+includes query, URL, response, or credential text. Strict HTTPS citations are
+untrusted display data and become links only when their ID matches the Turn's
+validated source catalog.
+
 ## Extension and context boundary
 
 Workspace instructions, Skills, Memory, MCP descriptions/results, explicit
@@ -264,6 +288,7 @@ Important framework ownership is also fixed:
 | External framework | Allowed owner |
 | --- | --- |
 | `jsonschema` | Extensions/MCP |
+| `httpx` | Web/Tavily adapter |
 | `mcp` SDK | Extensions |
 | `openai` SDK | concrete Providers |
 | `sqlite3` | Storage |
@@ -279,6 +304,7 @@ Awesome keeps a small explicit production set:
 | Dependency | Owned use |
 | --- | --- |
 | `pydantic` | typed cross-boundary models and validation; strictness is contract-specific |
+| `httpx` | one bounded async Tavily Search client with explicit proxy ownership |
 | `langgraph`, `langgraph-checkpoint-sqlite` | one Agent graph and its checkpoint saver |
 | `openai` | DeepSeek/Kimi-compatible provider clients behind adapters |
 | `mcp` | stdio MCP client behind Extensions |

@@ -34,7 +34,7 @@ Awesome 分为 Python Core 和 Ink + React TUI。只有当贡献能够维持产�
 | `src/awesome_agent/storage/` | 嵌入式状态与 checkpoint | `database.py`、`conversations.py` |
 | `src/awesome_agent/extensions/` | Skills 与 MCP | `skills/`、`mcp/` |
 | `src/awesome_agent/memory/` | 本地与 Mem0 memory | `service.py`、`mem0_cloud.py` |
-| `src/awesome_agent/protocol/` | Protocol v3 与 stdio Host | `jsonrpc.py`、`stdio.py` |
+| `src/awesome_agent/protocol/` | Protocol v4 与 stdio Host | `jsonrpc.py`、`stdio.py` |
 | `tui/src/` | 终端展示与 Core adapter | `app/App.tsx`、`protocol/`、`state/` |
 | `tests/` 与 `tui/tests/` | 行为、集成、结构、打包 | 最近的 package suite |
 

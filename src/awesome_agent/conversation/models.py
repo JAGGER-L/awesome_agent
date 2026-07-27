@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from typing import Self
@@ -14,6 +15,7 @@ from pydantic import (
 )
 
 from awesome_agent.config.models import BudgetConfig
+from awesome_agent.core.citations import Citation, CitationAllocator
 
 _MAX_JSON_SAFE_INTEGER = 9_007_199_254_740_991
 
@@ -59,6 +61,7 @@ class UsageSummary(BaseModel):
     tool_calls: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
     provider_retries: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
     compressions: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    web_requests: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
     active_execution_seconds: float = Field(default=0.0, ge=0.0)
 
     def __add__(self, other: UsageSummary) -> UsageSummary:
@@ -72,6 +75,7 @@ class UsageSummary(BaseModel):
             tool_calls=self.tool_calls + other.tool_calls,
             provider_retries=self.provider_retries + other.provider_retries,
             compressions=self.compressions + other.compressions,
+            web_requests=self.web_requests + other.web_requests,
             active_execution_seconds=(
                 self.active_execution_seconds + other.active_execution_seconds
             ),
@@ -99,6 +103,19 @@ class Thread(BaseModel):
         return value
 
 
+class AssistantEntryMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    citations: tuple[Citation, ...] = Field(
+        default=(), strict=False, max_length=128
+    )
+
+    @model_validator(mode="after")
+    def validate_citation_sequence(self) -> Self:
+        CitationAllocator(self.citations)
+        return self
+
+
 class ThreadEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -114,6 +131,23 @@ class ThreadEntry(BaseModel):
     )
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_assistant_metadata(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        kind = value.get("kind")
+        if kind not in {
+            ThreadEntryKind.ASSISTANT_MESSAGE,
+            ThreadEntryKind.ASSISTANT_MESSAGE.value,
+        }:
+            return value
+        normalized = dict(value)
+        normalized["metadata"] = AssistantEntryMetadata.model_validate(
+            value.get("metadata", {})
+        ).model_dump(mode="json")
+        return normalized
 
     @model_validator(mode="after")
     def validate_direct_command_bound(self) -> Self:

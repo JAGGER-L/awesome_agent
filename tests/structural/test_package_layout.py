@@ -19,6 +19,7 @@ EXPECTED_PACKAGES = {
     "providers",
     "safety",
     "storage",
+    "web",
 }
 EXPECTED_MODULES = {"__init__.py", "paths.py", "version.py", "py.typed"}
 

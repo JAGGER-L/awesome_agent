@@ -41,9 +41,9 @@ it:
 | startup, Turns, direct commands, interactions, cancellation, and shutdown | [Request lifecycles](request-lifecycles.md) |
 | why Application and Agent are separate and where LangGraph belongs | [Application and Agent](application-and-agent.md) |
 | prompt sources, budgets, model adapters, Skills, Memory, and MCP | [Context, model, and extensions](context-model-and-extensions.md) |
-| tool registration, approval, shell execution, and reversible changes | [Tools and changes](tools-and-changes.md) |
+| tool registration, Web search/citations, approval, shell execution, and reversible changes | [Tools and changes](tools-and-changes.md) |
 | SQLite ownership, checkpoints, leases, reset, and crash convergence | [Storage and recovery](storage-and-recovery.md) |
-| Protocol v3, stdio bounds, Ink state, input modes, and reconciliation | [Protocol and TUI](protocol-and-tui.md) |
+| Protocol v4, stdio bounds, Ink state, input modes, and reconciliation | [Protocol and TUI](protocol-and-tui.md) |
 | threat model, trust, isolation limits, and enforced dependency direction | [Security and dependencies](security-and-dependencies.md) |
 
 For a code-first tour, begin with:
@@ -64,7 +64,7 @@ For a code-first tour, begin with:
 terminal input
     |
     v
-Ink surface -- Protocol v3 --> LocalApplication
+Ink surface -- Protocol v4 --> LocalApplication
                                      |
                               foreground arbiter
                                      |
@@ -118,7 +118,7 @@ Before changing a boundary:
    add integration coverage for the crossed boundary.
 5. Update the root architecture overview if package ownership or dependency
    direction changes.
-6. Update the focused page, user documentation, generated Protocol v3 fixtures,
+6. Update the focused page, user documentation, generated Protocol v4 fixtures,
    and TUI schema/presenter when their contracts change.
 
 The contributor workflow is detailed in

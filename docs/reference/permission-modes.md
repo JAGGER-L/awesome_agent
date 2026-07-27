@@ -7,11 +7,11 @@ Journal capture, timeouts, or OS isolation.
 
 ## Exact matrix
 
-| Mode | Workspace read | Create/modify | Delete | Shell | MCP/unknown extension |
-| --- | --- | --- | --- | --- | --- |
-| Request approval | Allow | Ask | Ask | Ask | Ask |
-| Accept edits | Allow | Allow | Ask | Ask | Ask |
-| Full access | Allow | Allow | Allow | Allow | Ask |
+| Mode | Workspace read | Create/modify | Delete | Shell | Network read | MCP/unknown extension |
+| --- | --- | --- | --- | --- | --- | --- |
+| Request approval | Allow | Ask | Ask | Ask | Ask | Ask |
+| Accept edits | Allow | Allow | Ask | Ask | Ask | Ask |
+| Full access | Allow | Allow | Allow | Allow | Ask | Ask |
 
 The matrix applies to Agent tool calls in the selected Thread permission
 session. A direct `! command` is explicit authority for that exact command and
@@ -42,8 +42,9 @@ failure surface.
 
 **Full access** removes per-call prompts for built-in local capabilities. It is
 useful for a trusted repository and a supervised long task, but it is not “allow
-everything.” MCP and future unknown extension capabilities still ask once per
-call because Core cannot infer their external authority or idempotency.
+everything.” The first `network.read` call still asks, while MCP and future
+unknown extension capabilities ask once per call because Core cannot infer
+their external authority or idempotency.
 
 This asymmetric design follows least authority: convenience is granted only
 where Awesome knows the capability semantics.
@@ -58,6 +59,10 @@ approval can be requested, Core performs:
 3. the shell circuit breaker against the requested lexical working directory;
 4. capability policy: a valid temporary grant, then the current mode matrix;
 5. one interaction bound to the Tool call when the result is `ask`.
+
+`network.read` is an explicit matrix exception: without a current Thread grant,
+it returns `ask` in all three modes. A permission mode cannot silently authorize
+transmission of a search query to Tavily.
 
 After admission, but before the effect, the handler applies backend-specific
 checks. Filesystem handlers resolve containment, link/reparse state, object
@@ -104,6 +109,11 @@ and interaction generation. The choices are:
   current selected Thread;
 - **No** (`deny`): reject the call.
 
+For `network.read`, the safe first/default choice is **Deny** (`deny`), followed
+by **Allow once** (`allow_once`) and **Allow for this Thread**
+(`allow_thread_network`). The Thread choice covers later Web searches only; it
+does not grant another network capability.
+
 The “all edits” label does not include delete, shell, MCP, or an unknown
 capability. Core rejects any attempt to apply that decision to a non-write
 capability as an invariant violation.
@@ -113,6 +123,22 @@ including changing from one mode back to the same conceptual authority through
 a new transition, clears the grant set and increments the permission
 generation. Selecting, creating, or resuming another Thread resets the mode to
 Request approval and clears grants. Nothing is persisted as a permanent rule.
+
+The network grant is also cleared by a Runtime rebuild, `/web revoke`, `/web
+off`, or shutdown. Therefore enabling Web and granting network access are
+separate decisions.
+
+## Web network reads
+
+An enabled `web_search` sends its query to Tavily. The approval describes that
+transfer, and the data is processed under the [Tavily Privacy
+Policy](https://www.tavily.com/privacy) and [Tavily Platform
+Terms](https://www.tavily.com/terms). Search results remain untrusted model
+context; approval does not make their content authoritative.
+
+In headless mode, `--allow-network` resolves only the active headless Turn's
+matching `network.read` interaction as `allow_once`. It cannot enable Web,
+create a Thread grant, approve another interaction, or bypass a hard denial.
 
 ## Full access confirmation
 

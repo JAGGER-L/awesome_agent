@@ -148,7 +148,7 @@ Verifier 检查：
   以及不存在 editable 或非生产 content；
 - 精确 hashed dependency requirement 与隔离安装；
 - `uv pip check`、Core import 与 console entry point；
-- 在全新 home 与 workspace 中运行已安装 wheel 的 Protocol v3 生命周期：
+- 在全新 home 与 workspace 中运行已安装 wheel 的 Protocol v4 生命周期：
   `initialize` -> workspace trust -> `application.getState` -> `shutdown`；
 - TUI package/version/entry point；
 - Schema 7 bootstrap、floor-7 空 migration registry、不兼容状态分类、独占 reset
@@ -277,7 +277,7 @@ git push origin "v$Version"
    attestation。
 
 Windows 与 macOS 不重新 build。每个平台 verifier 都会安装下载到的 wheel 并执行同一条
-Protocol v3 生命周期，因此它证明 packaged Core 能在各 CI runtime 启动，而不只是能在
+Protocol v4 生命周期，因此它证明 packaged Core 能在各 CI runtime 启动，而不只是能在
 Ubuntu import。任一平台 verifier 失败都会使 candidate 无效。
 
 Hosted runner 验证与最终用户 host 的 installer 证据回答不同问题。前者在公共 asset 尚未

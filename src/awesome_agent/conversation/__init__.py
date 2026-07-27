@@ -1,6 +1,7 @@
 """Framework-free local conversation domain contracts."""
 
 from awesome_agent.conversation.models import (
+    AssistantEntryMetadata,
     Thread,
     ThreadEntry,
     ThreadEntryKind,
@@ -34,6 +35,7 @@ from awesome_agent.conversation.titles import (
 )
 
 __all__ = [
+    "AssistantEntryMetadata",
     "ConversationConflict",
     "ConversationError",
     "ConversationService",

@@ -46,6 +46,7 @@ The built-in baseline is:
 | `write_file`, `edit_file` | `workspace.write` | journaled |
 | `delete` | `workspace.delete` | journaled |
 | `execute` | `shell.execute` | observation only |
+| `web_search` (when enabled and configured) | `network.read` | none; external and non-replayable |
 
 The registry is extensible; eight is not a fixed maximum. MCP namespaces are
 replaced atomically with names such as `mcp.<server>.<tool>`.
@@ -62,13 +63,14 @@ empty. On a successful handler return, the Executor strictly reconstructs each
 citation and the output, then copies the citations into the normalized result.
 Bounding or truncating the textual `content` does not discard those citations.
 
-Agent serializes the complete `ToolResult` into `AgentState.tool_results`, so
-the same citation values survive in the LangGraph checkpoint without a second,
-top-level `AgentState` citation channel. This is an internal value path today:
-Conversation records, Protocol v3, and the TUI wire are unchanged. The public
-citation wire is deferred to the atomic Protocol v4 Web-citation change; there
-is no interim compatibility adapter. This value contract alone does not assign
-source IDs, validate citation markers in model prose, or render a Sources UI.
+`web_search` allocates stable, URL-deduplicated `S1...Sn` identities within a
+Turn. Agent serializes the complete result and derives the ordered
+`AgentState.citations` snapshot, so both survive checkpoint recovery.
+Finalization validates model markers written as `[[S1]]`: unknown IDs produce
+a warning and are not linked; when Web was used but no valid source is cited,
+it appends a bounded deterministic Sources section and records a warning.
+Conversation persists the same sources with the assistant entry, and Protocol
+v4 carries them to the TUI, headless JSON v2, and later exports.
 
 ## Executor pipeline
 
@@ -118,7 +120,9 @@ summaries retain argument names, not raw argument values.
 Replay safety is registration metadata, not a property inferred by recovery.
 Only a built-in whose managed local semantics prove that a repeated call is
 safe may be marked replayable. MCP calls and other external or unclassified
-effects are non-replayable. Recovery looks up the same name in the current
+effects are non-replayable. `web_search` is explicitly non-replayable, so a
+crash after dispatch defaults to Abort instead of repeating a paid or
+externally observed request. Recovery looks up the same name in the current
 Runtime Registry and consumes that registration's metadata. Replayable work may
 resume; non-replayable, missing, or unknown metadata fails closed into a
 recovery interaction and is never retried automatically. The user may
@@ -132,11 +136,11 @@ Permission is a pure capability decision evaluated only after registered hard
 admission succeeds. A hard rejection always wins and cannot be converted to an
 allow by any row in this table:
 
-| Mode | Read | Create/modify | Delete | Shell | MCP/unknown |
-| --- | --- | --- | --- | --- | --- |
-| Request approval | Allow | Ask | Ask | Ask | Ask |
-| Accept edits | Allow | Allow | Ask | Ask | Ask |
-| Full access | Allow | Allow | Allow | Allow | Ask |
+| Mode | Read | Create/modify | Delete | Shell | Network read | MCP/unknown |
+| --- | --- | --- | --- | --- | --- | --- |
+| Request approval | Allow | Ask | Ask | Ask | Ask | Ask |
+| Accept edits | Allow | Allow | Ask | Ask | Ask | Ask |
+| Full access | Allow | Allow | Allow | Allow | Ask | Ask |
 
 This table applies to Agent tool calls using the selected Thread's permission
 session. Direct `! command` input is the user's explicit authorization for that
@@ -148,7 +152,10 @@ cancellation, and redaction boundaries.
 
 An allow-once result applies to the current Tool call. “Allow all edits during
 this session” grants only `workspace.write`; it cannot grant delete, shell, or
-an extension capability. Mode and Thread transitions clear temporary grants.
+an extension capability. Network approval offers deny (the default), allow
+once, or allow for the active Thread. Selecting another Thread, rebuilding the
+runtime, changing permission mode, `/web revoke`, `/web off`, and shutdown all
+clear that Thread grant.
 
 The Tool Executor creates approval text from validated operation facts. The TUI
 renders that typed request and returns a decision; it never infers capability

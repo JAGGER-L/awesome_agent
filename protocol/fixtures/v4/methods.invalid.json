@@ -9,7 +9,7 @@
       "name": "initialize.missing_client_version",
       "params": {
         "client_name": "awesome",
-        "protocol_version": 3
+        "protocol_version": 4
       }
     },
     {
@@ -22,7 +22,7 @@
       "params": {
         "client_name": "awesome",
         "client_version": "1.3.0",
-        "protocol_version": 2
+        "protocol_version": 3
       }
     },
     {

@@ -82,6 +82,7 @@ awesome_agent/
 │   ├── providers/      # DeepSeek and Kimi adapters
 │   ├── safety/         # redaction helpers
 │   ├── storage/        # embedded SQLite and checkpoint adapters
+│   ├── web/            # Tavily HTTP adapter for Core's provider-neutral Web port
 │   ├── paths.py        # AWESOME_HOME path ownership
 │   └── version.py      # product version reader
 ├── tui/                # Ink + React presentation package
@@ -246,9 +247,28 @@ Core's provider-neutral `Citation(id, title, url)` value follows successful
 tool data from `ToolOutput.citations` into `ToolResult.citations`. Text bounding
 does not remove that tuple. Agent then serializes the complete result into
 `AgentState.tool_results`, which preserves citations in the checkpoint without
-adding a second top-level citations channel. Conversation records, Protocol v3,
-and the TUI wire remain unchanged until Web citations and Protocol v4 land as
-one contract change; there is no interim compatibility adapter.
+adding a second top-level citations channel. Agent now derives the ordered
+`AgentState.citations` snapshot, and Conversation records, Protocol v4, TUI,
+and headless output carry the same sources without a v3 compatibility adapter.
+
+Optional Web search is one ordinary registered tool, not a second execution
+framework. It appears only when user configuration has `web.enabled: true`
+and `TAVILY_API_KEY` resolves. The provider-neutral `web_search` handler sends
+a bounded basic search (at most ten results) through a reusable
+`TavilySearchClient` to `POST https://api.tavily.com/search`. Its explicit
+`httpx.AsyncClient` uses `trust_env=False`, no redirects or opaque retries, and
+only `AWESOME_WEB_PROXY_URL` when configured. Stable redacted failures cover
+credentials, rate/usage limits, timeout, connection, provider availability,
+and malformed responses. The registration is `non_replayable`.
+
+`network.read` asks on first use in every permission mode and offers deny,
+allow once, or allow for the current Thread. Thread grants are cleared by
+Thread selection, runtime rebuild, permission-mode change, `/web revoke`,
+`/web off`, and shutdown. A Turn owns a frozen `web_requests` budget of at most
+eight; approval occurs before the quota is consumed and before HTTP begins.
+Queries leave the machine for Tavily under its published privacy policy and
+platform terms, while structured diagnostics omit query, URL, response, and
+secret text.
 
 File-changing built-ins write through the Change Journal and shared
 identity-bound filesystem primitives. Lexical containment is only admission:
@@ -288,7 +308,7 @@ The authoritative Core command path is:
 
 ```text
 Ink command controller
-    -> Protocol v3 command.execute
+    -> Protocol v4 command.execute
     -> LocalApplication facade
     -> complete CommandDispatcher
     -> one focused command service
@@ -305,7 +325,7 @@ hidden model prompts; natural-language input is the only path that starts an
 Agent Turn.
 
 `LocalApplication` is the only surface-facing Application host. Python produces
-Protocol v3 discriminated outcomes that TypeScript validates and presents
+Protocol v4 discriminated outcomes that TypeScript validates and presents
 exhaustively.
 Command progress is pending Surface lifecycle state, not a second durable
 operation model.
@@ -358,8 +378,8 @@ the sole owner of `BootstrapPhase`. Typed initialize and interaction outcomes
 advance or restore that phase; a serialized protocol response is never a
 lifecycle fact source. The stdio Host only asks Application whether an
 operation is admitted and translates a rejection into the existing Protocol
-v3 handshake error. It neither keeps a parallel phase machine nor parses
-response payloads to infer readiness. Protocol v3 request, result, and error
+v4 handshake error. It neither keeps a parallel phase machine nor parses
+response payloads to infer readiness. Protocol v4 request, result, and error
 shapes are unchanged by this internal ownership move.
 
 After trusted activation, the backend publishes one frozen, slotted
@@ -594,15 +614,16 @@ owns one input's parse, Core-admission, optimistic identity, and generation
 fence. The existing React queue still owns only pending presentation input,
 while Core remains the sole foreground execution authority.
 
-`awesome run` reuses that `ConnectedSurface`, startup controller, Protocol v3
+`awesome run` reuses that `ConnectedSurface`, startup controller, Protocol v4
 client, Application facade, and durable Thread/Turn records without rendering
 Ink. It creates a new Thread by default or targets one explicit Thread, then
 projects only the durable final assistant entry as text or a versioned JSON
 document. Parent stdout is result-only and stderr is diagnostic-only; Core
 stdout remains private NDJSON. An unresolved interaction returns code 3, while
 SIGINT sends urgent cancellation before returning 130 and closing the same
-Core process tree. `--allow-network` is only unconsumed process-local CLI intent
-at this stage, not a capability grant or hard-denial bypass.
+Core process tree. `--allow-network` can resolve only the exact active Turn's
+`network.read` prompt as `allow_once`; it cannot create a Thread grant, resolve
+another interaction, or bypass a hard denial.
 
 `TerminalInput.tsx` is the only keyboard subscriber. A single discriminated UI
 mode routes Enter, Escape, Tab, arrows, and global cancellation without
@@ -688,10 +709,10 @@ is the composition root and may depend on all concrete owners it wires.
 | Importing package | May import these Awesome package roots |
 | --- | --- |
 | `agent` | `agent`, `core`, `modeling` |
-| `application` | `agent`, `application`, `config`, `context`, `conversation`, `core`, `extensions`, `memory`, `modeling`, `paths`, `providers`, `safety`, `storage`, `version` |
-| `config` | `config`, `paths` |
+| `application` | `agent`, `application`, `config`, `context`, `conversation`, `core`, `extensions`, `memory`, `modeling`, `paths`, `providers`, `safety`, `storage`, `version`, `web` |
+| `config` | `config`, `core`, `paths` |
 | `context` | `context`, `conversation`, `core`, `memory`, `modeling` |
-| `conversation` | `config`, `conversation` |
+| `conversation` | `config`, `conversation`, `core` |
 | `core` | `core`, `safety` |
 | `extensions` | `context`, `core`, `extensions` |
 | `memory` | `agent`, `config`, `core`, `memory`, `modeling`, `paths`, `safety` |
@@ -699,11 +720,12 @@ is the composition root and may depend on all concrete owners it wires.
 | `protocol` | `application`, `core`, `paths`, `protocol`, `version` |
 | `providers` | `config`, `modeling`, `providers` |
 | `safety` | `modeling`, `safety` |
-| `storage` | `agent`, `conversation`, `core`, `extensions`, `storage` |
+| `storage` | `agent`, `config`, `conversation`, `core`, `extensions`, `storage` |
+| `web` | `core`, `web` |
 
 `tests/structural/test_dependency_architecture.py` is the executable source for
 this exact adjacency table and for external-framework ownership. The TUI is a
-separate TypeScript process and reaches Python only through Protocol v3.
+separate TypeScript process and reaches Python only through Protocol v4.
 The `memory` -> `agent` row is intentionally narrower than its package-level
 appearance: only `memory/finalization.py` may import `agent/finalization.py`.
 
@@ -732,7 +754,7 @@ the protocol imports the Application facade rather than individual subsystems.
 Token deltas, spinners, raw provider payloads, unbounded shell output, and
 credentials are not stored as product history. Tool observations required for
 an unfinished Turn remain in the LangGraph checkpoint, including any citations
-inside serialized `tool_results`; citations are not a separate graph channel.
+inside serialized `tool_results` and the derived ordered `citations` snapshot.
 User-facing activity history stores bounded summaries.
 
 ## Error, Cancellation, and Recovery

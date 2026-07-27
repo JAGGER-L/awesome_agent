@@ -156,6 +156,40 @@ export function presentCommandPayload(
               status: tool.approval_required ? "warning" : "success",
             })),
           );
+    case "web_status":
+      return panel(title, [
+        { label: "Enabled", value: payload.enabled ? "On" : "Off" },
+        { label: "Provider", value: "Tavily" },
+        {
+          label: "Credential",
+          value: payload.credential_configured ? "Configured" : "Missing",
+          status: payload.credential_configured ? "success" : "warning",
+        },
+        {
+          label: "Available",
+          value: payload.available ? "Yes" : "No",
+          status: payload.available ? "success" : "warning",
+        },
+        {
+          label: "Thread access",
+          value: payload.thread_authorized ? "Authorized" : "Approval required",
+        },
+        { label: "Requests per Turn", value: `${payload.requests_per_turn}` },
+        {
+          label: "Proxy",
+          value: payload.proxy_configured ? "Configured" : "Off",
+        },
+        ...(payload.diagnostic_code
+          ? [
+              {
+                label: "Diagnostic",
+                value: payload.diagnostic_code,
+                status: "warning" as const,
+              },
+            ]
+          : []),
+        { label: "Disclosure", value: payload.disclosure },
+      ]);
     case "skills":
       return panel(title, [
         { label: "Active", value: payload.active_mode },
@@ -287,6 +321,7 @@ export function presentCommandPayload(
           value: `${payload.usage.provider_retries}`,
         },
         { label: "Compressions", value: `${payload.usage.compressions}` },
+        { label: "Web requests", value: `${payload.usage.web_requests}` },
         {
           label: "Active execution",
           value: formatDuration(payload.usage.active_execution_seconds),

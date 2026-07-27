@@ -43,7 +43,10 @@ type ReadyHeadlessStartup = Extract<
 
 type TerminalObservation =
   | { readonly kind: "terminal" }
-  | { readonly kind: "interaction" }
+  | {
+      readonly kind: "interaction";
+      readonly interaction: NonNullable<SurfaceState["pending_interaction"]>;
+    }
   | { readonly kind: "failed"; readonly message: string };
 
 export async function runHeadless(
@@ -179,25 +182,53 @@ async function executeHeadless(
   }
   activeOperation.value = submitted.value.operation_id;
 
-  const observation = await waitForTerminal(
-    surface,
-    submitted.value.operation_id,
-    submitted.value.turn_id,
-  );
-  if (observation.kind === "interaction") {
+  let ignoredInteractionId: string | undefined;
+  for (;;) {
+    const observation = await waitForTerminal(
+      surface,
+      submitted.value.operation_id,
+      submitted.value.turn_id,
+      ignoredInteractionId,
+    );
+    ignoredInteractionId = undefined;
+    if (observation.kind === "failed") return failure(observation.message);
+    if (observation.kind === "terminal") break;
+    if (
+      intent.allowNetwork &&
+      isExactNetworkApproval(
+        observation.interaction,
+        threadId,
+        submitted.value.turn_id,
+        submitted.value.operation_id,
+      )
+    ) {
+      const response = await surface
+        .request("interaction.respond", {
+          interaction_id: observation.interaction.interaction_id,
+          decision: "allow_once",
+        })
+        .catch(() => undefined);
+      if (
+        response?.ok &&
+        response.value.accepted &&
+        response.value.status === "resolved"
+      ) {
+        ignoredInteractionId = observation.interaction.interaction_id;
+        continue;
+      }
+    }
     const cancellationError = await cancelActiveOperation(
       surface,
       activeOperation,
       cancellationTimeoutMs,
     );
     activeOperation.value = undefined;
-    return unresolved(
-      cancellationError
-        ? `Interaction required; cancellation failed: ${cancellationError}`
-        : "Interaction required.",
-    );
+    return cancellationError
+      ? failure(
+          `Interaction required; cancellation could not be confirmed: ${cancellationError}`,
+        )
+      : unresolved("Interaction required.");
   }
-  if (observation.kind === "failed") return failure(observation.message);
   activeOperation.value = undefined;
 
   const durable = await surface.request("thread.read", {
@@ -226,11 +257,12 @@ async function executeHeadless(
     stdout:
       intent.format === "json"
         ? `${JSON.stringify({
-            version: 1,
+            version: 2,
             type: "awesome.run.result",
             thread_id: threadId,
             turn_id: turn.id,
             text: entry.content,
+            citations: entry.metadata.citations,
             termination_reason: turn.termination_reason ?? null,
             usage: turn.usage,
           })}\n`
@@ -359,9 +391,15 @@ async function waitForTerminal(
   surface: ConnectedSurface,
   operationId: string,
   turnId: string,
+  ignoredInteractionId?: string,
 ): Promise<TerminalObservation> {
   const inspect = (): TerminalObservation | undefined =>
-    inspectTerminalState(surface.store.getState(), operationId, turnId);
+    inspectTerminalState(
+      surface.store.getState(),
+      operationId,
+      turnId,
+      ignoredInteractionId,
+    );
   const immediate = inspect();
   if (immediate) return immediate;
   return await new Promise<TerminalObservation>((resolve) => {
@@ -383,8 +421,14 @@ function inspectTerminalState(
   state: SurfaceState,
   operationId: string,
   turnId: string,
+  ignoredInteractionId?: string,
 ): TerminalObservation | undefined {
-  if (state.pending_interaction) return { kind: "interaction" };
+  if (
+    state.pending_interaction &&
+    state.pending_interaction.interaction_id !== ignoredInteractionId
+  ) {
+    return { kind: "interaction", interaction: state.pending_interaction };
+  }
   if (state.fatal) return { kind: "failed", message: state.fatal.message };
   if (state.core_exit) {
     return {
@@ -403,6 +447,22 @@ function inspectTerminalState(
     return { kind: "terminal" };
   }
   return undefined;
+}
+
+function isExactNetworkApproval(
+  interaction: NonNullable<SurfaceState["pending_interaction"]>,
+  threadId: string,
+  turnId: string,
+  operationId: string,
+): boolean {
+  return (
+    interaction.interaction_kind === "tool_approval" &&
+    interaction.capability === "network.read" &&
+    interaction.thread_id === threadId &&
+    interaction.turn_id === turnId &&
+    interaction.operation_id === operationId &&
+    interaction.choices.some((choice) => choice.decision === "allow_once")
+  );
 }
 
 async function cancelActiveOperation(

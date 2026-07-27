@@ -68,8 +68,9 @@ MCP 和未知扩展能力在所有模式中都逐次询问。内置 Memory 操�
 生效。如果后续工具调用需要无法非交互解决的审批，runner 会请求取消、不向 stdout 写入
 部分回答，并以退出码 3 退出。
 
-`--allow-network` 在本次增量中只是进程级意图声明。目前没有内置 Web 工具消费它，所以它
-不会授予 capability、不会让已禁用工具可用，也不能绕过硬拒绝。
+`--allow-network` 只授权本进程把当前 headless Turn 精确匹配的 `network.read` prompt
+解析为 `allow_once`。它不会让已禁用的 Web 可用，不能创建 Thread grant 或处理其他
+interaction，也不能绕过硬拒绝。
 
 ## 审批语义
 
@@ -80,6 +81,11 @@ MCP 和未知扩展能力在所有模式中都逐次询问。内置 Memory 操�
 - **No**：拒绝本次调用。
 
 临时写入 grant 绝不包含删除或 shell 执行。删除、shell、MCP 和未知能力只提供单次决策。Escape 会拒绝当前审批。
+
+`network.read` 与本地 Full access 不同：它在每种 permission mode 下首次调用都会 ASK。
+选项为默认的 **No**、**Allow once** 和 **Allow for this Thread**。切换选中 Thread、重建
+runtime、更改 permission mode、运行 `/web revoke` 或 `/web off`，以及退出 Awesome 时，
+Thread network grant 都会被清除。
 
 每个工具审批都与其 Thread、Turn、Operation 和 interaction 身份绑定。响应最多接受一次，并且只在这些事实仍是当前值时接受。过期的 UI 响应无法授权替代它的新 Turn。
 

@@ -79,6 +79,7 @@ awesome_agent/
 │   ├── providers/      # DeepSeek 与 Kimi adapter
 │   ├── safety/         # 脱敏 helper
 │   ├── storage/        # 嵌入式 SQLite 与 checkpoint adapter
+│   ├── web/            # Core 提供商中立 Web port 的 Tavily HTTP adapter
 │   ├── paths.py        # AWESOME_HOME 路径所有权
 │   └── version.py      # 产品版本 reader
 ├── tui/                # Ink + React 展示 package
@@ -228,9 +229,23 @@ probe。Executor 对所有工具统一应用这一条顺序，不按具体工具
 Core 中提供商中立的 `Citation(id, title, url)` 值会沿成功工具数据从
 `ToolOutput.citations` 进入 `ToolResult.citations`；文本设限不会移除这个 tuple。Agent
 随后把完整 result 序列化到 `AgentState.tool_results`，从而在 checkpoint 中保留 citations，
-而不新增第二个顶层 citations channel。Conversation record、Protocol v3 与 TUI wire 均保持
-不变，直到 Web citations 与 Protocol v4 作为一次契约变更共同落地；期间不提供 compatibility
-adapter。
+而不新增第二个顶层 citations channel。Agent 现在派生有序的 `AgentState.citations` 快照，
+Conversation record、Protocol v4、TUI 与 headless output 会携带同一来源，不提供 v3
+compatibility adapter。
+
+可选 Web search 是普通 registered tool，不是第二套执行框架。只有 user config 设置
+`web.enabled: true` 且能解析 `TAVILY_API_KEY` 时，它才会出现。提供商中立的 `web_search`
+handler 通过可复用 `TavilySearchClient` 向 `POST https://api.tavily.com/search` 发送有界
+basic search（最多十条结果）。显式 `httpx.AsyncClient` 使用 `trust_env=False`，不跟随
+redirect，也不进行不透明 retry；只有配置后才使用 `AWESOME_WEB_PROXY_URL`。凭据、频率/
+用量限制、timeout、连接、provider availability 与 malformed response 都映射成稳定且脱敏的
+failure。该注册项是 `non_replayable`。
+
+`network.read` 在每种 permission mode 下首次使用都会 ASK，并提供 deny、allow once 或当前
+Thread allow。选择其他 Thread、重建 runtime、更改 permission mode、运行 `/web revoke` 或
+`/web off`，以及 shutdown 都会清除 Thread grant。每个 Turn 冻结最多八次的
+`web_requests` budget；先完成审批，再消耗 quota 并开始 HTTP。Query 会依据 Tavily 公布的
+隐私政策与平台条款离开本机，而结构化诊断不会记录 query、URL、response 或 secret 正文。
 
 改变文件的 built-in 会通过 Change Journal 和共享的 identity-bound filesystem primitive
 写入。词法包含只负责准入：实际 mutation 会固定 workspace 与 parent directory chain，
@@ -265,7 +280,7 @@ Runner、journal、脱敏、timeout、cancellation 与 terminal-event 路径。C
 
 ```text
 Ink command controller
-    -> Protocol v3 command.execute
+    -> Protocol v4 command.execute
     -> LocalApplication facade
     -> complete CommandDispatcher
     -> one focused command service
@@ -279,7 +294,7 @@ Immutable dispatcher 负责每个 Core 命令。Ink-owned command 仍是本地�
 command result。斜杠命令是确定性的产品操作，绝不会提交隐藏的 model prompt；只有自然
 语言输入会启动 Agent Turn。
 
-`LocalApplication` 是唯一面向界面的 Application host。Python 生成 Protocol v3
+`LocalApplication` 是唯一面向界面的 Application host。Python 生成 Protocol v4
 discriminated outcome，TypeScript 对其进行严格校验并穷尽展示。Command progress 是
 pending Surface lifecycle state，不是第二种持久化 operation model。
 
@@ -321,9 +336,9 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
 `LocalApplication` 持有唯一的 `ApplicationBootstrap`，Application 是
 `BootstrapPhase` 的唯一所有者。类型化 initialize 与 interaction 结果会推进或恢复该 phase；
 序列化的 protocol response 绝不是生命周期事实来源。stdio Host 只向 Application 查询某项
-operation 是否准入，并把拒绝转换成既有的 Protocol v3 握手错误；它既不维护并行 phase
+operation 是否准入，并把拒绝转换成既有的 Protocol v4 握手错误；它既不维护并行 phase
 machine，也不解析 response payload 来推断 readiness。这次内部所有权迁移不会改变
-Protocol v3 的 request、result 或 error 形状。
+Protocol v4 的 request、result 或 error 形状。
 
 受信激活完成后，backend 会发布一个 frozen、slotted 的 `WorkspaceRuntime`。它是请求可见
 的快照，统一包含已解析配置以及组装后的 Conversation、Turn、command、tool、model
@@ -508,13 +523,13 @@ selection 结果；它不复制 Application bootstrap phase。`SubmissionCoordin
 输入的解析、Core 准入、乐观 identity 和 generation fence。既有 React queue 仍只拥有
 pending 展示输入，而 Core 仍是唯一的前台执行权威。
 
-`awesome run` 复用同一个 `ConnectedSurface`、startup controller、Protocol v3 client、
+`awesome run` 复用同一个 `ConnectedSurface`、startup controller、Protocol v4 client、
 Application facade 和持久化 Thread/Turn record，但不渲染 Ink。它默认创建新 Thread，或指定
 一个明确 Thread，随后只把持久化的最终 assistant entry 投影为文本或带版本的 JSON 文档。
 父进程 stdout 只承载结果，stderr 只承载诊断；Core stdout 仍是私有 NDJSON。未解决
 interaction 返回退出码 3；SIGINT 会先发送紧急取消，再返回 130 并关闭同一棵 Core 进程树。
-此阶段的 `--allow-network` 只是未被消费的进程级 CLI 意图，不是 capability grant，也不能
-绕过 hard denial。
+`--allow-network` 只能把当前活动 Turn 精确匹配的 `network.read` prompt 解析为
+`allow_once`；它不能创建 Thread grant、处理其他 interaction 或绕过硬拒绝。
 
 `TerminalInput.tsx` 是唯一 keyboard subscriber。一个可辨识 UI mode 路由 Enter、Escape、
 Tab、方向键和全局取消，不会有相互竞争的 component listener。乐观 user message 使用
@@ -583,10 +598,10 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | 导入方 package | 可以导入的 Awesome package root |
 | --- | --- |
 | `agent` | `agent`、`core`、`modeling` |
-| `application` | `agent`、`application`、`config`、`context`、`conversation`、`core`、`extensions`、`memory`、`modeling`、`paths`、`providers`、`safety`、`storage`、`version` |
-| `config` | `config`、`paths` |
+| `application` | `agent`、`application`、`config`、`context`、`conversation`、`core`、`extensions`、`memory`、`modeling`、`paths`、`providers`、`safety`、`storage`、`version`、`web` |
+| `config` | `config`、`core`、`paths` |
 | `context` | `context`、`conversation`、`core`、`memory`、`modeling` |
-| `conversation` | `config`、`conversation` |
+| `conversation` | `config`、`conversation`、`core` |
 | `core` | `core`、`safety` |
 | `extensions` | `context`、`core`、`extensions` |
 | `memory` | `agent`、`config`、`core`、`memory`、`modeling`、`paths`、`safety` |
@@ -594,10 +609,11 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | `protocol` | `application`、`core`、`paths`、`protocol`、`version` |
 | `providers` | `config`、`modeling`、`providers` |
 | `safety` | `modeling`、`safety` |
-| `storage` | `agent`、`conversation`、`core`、`extensions`、`storage` |
+| `storage` | `agent`、`config`、`conversation`、`core`、`extensions`、`storage` |
+| `web` | `core`、`web` |
 
 `tests/structural/test_dependency_architecture.py` 是该精确 adjacency table 和外部 framework
-所有权的可执行来源。TUI 是独立 TypeScript 进程，只通过 Protocol v3 访问 Python。
+所有权的可执行来源。TUI 是独立 TypeScript 进程，只通过 Protocol v4 访问 Python。
 `memory` -> `agent` 这一行刻意采用比 package 级表象更窄的约束：仅允许
 `memory/finalization.py` 导入 `agent/finalization.py`。
 
@@ -624,7 +640,7 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 
 Token delta、spinner、原始 provider payload、无界 shell output 和 credential 不会作为产品
 历史保存。未完成 Turn 所需的 tool observation 会保留在 LangGraph checkpoint 中，其中包括
-序列化 `tool_results` 内的 citations；citations 不是独立 graph channel。面向用户的 activity
+序列化 `tool_results` 内的 citations 和派生的有序 `citations` 快照。面向用户的 activity
 history 存储有界 summary。
 
 ## 错误、取消与恢复

@@ -162,6 +162,7 @@ async def test_observation_extracts_only_typed_usage() -> None:
         "cache_write_tokens": 1,
         "model_calls": 2,
         "tool_calls": 4,
+        "web_requests": 0,
         "provider_retries": 1,
         "compressions": 1,
         "active_execution_ms": 1234,

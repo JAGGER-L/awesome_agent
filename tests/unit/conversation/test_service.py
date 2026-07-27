@@ -18,6 +18,7 @@ from awesome_agent.conversation import (
     TurnStatus,
     UsageSummary,
 )
+from awesome_agent.core.citations import Citation
 from awesome_agent.storage.application_sqlite import ApplicationSQLite
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
@@ -264,9 +265,28 @@ async def test_completion_appends_assistant_and_is_idempotent(
         thread.id, "question", _turn_config(), client_message_id="client_1"
     )
     usage = UsageSummary(input_tokens=10, output_tokens=4, model_calls=1)
+    citations = (
+        Citation(
+            id="S1",
+            title="Source",
+            url="https://example.com/source",
+        ),
+    )
 
-    completed = await service.complete_turn(turn.id, "answer", usage, "completed")
-    repeated = await service.complete_turn(turn.id, "answer", usage, "completed")
+    completed = await service.complete_turn(
+        turn.id,
+        "answer [[S1]]",
+        usage,
+        "completed",
+        citations=citations,
+    )
+    repeated = await service.complete_turn(
+        turn.id,
+        "answer [[S1]]",
+        usage,
+        "completed",
+        citations=citations,
+    )
     view = await service.read_thread(thread.id)
 
     assert repeated == completed
@@ -276,10 +296,19 @@ async def test_completion_appends_assistant_and_is_idempotent(
         ThreadEntryKind.USER_MESSAGE,
         ThreadEntryKind.ASSISTANT_MESSAGE,
     ]
-    assert view.entries[1].content == "answer"
+    assert view.entries[1].content == "answer [[S1]]"
+    assert view.entries[1].metadata == {
+        "citations": [citations[0].model_dump(mode="json")]
+    }
 
     with pytest.raises(ConversationConflict):
-        await service.complete_turn(turn.id, "different", usage, "completed")
+        await service.complete_turn(
+            turn.id,
+            "different",
+            usage,
+            "completed",
+            citations=citations,
+        )
 
 
 @pytest.mark.parametrize(

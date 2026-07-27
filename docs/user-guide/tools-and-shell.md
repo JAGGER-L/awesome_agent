@@ -36,9 +36,28 @@ Awesome initially registers:
 - deletion: `delete`;
 - host execution: `execute`.
 
+When Web is enabled and configured, the same registry also contains
+`web_search`. It is provider-neutral to the model, passes the same strict
+validation/policy/approval/audit path, and is marked non-replayable.
+
 The total catalog can grow through Memory and MCP. Namespaced extension tools
 still use the executor. Exact argument schemas, bounds, and result fields are
 in [Built-in tools](../reference/built-in-tools.md).
+
+### Using Web search
+
+Set `TAVILY_API_KEY`, run `/web on`, then ask for current information. The first
+`network.read` call asks even in Full access; choose deny (the default), allow
+once, or allow for this Thread. `/web status` shows readiness and disclosure,
+`/web revoke` clears the active Thread grant, and `/web off` removes the tool
+from the rebuilt runtime.
+
+Awesome sends the query to Tavily under its
+[Privacy Policy](https://www.tavily.com/privacy) and
+[Platform Terms](https://www.tavily.com/terms). It assigns `S1...` citations
+to strict HTTPS results and preserves them in the final answer, transcript,
+headless JSON, and checkpoint. The default limit is eight requests per Turn.
+See the [exact tool contract](../reference/built-in-tools.md#public-web-search-web_search).
 
 ## Model-Driven Versus Direct Shell
 

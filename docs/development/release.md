@@ -169,7 +169,7 @@ The verifier checks:
   origins, and absence of editable or non-production content;
 - exact hashed dependency requirements and isolated installation;
 - `uv pip check`, Core import, and console entry point;
-- an installed-wheel Protocol v3 lifecycle in a fresh home and workspace:
+- an installed-wheel Protocol v4 lifecycle in a fresh home and workspace:
   `initialize` -> workspace trust -> `application.getState` -> `shutdown`;
 - TUI package/version/entry point;
 - Schema 7 bootstrap, floor-7 empty migration registry, incompatible-state
@@ -314,7 +314,7 @@ resolve to the checked-out commit. It then:
    three checksummed subjects.
 
 Windows and macOS do not rebuild. Each verifier installs the downloaded wheel
-and executes the same Protocol v3 lifecycle, so this proves that the packaged
+and executes the same Protocol v4 lifecycle, so this proves that the packaged
 Core starts on every CI runtime rather than merely importing on Ubuntu. A
 failed platform verifier invalidates the candidate.
 

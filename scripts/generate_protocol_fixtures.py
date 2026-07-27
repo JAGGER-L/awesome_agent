@@ -11,6 +11,7 @@ from typing import Any, cast
 from awesome_agent.application.command_results import (
     COMMAND_OUTCOME_ADAPTER,
     StatusCommandPayload,
+    WebStatusCommandPayload,
     result,
 )
 from awesome_agent.application.commands import (
@@ -37,7 +38,9 @@ from awesome_agent.application.contracts import (
     ThreadReadResult,
     WorkspacePresentation,
 )
+from awesome_agent.application.web_commands import TAVILY_DISCLOSURE
 from awesome_agent.config import (
+    BudgetConfig,
     CredentialSource,
     SecretStatus,
     missing_provider_credential_statuses,
@@ -48,8 +51,12 @@ from awesome_agent.context import (
 )
 from awesome_agent.conversation import (
     Thread,
+    ThreadEntry,
+    ThreadEntryKind,
     ThreadTitleSource,
     ThreadView,
+    Turn,
+    TurnStatus,
     UsageSummary,
 )
 from awesome_agent.core.changes import (
@@ -59,6 +66,7 @@ from awesome_agent.core.changes import (
     SymlinkChange,
     TextFileChange,
 )
+from awesome_agent.core.citations import Citation
 from awesome_agent.core.contracts import MAX_JSON_SAFE_INTEGER
 from awesome_agent.core.events import (
     AssistantReasoningDeltaPayload,
@@ -84,13 +92,14 @@ from awesome_agent.modeling import ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "protocol" / "fixtures" / "v3"
+TARGET = ROOT / "protocol" / "fixtures" / "v4"
 FIXED_TIME = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
 WORKSPACE_KEY = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 THREAD_ID = "thread_11111111111111111111111111111111"
 TURN_ID = "turn_22222222222222222222222222222222"
 OPERATION_ID = "operation_33333333333333333333333333333333"
 CLIENT_MESSAGE_ID = "client_44444444444444444444444444444444"
+CAPABILITIES = ("threads", "turns", "commands", "web", "citations")
 
 METHODS = (
     "initialize",
@@ -138,6 +147,62 @@ def _thread() -> Thread:
     )
 
 
+def _thread_view() -> ThreadView:
+    user_entry_id = "entry_55555555555555555555555555555555"
+    assistant_entry_id = "entry_66666666666666666666666666666666"
+    return ThreadView(
+        thread=_thread(),
+        entries=(
+            ThreadEntry(
+                id=user_entry_id,
+                thread_id=THREAD_ID,
+                sequence=1,
+                kind=ThreadEntryKind.USER_MESSAGE,
+                content="Inspect the repository.",
+                client_message_id=CLIENT_MESSAGE_ID,
+                created_at=FIXED_TIME,
+            ),
+            ThreadEntry(
+                id=assistant_entry_id,
+                thread_id=THREAD_ID,
+                sequence=2,
+                kind=ThreadEntryKind.ASSISTANT_MESSAGE,
+                content="The source confirms the result. [[S1]]",
+                metadata={
+                    "citations": [
+                        Citation(
+                            id="S1",
+                            title="Fixture source",
+                            url="https://example.com/source",
+                        ).model_dump(mode="json")
+                    ]
+                },
+                created_at=FIXED_TIME,
+            ),
+        ),
+        turns=(
+            Turn(
+                id=TURN_ID,
+                thread_id=THREAD_ID,
+                checkpoint_key=TURN_ID,
+                status=TurnStatus.COMPLETED,
+                provider="deepseek",
+                model="deepseek-chat",
+                thinking_enabled=True,
+                skill_mode="auto",
+                budgets=BudgetConfig(web_requests=8),
+                user_entry_id=user_entry_id,
+                assistant_entry_id=assistant_entry_id,
+                usage=UsageSummary(model_calls=1, web_requests=1),
+                termination_reason="stop",
+                created_at=FIXED_TIME,
+                updated_at=FIXED_TIME,
+                completed_at=FIXED_TIME,
+            ),
+        ),
+    )
+
+
 def _valid_methods() -> dict[str, object]:
     workspace = WorkspacePresentation(
         display_path="C:\\workspace",
@@ -170,18 +235,18 @@ def _valid_methods() -> dict[str, object]:
             "initialize.ready",
             "initialize",
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=3,
+                    protocol_version=4,
                     status=InitializeStatus.READY,
                     session_id="session_11111111111111111111111111111111",
                     workspace=workspace,
-                    capabilities=("threads", "turns", "commands"),
+                    capabilities=CAPABILITIES,
                 )
             ),
         ),
@@ -189,19 +254,19 @@ def _valid_methods() -> dict[str, object]:
             "initialize.state_reset_required",
             "initialize",
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=3,
+                    protocol_version=4,
                     status=InitializeStatus.STATE_RESET_REQUIRED,
                     session_id="session_11111111111111111111111111111111",
                     interaction_id="interaction_state_reset",
                     workspace=WorkspacePresentation(display_path="C:\\workspace"),
-                    capabilities=("threads", "turns", "commands"),
+                    capabilities=CAPABILITIES,
                 )
             ),
         ),
@@ -249,7 +314,7 @@ def _valid_methods() -> dict[str, object]:
             {"thread_id": THREAD_ID, "limit": 50},
             _success(
                 ThreadReadResult(
-                    view=ThreadView(thread=_thread()),
+                    view=_thread_view(),
                     change_sets=(
                         ChangeSetSummary(
                             change_set_id="change_11111111111111111111111111111111",
@@ -443,14 +508,14 @@ def _invalid_methods() -> dict[str, object]:
             {
                 "name": "initialize.missing_client_version",
                 "method": "initialize",
-                "params": {"protocol_version": 3, "client_name": "awesome"},
+                "params": {"protocol_version": 4, "client_name": "awesome"},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
                 "name": "initialize.protocol_incompatible",
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 2,
+                    "protocol_version": 3,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -905,6 +970,17 @@ def _valid_command_results() -> dict[str, object]:
                 }
             ],
         },
+        _model(
+            WebStatusCommandPayload(
+                enabled=True,
+                available=True,
+                credential_configured=True,
+                proxy_configured=False,
+                thread_authorized=False,
+                requests_per_turn=8,
+                disclosure=TAVILY_DISCLOSURE,
+            )
+        ),
         {
             "kind": "skills",
             "active_mode": "auto",
@@ -1043,6 +1119,17 @@ def _invalid_command_results() -> dict[str, object]:
     thread = next(
         case["result"]["value"] for case in methods if case["name"] == "thread.read"
     )
+    web_status = {
+        "kind": "web_status",
+        "enabled": False,
+        "provider": "tavily",
+        "available": False,
+        "credential_configured": False,
+        "proxy_configured": False,
+        "thread_authorized": False,
+        "requests_per_turn": 8,
+        "disclosure": TAVILY_DISCLOSURE,
+    }
     return {
         "cases": [
             {
@@ -1113,6 +1200,23 @@ def _invalid_command_results() -> dict[str, object]:
                 },
             },
             {
+                "name": "web_status_empty_diagnostic_code",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {**web_status, "diagnostic_code": ""},
+                },
+            },
+            {
+                "name": "web_status_invalid_diagnostic_code",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **web_status,
+                        "diagnostic_code": "Web-Client-Unavailable",
+                    },
+                },
+            },
+            {
                 "name": "secret_value",
                 "outcome": {
                     "kind": "interaction",
@@ -1159,7 +1263,7 @@ def build_files() -> dict[str, bytes]:
     manifest = {
         "fixture_version": 1,
         "product_version": PRODUCT_VERSION,
-        "protocol_version": 3,
+        "protocol_version": 4,
         "methods": list(METHODS),
         "event_types": [event_type.value for event_type in EventType],
         "command_owners": {

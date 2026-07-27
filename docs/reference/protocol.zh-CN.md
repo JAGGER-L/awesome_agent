@@ -1,10 +1,10 @@
-# 私有 Core/TUI protocol v3
+# 私有 Core/TUI protocol v4
 
 Awesome 的 Ink 进程与其唯一的 Python Core 子进程通过私有 stdio 使用 newline-delimited
 JSON-RPC 2.0 通信。该 protocol 是内部组件边界，不是远程 API：它没有网络 listener、
 authentication scheme、compatibility proxy，也不承诺第三方客户端可以独立混用不同版本。
 
-Protocol 版本 **3** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.3.0**。Event
+Protocol 版本 **4** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.3.0**。Event
 envelope 有独立版本 **1**。
 
 ## 进程与传输
@@ -28,7 +28,7 @@ envelope 有独立版本 **1**。
 ```text
 Ink                     Protocol Host              Application
  |                            |                          |
- |-- initialize(v3, exact) -->|                          |
+ |-- initialize(v4, exact) -->|                          |
  |                            |------- initialize ------>|
  |                            |<-- ApplicationResult ----|
  |<---- JSON-RPC response ----|                          |
@@ -84,7 +84,7 @@ phase；它会查询 Application admission，并把拒绝转换为既有握手�
   "id": "init-1",
   "method": "initialize",
   "params": {
-    "protocol_version": 3,
+    "protocol_version": 4,
     "client_name": "awesome",
     "client_version": "1.3.0"
   }
@@ -92,7 +92,7 @@ phase；它会查询 Application admission，并把拒绝转换为既有握手�
 ```
 
 Protocol 不匹配返回产品错误 `protocol_version_incompatible`。`client_name` 不是 `awesome`，
-或产品版本与 Core 不相等时，返回 `client_version_incompatible`。因此，即使 v2 客户端的包版本
+或产品版本与 Core 不相等时，返回 `client_version_incompatible`。因此，即使 v3 客户端的包版本
 碰巧与 Core 相同，也会明确失败。
 
 成功的 `InitializeResult` 包含产品/protocol 版本、session ID、Workspace 展示信息、
@@ -105,10 +105,10 @@ capability 和一种状态：
 | `state_reset_required` | Application 状态早于 schema 7。 | 解决 reset/deny；reset 后再次 initialize。 |
 
 当前 capability 是 `threads`、`turns`、`direct_commands`、`commands`、`tools`、`skills`、
-`mcp`、`local_memory` 和 `mem0_cloud`。
+`mcp`、`local_memory`、`mem0_cloud`、`web` 和 `citations`。
 
 Host 绝不会通过解析序列化 result payload 来推进 readiness；类型化 initialize 与 interaction
-结果会先更新 Application。这项所有权变更属于内部实现，不改变 Protocol v3 wire contract。
+结果会先更新 Application；该路径属于 Protocol v4 wire contract。
 
 Ready 前，普通 request 会收到 JSON-RPC `-32002`，diagnostic 为 `server_not_initialized` 或
 `server_not_ready`。Initialize 运行期间，第二次 initialize 会收到 `initialization_in_progress`。
@@ -154,6 +154,10 @@ workspace-instruction diagnostic。Secret value 从来不属于 state。
 pagination 字段无效，因此“不提供”只有一种无歧义 wire 表示。Application 会动态缩小请求的
 page，直到编码结果符合 900 KiB 预算，并为被省略的条目保留 `next_before_sequence`。
 
+Assistant entry metadata 包含有序 `citations` 数组。每个严格 source 包含 `id`（`S1...`）、
+有界单行 `title` 与绝对 HTTPS `url`；一个 Turn 内 ID 连续且 URL 唯一。Turn budget 和 usage
+还包含非负 `web_requests`，其配置硬上限为八。
+
 ### Turn 与 direct 准入
 
 `turn.submit` 和 `direct.execute` 确认的是准入，而不是完成。返回的 `operation_id` 用于关联
@@ -173,7 +177,7 @@ Params 是封闭的 `CommandIntent`：
 {"name":"mcp","arguments":["status","repository-index"]}
 ```
 
-通常只有 Application 拥有的 21 个名称通过此 method 发送。Ink 在本地拥有 `help`、`theme`、
+通常只有 Application 拥有的 22 个名称通过此 method 发送。Ink 在本地拥有 `help`、`theme`、
 `copy` 和 `quit`。`CommandOutcome` 恰好包含一个分支：有类型的 `result`、有类型的
 `interaction` 或稳定的 command `error`。精确语法和 foreground snapshot 例外见
 [Slash Commands](commands.zh-CN.md)。
@@ -195,12 +199,12 @@ transport 的最终字节检查会返回 `result_too_large`，而不是发送无
 
 只有 Core 能报告已选择的 credential source 时，result 才包含 `source`。成功保存后通常为
 `awesome`；invalid、save-unverified confirmation 或 delete 结果可能没有已选择 source，此时
-会省略该字段。显式的 `"source": null` 不是合法的 v3 result。
+会省略该字段。显式的 `"source": null` 不是合法的 v4 result。
 
 ### `interaction.respond`
 
 Decision 值为 `trust`、`reset_state`、`allow_once`、`allow_thread_writes`、
-`enable_full_access`、`retry`、`abort` 和 `deny`。Interaction kind 和公布的 choice 决定哪些值
+`allow_thread_network`、`enable_full_access`、`retry`、`abort` 和 `deny`。Interaction kind 和公布的 choice 决定哪些值
 有效。Core 会重新验证 pending interaction 的 generation，以及它必需的 Thread/Turn/
 operation/permission binding。陈旧响应不会修改当前权限。
 
@@ -258,7 +262,7 @@ diagnostic。
 
 客户端使用 `retryable` flag 和当前 state 判断是否适合重试，不会匹配 message 字符串。
 
-在 Protocol v3 中，Application 级 `state_unavailable` error 可重试，并携带有界的
+在 Protocol v4 中，Application 级 `state_unavailable` error 可重试，并携带有界的
 `state_directory` metadata。它与内置 Memory tool 的 `ToolOutput` 中不可重试的
 `state_unavailable` 不同；客户端不能仅按 code 字符串把两个 envelope 归一化。
 
@@ -314,7 +318,7 @@ event 要求 operation ID；Turn lifecycle event 要求 Thread 和 Turn ID。
 | Provider retry | `provider.retrying` | attempt 2–7、maximum 1–7、delay 0–30 秒、error code |
 | Tool | `tool.started`、`.completed`、`.failed`、`.cancelled` | call/name/verb/target；终态 outcome、summary/detail、duration、可选 error code |
 | Context | `context.prepared`、`context.compressed` | source count 和 estimated token |
-| Usage | `usage.updated` | 非负 input/output/reasoning/cache token counter |
+| Usage | `usage.updated` | 非负 input/output/reasoning/cache token 与 Web-request counter |
 | Memory | `memory.status` | `local` 或 `external`、enabled flag、status |
 | Interaction | `interaction.required`、`interaction.resolved` | 绑定的 ID/kind/prompt/operation/target/capability/choice 或 decision |
 | Warning | `warning` | 稳定 code 和有界 message |
@@ -338,7 +342,7 @@ shutdown。只有命令契约明确允许时，snapshot command 才能在 Operat
 
 ## Fixture 与兼容性测试
 
-`protocol/fixtures/v3/` 是跨语言 source of truth。它包含有效和无效 method、command result、
+`protocol/fixtures/v4/` 是跨语言 source of truth。它包含有效和无效 method、command result、
 event、产品失败，以及记录 file hash、method name、event name、产品版本和 protocol 版本的
 manifest。Python Pydantic model 与 TUI 的严格 TypeScript/Zod schema 都会验证这些 fixture。
 

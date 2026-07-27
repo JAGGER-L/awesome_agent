@@ -36,7 +36,7 @@ def test_dispatcher_inventory_is_complete_and_composition_only_wires_it() -> Non
         encoding="utf-8"
     )
 
-    assert len(core_commands) == 21
+    assert len(core_commands) == 22
     assert "return await runtime.command_dispatcher.dispatch(intent)" in composition
     assert "CommandResult(" not in composition
     assert "CommandInteractionResult(" not in composition
@@ -113,6 +113,7 @@ def test_workspace_runtime_is_one_immutable_service_graph_snapshot() -> None:
         "diagnostic_commands",
         "change_commands",
         "permission_commands",
+        "web_commands",
         "provider_configuration",
         "direct",
         "extensions",
@@ -128,6 +129,8 @@ def test_workspace_runtime_is_one_immutable_service_graph_snapshot() -> None:
         "change_operations",
         "workspace_branch",
         "workspace_instruction_snapshot",
+        "web_available",
+        "web_diagnostic_code",
         "resources",
     )
     assert not hasattr(application_composition, "_ACTIVATION_STATE_FIELDS")

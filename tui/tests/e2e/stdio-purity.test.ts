@@ -52,7 +52,7 @@ describe("real Python stdio channel ownership", () => {
 
     try {
       const initialized = await session.rpc.request("initialize", {
-        protocol_version: 3,
+        protocol_version: 4,
         client_name: "awesome",
         client_version: PRODUCT_VERSION,
       });

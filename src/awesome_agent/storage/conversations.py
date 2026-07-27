@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from pydantic import JsonValue
 
+from awesome_agent.config import BudgetConfig
 from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
@@ -1191,6 +1192,10 @@ def _turn_values(turn: Turn) -> tuple[object, ...]:
 
 
 def _turn_from_row(row: sqlite3.Row) -> Turn:
+    budgets = json.loads(row["budgets_json"])
+    if not isinstance(budgets, dict):
+        raise ValueError("Stored Turn budgets must be an object.")
+    budgets.setdefault("web_requests", 0)
     return Turn(
         id=row["turn_id"],
         thread_id=row["thread_id"],
@@ -1200,7 +1205,7 @@ def _turn_from_row(row: sqlite3.Row) -> Turn:
         model=row["model"],
         thinking_enabled=bool(row["thinking_enabled"]),
         skill_mode=row["skill_mode"],
-        budgets=json.loads(row["budgets_json"]),
+        budgets=BudgetConfig.model_validate(budgets),
         user_entry_id=row["user_entry_id"],
         assistant_entry_id=row["assistant_entry_id"],
         usage=UsageSummary.model_validate(json.loads(row["usage_json"])),

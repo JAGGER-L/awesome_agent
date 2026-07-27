@@ -47,7 +47,7 @@ async def test_dispatcher_requires_and_exposes_exact_core_inventory() -> None:
     handlers = _complete_handlers()
     dispatcher = CommandDispatcher(handlers)
 
-    assert len(handlers) == 21
+    assert len(handlers) == 22
     assert set(dispatcher.registered_names) == set(handlers)
     outcome = await dispatcher.dispatch(CommandIntent(name=CommandName.TOOLS))
     assert outcome == result(NoticeCommandPayload(message="tools"))

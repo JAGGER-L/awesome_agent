@@ -8,7 +8,7 @@ describe("COMMAND_CATALOG", () => {
   it("matches the shared command fixture exactly", async () => {
     const fixture = JSON.parse(
       await readFile(
-        new URL("../../../protocol/fixtures/v3/commands.json", import.meta.url),
+        new URL("../../../protocol/fixtures/v4/commands.json", import.meta.url),
         "utf8",
       ),
     ) as { commands: { name: string; owner: string }[] };
@@ -20,11 +20,11 @@ describe("COMMAND_CATALOG", () => {
   it("has exact owner counts and useful metadata", () => {
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "application"),
-    ).toHaveLength(21);
+    ).toHaveLength(22);
     expect(COMMAND_CATALOG.filter(({ owner }) => owner === "ink")).toHaveLength(
       4,
     );
-    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(25);
+    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(26);
     for (const command of COMMAND_CATALOG) {
       expect(command.completion).toBe(`/${command.name}`);
       expect(command.completion).not.toContain("[");

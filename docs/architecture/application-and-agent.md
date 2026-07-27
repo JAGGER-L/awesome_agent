@@ -77,11 +77,11 @@ failed, or cancelled response cannot advance the phase. Accepting state reset
 keeps Application non-ready until a later initialize completes.
 
 Surfaces ask Application for a surface-neutral admission decision before
-dispatch. The stdio Host maps a rejection to the existing Protocol v3
+dispatch. The stdio Host maps a rejection to the existing Protocol v4
 `-32002` diagnostics, but never keeps a second state machine or parses a
 serialized request/result payload to infer readiness. Cancellation and
 shutdown remain admitted in every phase. This is an internal ownership change:
-Protocol v3 wire shapes, status values, and error semantics are unchanged.
+Protocol v4 wire shapes, status values, and error semantics remain Application-owned.
 
 ### Workspace runtime snapshot
 
@@ -207,15 +207,15 @@ The graph operates on `AgentState`, a strict checkpoint contract containing:
 - context manifest, token estimate, effective limit, and compression request;
 - provider-neutral messages and continuation state;
 - pending tool calls, next-call index, and results;
-- model/tool/retry/compression/active-time counters;
+- model/tool/Web/retry/compression/active-time counters;
 - usage, recovery issue, final answer, and termination reason.
 
 `tool_results` stores each complete serialized `ToolResult`, including its
-tuple of minimal Core `Citation` values. The graph does not aggregate those
-values into a separate top-level citations field: preserving the result is
-sufficient for checkpoint round trips and avoids a second source of truth.
-Conversation, Protocol v3, and TUI projection remain outside this internal
-contract until the citation wire moves atomically to Protocol v4 with Web.
+tuple of minimal Core `Citation` values. After each result, Agent derives the
+ordered Turn snapshot in `AgentState.citations`; both that snapshot and the
+`web_requests` counter survive checkpoint recovery. Finalization validates
+`[[S1]]` markers, Conversation persists the same sources with the assistant
+entry, and Protocol v4 projects them to the TUI and headless surfaces.
 
 Adding a channel changes checkpoint compatibility and recovery validation. It
 is not a convenient place for arbitrary UI or product state.

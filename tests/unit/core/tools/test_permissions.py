@@ -17,6 +17,7 @@ from awesome_agent.core.tools.permissions import (
         (ToolCapability.WORKSPACE_WRITE, PolicyAction.ASK),
         (ToolCapability.WORKSPACE_DELETE, PolicyAction.ASK),
         (ToolCapability.SHELL_EXECUTE, PolicyAction.ASK),
+        (ToolCapability.NETWORK_READ, PolicyAction.ASK),
     ],
 )
 def test_request_approval_policy_table(
@@ -50,6 +51,43 @@ def test_full_access_allows_known_capabilities(capability: ToolCapability) -> No
     assert decision.action is PolicyAction.ALLOW
 
 
+@pytest.mark.parametrize("mode", list(PermissionMode))
+def test_network_read_always_asks_without_exact_thread_grant(
+    mode: PermissionMode,
+) -> None:
+    decision = PermissionPolicy().evaluate(
+        PolicyRequest(
+            capability=ToolCapability.NETWORK_READ,
+            mode=mode,
+            thread_id="thread_current",
+            granted_capabilities=frozenset({ToolCapability.NETWORK_READ}),
+            granted_thread_capabilities=frozenset(
+                {("thread_other", ToolCapability.NETWORK_READ.value)}
+            ),
+        )
+    )
+
+    assert decision.action is PolicyAction.ASK
+
+
+@pytest.mark.parametrize("mode", list(PermissionMode))
+def test_network_read_allows_exact_current_thread_grant(
+    mode: PermissionMode,
+) -> None:
+    decision = PermissionPolicy().evaluate(
+        PolicyRequest(
+            capability=ToolCapability.NETWORK_READ,
+            mode=mode,
+            thread_id="thread_current",
+            granted_thread_capabilities=frozenset(
+                {("thread_current", ToolCapability.NETWORK_READ.value)}
+            ),
+        )
+    )
+
+    assert decision.action is PolicyAction.ALLOW
+
+
 @pytest.mark.parametrize(
     ("capability", "expected"),
     [
@@ -57,6 +95,7 @@ def test_full_access_allows_known_capabilities(capability: ToolCapability) -> No
         (ToolCapability.WORKSPACE_WRITE, PolicyAction.ALLOW),
         (ToolCapability.WORKSPACE_DELETE, PolicyAction.ASK),
         (ToolCapability.SHELL_EXECUTE, PolicyAction.ASK),
+        (ToolCapability.NETWORK_READ, PolicyAction.ASK),
     ],
 )
 def test_accept_edits_only_allows_workspace_creation_and_modification(
@@ -131,9 +170,34 @@ def test_builtin_memory_defers_to_its_own_explicit_user_policy(
 def test_mode_transition_clears_grants_and_advances_generation() -> None:
     session = PermissionSession()
     session.grant_thread_writes()
+    session.grant_thread_network("thread_1")
 
     session.set_mode(PermissionMode.ACCEPT_EDITS)
 
     assert session.mode is PermissionMode.ACCEPT_EDITS
     assert session.granted_capabilities == set()
+    assert session.thread_granted_capabilities == frozenset()
     assert session.generation == 1
+
+
+def test_thread_network_grants_are_bound_and_explicitly_revocable() -> None:
+    session = PermissionSession()
+    session.grant_thread_network("thread_1")
+    session.grant_thread_network("thread_2")
+
+    assert session.thread_granted_capabilities == frozenset(
+        {
+            ("thread_1", ToolCapability.NETWORK_READ.value),
+            ("thread_2", ToolCapability.NETWORK_READ.value),
+        }
+    )
+
+    session.revoke_thread_network("thread_1")
+
+    assert session.thread_granted_capabilities == frozenset(
+        {("thread_2", ToolCapability.NETWORK_READ.value)}
+    )
+
+    session.revoke_thread_network()
+
+    assert session.thread_granted_capabilities == frozenset()

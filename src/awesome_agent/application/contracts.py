@@ -147,7 +147,7 @@ class InitializeStatus(StrEnum):
 class InitializeParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    protocol_version: Literal[3]
+    protocol_version: Literal[4]
     client_name: Literal["awesome"]
     client_version: str = Field(min_length=1, max_length=64)
 
@@ -163,7 +163,7 @@ class InitializeResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     product_version: str = Field(min_length=1, max_length=64)
-    protocol_version: Literal[3]
+    protocol_version: Literal[4]
     status: InitializeStatus
     session_id: str = Field(min_length=1, max_length=128)
     interaction_id: str | None = Field(default=None, max_length=128)

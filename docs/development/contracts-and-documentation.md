@@ -59,7 +59,7 @@ These tests turn high-value architecture decisions into immediate failures. If
 you add a package, table, command, dependency, or graph field, update the test
 only after explaining why the architecture changed.
 
-## Protocol v3 change workflow
+## Protocol v4 change workflow
 
 Protocol fixtures are the bidirectional Python/TypeScript evidence. To change a
 method, result, event, command outcome, or projection:
@@ -72,7 +72,7 @@ method, result, event, command outcome, or projection:
    uv run python scripts/generate_protocol_fixtures.py
    ```
 
-4. Inspect `protocol/fixtures/v3/` and manifest hashes; never hand-edit them.
+4. Inspect `protocol/fixtures/v4/` and manifest hashes; never hand-edit them.
 5. Update strict Zod schemas under `tui/src/protocol/`.
 6. Update reducer/effect code for authoritative state changes.
 7. Update exhaustive Presenter/components for visible facts.
@@ -93,13 +93,13 @@ old same-version component from handshaking.
 ## Command contract
 
 `CommandName` and `COMMAND_OWNERS` in `application/commands.py` are runtime
-authority. The current catalog has 21 Application commands and four Ink-local
+authority. The current catalog has 22 Application commands and four Ink-local
 commands:
 
 ```text
 Application:
   new rename resume context compact auth model thinking workspace
-  diff undo redo tools skills mcp memory status usage doctor config permissions
+  diff undo redo tools skills mcp web memory status usage doctor config permissions
 
 Ink:
   help theme copy quit
@@ -117,6 +117,8 @@ For a command change, verify:
 - no slash command submits a hidden Agent Turn;
 - one discriminated result/interaction/error is returned;
 - authoritative effects and pure presentation remain separate;
+- citation values remain identical across tool result, Agent checkpoint,
+  Conversation, fixture, TUI hydration, and headless JSON;
 - empty, invalid, unavailable, busy, and interaction states are visible;
 - foreground observation classification is explicit;
 - Help, Presenter, transcript, and focused UI tests agree.

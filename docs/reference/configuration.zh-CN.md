@@ -136,9 +136,13 @@ Provider 重试不会导致非幂等工具重复执行。
 | --- | --- | --- | --- |
 | `enabled` | boolean | `false` | User 拥有的 Web enablement；Workspace 配置不能开启它。 |
 | `provider` | `tavily` | `tavily` | 静态 Web Provider 选择，与 model Provider 分离。 |
-| `blocked_domains` | 最多 128 个唯一、规范化的 ASCII hostname | `[]` | 发出 Web 请求前额外拒绝的目标。 |
+| `blocked_domains` | 最多 128 个唯一、规范化的 ASCII hostname | `[]` | 作为 Tavily `exclude_domains` 发送；Workspace 可增加限制，但不能启用 Web。 |
 
-本次配置增量只建立闭合契约和 credential catalog；它本身不会注册 Web 工具或授予网络权限。
+`enabled` 为 true 且 Tavily credential 与显式 proxy 有效时，runtime construction 会注册
+`web_search`；否则 `/web status` 会报告有界 diagnostic，且工具不存在。Enablement 绝不
+grant `network.read`：在每种 permission mode 下首次使用仍会 ASK。`/web on|off` 执行受支持的
+原子 user-config 写入与 runtime rebuild，`/web revoke` 清除当前 Thread grant。HTTP client
+使用 `trust_env=False`，忽略环境 proxy 变量。
 
 ### `memory`
 
@@ -177,8 +181,8 @@ User MCP 声明由本地拥有，因此它们的 `enabled` bit 位于 User YAML�
 
 ## Workspace 配置
 
-Workspace 只能使预算更严格、禁用 Skills 和声明 MCP 服务器。它不能选择凭据、启用 Memory、
-选择 model 或提高 User 安全限制。
+Workspace 只能使预算更严格、增加 Web domain 阻断、禁用 Skills 和声明 MCP 服务器。
+它不能选择凭据、启用 Web 或 Memory、选择 model 或提高 User 安全限制。
 
 ```yaml
 version: 1
@@ -191,6 +195,10 @@ budgets:
   active_execution_seconds: 900
   total_context_tokens: 131072
   web_requests: 3
+
+web:
+  blocked_domains:
+    - internal.example
 
 skills:
   disabled:
@@ -222,8 +230,8 @@ hard link 和读取期间的替换。不安全或超限的文件会使 Workspace
 ```text
 User YAML --------------------------> Application configuration
 Trusted workspace YAML ------------> Application configuration
-  (minimum budgets, disabled union,             |
-   and MCP declarations)                        |
+  (minimum budgets, blocked-domain union,       |
+   disabled union, and MCP declarations)        |
                                                 v
 Persisted Thread choices -----------------> Turn configuration
 AWESOME_MODEL at new-Thread creation ------>    |

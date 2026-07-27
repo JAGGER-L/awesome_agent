@@ -382,6 +382,48 @@ def test_workspace_v1_can_only_lower_web_request_budget(tmp_path: Path) -> None:
     assert loaded.workspace.budgets.web_requests == 3
 
 
+def test_workspace_v1_can_add_web_domain_restrictions(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    config = workspace / ".awesome" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "version: 1\nweb:\n  blocked_domains: [example.com]\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_config_sources(
+        paths=AwesomePaths.from_home(tmp_path / "home"),
+        workspace=workspace,
+        workspace_trusted=True,
+        environ={},
+    )
+
+    assert loaded.workspace is not None
+    assert loaded.workspace.web.blocked_domains == ("example.com",)
+
+
+@pytest.mark.parametrize("field", ["enabled: true", "provider: tavily"])
+def test_workspace_v1_cannot_expand_web_authority(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    workspace = tmp_path / "workspace"
+    config = workspace / ".awesome" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        f"version: 1\nweb:\n  {field}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationInvalid):
+        load_config_sources(
+            paths=AwesomePaths.from_home(tmp_path / "home"),
+            workspace=workspace,
+            workspace_trusted=True,
+            environ={},
+        )
+
+
 @pytest.mark.parametrize(
     "data",
     [

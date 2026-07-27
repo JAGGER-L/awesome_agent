@@ -619,7 +619,7 @@ function entry(
     kind,
     content,
     ...(kind === "user_message" ? { client_message_id: "client_old" } : {}),
-    metadata: {},
+    metadata: kind === "assistant_message" ? { citations: [] } : {},
     created_at: "2026-07-13T00:00:00Z",
   };
 }

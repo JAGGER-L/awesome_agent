@@ -94,7 +94,7 @@ build, packs, installs the tarball, and executes the installed CLI. Keep the
 explicit post-build `npm pack --dry-run` as a human-readable contents check;
 running it before build can inspect stale `dist` or fail to prove the bin target.
 
-### 6. Protocol v3 fixtures
+### 6. Protocol v4 fixtures
 
 ```powershell
 uv run python scripts/generate_protocol_fixtures.py --check
@@ -103,6 +103,13 @@ uv run python scripts/generate_protocol_fixtures.py --check
 If the intentional contract changed, regenerate without `--check`, inspect all
 fixture and manifest changes, update strict TypeScript schemas/presenters, then
 rerun Python and TUI fixture tests. Do not hand-edit generated JSON.
+
+For Web changes, use the fake Tavily transport/provider suites to cover strict
+request bounds, `trust_env=False`, explicit proxy selection, every stable HTTP
+failure, no automatic retry, permission choices and grant revocation, the
+eight-request hard budget, non-replayable recovery, citation finalization, and
+Python/TypeScript round trips. A live Tavily request is an explicit release
+gate only; ordinary tests must not require network access or a real key.
 
 ### 7. Documentation site
 

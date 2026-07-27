@@ -32,7 +32,8 @@ The catalog always contains four read tools and the two Skill support tools.
 It contains file mutation and shell tools in the normal local composition.
 Local Memory tools appear only while Local Memory is enabled, and valid MCP
 catalogs add namespaced tools. Dynamic MCP behavior is documented separately
-in [MCP](../extensions/mcp.md).
+in [MCP](../extensions/mcp.md). `web_search` appears only when user Web config
+is enabled and a valid `TAVILY_API_KEY` is available.
 
 ## Common request and result contract
 
@@ -53,6 +54,7 @@ A result has:
 - `status`, either `success` or `error`;
 - at most 30,000 characters of model-visible `content`;
 - bounded structured `metadata`;
+- an ordered tuple of strict `Citation(id, title, url)` values, normally empty;
 - an error code/message only for an error result;
 - presentation fields used by the TUI: verb, target, outcome, summary, bounded
   detail, truncation count, and duration.
@@ -61,6 +63,9 @@ The stable built-in error codes are `invalid_arguments`, `not_found`,
 `workspace_not_trusted`, `workspace_escape`, `permission_denied`, `conflict`,
 `timeout`, `state_unavailable`, `execution_failed`, `uncertain_outcome`,
 `memory_disabled`, `memory_conflict`, `memory_rejected`, and `cancelled`.
+Web search additionally uses `web_request_rejected`, `web_credential_rejected`,
+`web_rate_limited`, `web_quota_exhausted`, `web_provider_unavailable`,
+`web_timeout`, `web_connection_failed`, and `web_malformed_response`.
 `timeout` is retryable when another process holds a local-Memory mutation lock;
 `state_unavailable` means the lock sidecar or platform locking boundary could
 not be used safely and is not retryable. `uncertain_outcome` is primarily an
@@ -68,7 +73,8 @@ MCP boundary: it means an external side effect may have happened and must not
 be replayed automatically.
 
 Ordinary handlers have a 30-second outer deadline. `execute` supplies a dynamic
-deadline described below. Cancellation is propagated after bounded cleanup;
+deadline described below; `web_search` has a 20-second tool deadline around a
+15-second HTTP client timeout. Cancellation is propagated after bounded cleanup;
 it is not converted into a normal error result.
 
 ## Workspace path rules
@@ -278,6 +284,54 @@ errors, policy hard-denial, and permission denial produce no observation;
 spawn/backend failures, timeout, and cancellation conservatively record that an
 irreversible attempt may have begun. Each call still produces at most one
 terminal tool event and one ToolActivity.
+
+## Public Web search: `web_search`
+
+Web is disabled by default. Set `TAVILY_API_KEY`, keep the provider as
+`tavily`, and run `/web on`; Workspace configuration may lower the per-Turn
+budget or add blocked domains, but cannot enable Web or choose credentials.
+The tool uses Tavily's Search API only:
+
+```text
+POST https://api.tavily.com/search
+```
+
+| Argument | Type | Default | Limits/semantics |
+| --- | --- | --- | --- |
+| `query` | string | required | Trimmed nonblank text, 1–2,000 characters; control separators are rejected |
+| `max_results` | integer | `5` | 1–10; Tavily `search_depth` is always `basic` |
+
+Configured `blocked_domains` are added to Tavily's exclusion list. Awesome
+requests no generated answer, raw content, images, or favicon. The response is
+bounded to 1 MiB and at most ten strict HTTPS results; model-visible JSON is
+bounded to 28,000 characters. There are no redirects or opaque automatic
+retries. HTTP 429, 5xx, timeout, connection failure, credential failure, usage
+limits, and malformed bodies map to the stable redacted error codes above.
+
+The reusable async HTTP client sets `trust_env=False`, uses Awesome's explicit
+User-Agent, and ignores ambient proxy variables. Configure the optional proxy
+only through `AWESOME_WEB_PROXY_URL` (or the corresponding Awesome secret);
+only `http` and `https` proxy URLs without embedded credentials are accepted.
+
+`network.read` asks on first use in every permission mode. The user can deny
+(the default), allow once, or allow for the active Thread. Approval happens
+before the request consumes one unit from the frozen `web_requests` budget;
+the default and hard maximum are eight requests per Turn, and Workspace config
+can only lower it. Thread grants are cleared on Thread switch, runtime rebuild,
+permission-mode change, `/web revoke`, `/web off`, or exit. `web_search` is
+`non_replayable`, so recovery defaults to Abort after an uncertain crash.
+
+Each result receives a stable Turn-local source ID (`S1`, `S2`, ...), deduped
+by URL. The model cites it as `[[S1]]`. Unknown IDs are rendered as text rather
+than links and produce a warning. If Web returned sources but the final answer
+uses none, finalization appends a bounded Sources section and emits a warning.
+The same citations survive ToolResult, Agent state/checkpoint, Conversation,
+Protocol v4, the TUI, and headless JSON v2.
+
+The search query is sent to Tavily and is processed under the
+[Tavily Privacy Policy](https://www.tavily.com/privacy) and
+[Tavily Platform Terms](https://www.tavily.com/terms). Structured diagnostics
+do not record the query, result URL, result body, or credentials.
 
 ## Skill support tools
 

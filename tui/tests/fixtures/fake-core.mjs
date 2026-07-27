@@ -151,7 +151,7 @@ const handleLine = (line) => {
       id: request.id,
       result: application({
         product_version: "0.1.0",
-        protocol_version: 3,
+        protocol_version: 4,
         status:
           startupPhase === "state_reset"
             ? "state_reset_required"
@@ -171,7 +171,7 @@ const handleLine = (line) => {
           display_path: process.cwd(),
           branch: process.env.AWESOME_FAKE_CORE_MARKER ?? "fake",
         },
-        capabilities: ["threads", "turns", "commands"],
+        capabilities: ["threads", "turns", "commands", "web", "citations"],
       }),
     });
   } else if (request.method === "interaction.respond") {
@@ -268,7 +268,7 @@ const handleLine = (line) => {
                   sequence: 2,
                   kind: "assistant_message",
                   content: "durable answer",
-                  metadata: {},
+                  metadata: { citations: [] },
                   created_at: now,
                 },
               ]
@@ -291,6 +291,7 @@ const handleLine = (line) => {
                     compressions: 2,
                     active_execution_seconds: 1800,
                     total_context_tokens: 262144,
+                    web_requests: 8,
                   },
                   user_entry_id: "entry_user",
                   assistant_entry_id: "entry_assistant",
@@ -304,6 +305,7 @@ const handleLine = (line) => {
                     tool_calls: 0,
                     provider_retries: 0,
                     compressions: 0,
+                    web_requests: 0,
                     active_execution_seconds: 0,
                   },
                   termination_reason: "completed",

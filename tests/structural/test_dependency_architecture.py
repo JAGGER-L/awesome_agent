@@ -20,10 +20,11 @@ ALLOWED_INTERNAL_IMPORTS = {
         "safety",
         "storage",
         "version",
+        "web",
     },
     "config": {"config", "core", "paths"},
     "context": {"context", "conversation", "core", "memory", "modeling"},
-    "conversation": {"config", "conversation"},
+    "conversation": {"config", "conversation", "core"},
     "core": {"core", "safety"},
     "extensions": {"context", "core", "extensions"},
     "memory": {
@@ -39,10 +40,19 @@ ALLOWED_INTERNAL_IMPORTS = {
     "protocol": {"application", "core", "paths", "protocol", "version"},
     "providers": {"config", "modeling", "providers"},
     "safety": {"modeling", "safety"},
-    "storage": {"agent", "conversation", "core", "extensions", "storage"},
+    "storage": {
+        "agent",
+        "config",
+        "conversation",
+        "core",
+        "extensions",
+        "storage",
+    },
+    "web": {"core", "web"},
 }
 
 EXTERNAL_FRAMEWORK_OWNERS = {
+    "httpx": {"web"},
     "jsonschema": {"extensions"},
     "langgraph": {"agent", "application", "storage"},
     "mcp": {"extensions"},

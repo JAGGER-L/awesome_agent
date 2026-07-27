@@ -27,10 +27,10 @@ bounds because malformed or mismatched local components must not corrupt state.
 Both inbound and outbound frames enforce the same strict 1 MiB UTF-8 JSON
 boundary, as described below.
 
-## Protocol v3 contract
+## Protocol v4 contract
 
-Initialization requires literal `protocol_version: 3`, client name `awesome`,
-and the same product version as Core. A v2 client fails explicitly even if its
+Initialization requires literal `protocol_version: 4`, client name `awesome`,
+and the same product version as Core. A v3 client fails explicitly even if its
 product version matches. Protocol and product versions answer different
 questions: wire compatibility versus release identity.
 
@@ -72,12 +72,12 @@ interactions, and warnings.
 
 Python owns serialization of method results, `CommandOutcome` variants, and
 events. `scripts/generate_protocol_fixtures.py` writes deterministic valid and
-invalid fixtures under `protocol/fixtures/v3/`. TypeScript Zod schemas validate
+invalid fixtures under `protocol/fixtures/v4/`. TypeScript Zod schemas validate
 the same corpus.
 
 ```text
 Python Pydantic contracts
-  -> generated v3 fixtures + manifest hashes
+  -> generated v4 fixtures + manifest hashes
   -> TypeScript strict Zod schemas
   -> protocol contract tests
   -> exhaustive reducers/presenters
@@ -120,12 +120,12 @@ enum or inspect serialized request/result payloads to advance readiness.
 Before `READY`, ordinary requests receive a stable server-not-initialized or
 server-not-ready error. A second concurrent initialize receives
 `initialization_in_progress`. During bootstrap, only the matching interaction,
-another initialize, cancellation, and shutdown are admitted. A malformed or v2
+another initialize, cancellation, and shutdown are admitted. A malformed or v3
 initialize never advances the Application phase.
 
 Initialization remains repeatable after `READY` so a surface retry can observe
 the current snapshot without creating a second Application. These ownership
-rules do not change any Protocol v3 request, result, status, or error shape.
+rules preserve one Application-owned Protocol v4 request, result, status, and error shape.
 
 ## Framing and dispatch bounds
 
@@ -186,7 +186,7 @@ Core sends facts, not preformatted terminal widgets:
 
 ```text
 Application fact
-  -> Protocol v3 payload
+  -> Protocol v4 payload
   -> optional authoritative Surface effect
   -> exhaustive presentCommandPayload()
   -> CommandPresentation
@@ -203,6 +203,14 @@ Shared components own borders, wrapping, alignment, symbols, and semantic
 colors. They do not accept arbitrary records for stringification. This costs
 more code for a new command but prevents accidental leakage of internal JSON or
 secrets.
+
+Protocol v4 makes citations part of the same durable projection rather than a
+parallel event stream. Assistant-entry metadata carries ordered strict
+`Citation` values; transcript hydration preserves them, reconciliation rejects
+stale replacements, and `BlockView` links only markers whose IDs exist in that
+entry's catalog. Unknown `[[S...]]` markers remain plain text. Finalization has
+already appended a bounded Sources section when Web was used without any valid
+marker.
 
 ## Surface state versus presentation state
 
@@ -245,7 +253,7 @@ Core still admits the single foreground Operation.
 `awesome run` is a second presentation mode of the same TypeScript launcher,
 not a second product runtime. It connects one `ConnectedSurface`, invokes the
 same `beginStartup` flow through `StartupSessionController`, selects or creates
-a Thread through existing commands, submits through Protocol v3, and hydrates
+a Thread through existing commands, submits through Protocol v4, and hydrates
 the durable final assistant entry with `thread.read`. Python Application remains
 the only lifecycle and mutation authority.
 
@@ -253,7 +261,11 @@ The runner does not render Ink or consume terminal input. Parent stdout is
 reserved for one successful final text value or one versioned JSON document;
 diagnostics use parent stderr. Core child stdout remains private NDJSON and is
 never forwarded as command output. This separation makes redirected output
-deterministic without changing Protocol v3.
+deterministic while reusing Protocol v4.
+
+JSON output version 2 contains the durable text, ordered `citations`,
+`usage.web_requests`, IDs, termination reason, and the other usage counters.
+Text mode renders the already-finalized answer, including any Sources section.
 
 An unresolved interaction is a terminal headless outcome: the runner requests
 cancellation of an admitted Operation and returns code 3 instead of inventing
@@ -262,9 +274,9 @@ bounded cancellation attempt, suppresses result output, and returns 130. The
 launcher then performs bounded Surface/Core shutdown, including forced
 process-tree termination when graceful close cannot complete.
 
-The parsed `--allow-network` value is only process-local CLI intent in this
-increment. It is not a Protocol v3 authority field and no built-in Web tool
-consumes it, so it cannot enable a capability or bypass hard admission.
+The parsed `--allow-network` value is process-local authority for one exact
+`network.read` interaction belonging to the active headless Turn. It resolves
+that prompt as `allow_once`; it cannot create a Thread grant or bypass denial.
 
 ## Input ownership
 
@@ -393,7 +405,7 @@ their filesystem or network access.
 
 - Python schemas and methods: `protocol/jsonrpc.py`
 - Host framing and dispatch: `protocol/stdio.py`
-- Fixtures: `protocol/fixtures/v3/`, `scripts/generate_protocol_fixtures.py`
+- Fixtures: `protocol/fixtures/v4/`, `scripts/generate_protocol_fixtures.py`
 - Core process adapter: `tui/src/core/process.ts`
 - Headless runner: `tui/src/cli/headless.ts`, `tui/src/cli/main.tsx`
 - TypeScript schemas: `tui/src/protocol/`

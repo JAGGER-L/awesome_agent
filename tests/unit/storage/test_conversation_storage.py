@@ -80,7 +80,9 @@ def _entry(
         client_message_id=(
             f"client_{identifier}" if kind is ThreadEntryKind.USER_MESSAGE else None
         ),
-        metadata={"z": 1, "a": True},
+        metadata=(
+            {} if kind is ThreadEntryKind.ASSISTANT_MESSAGE else {"z": 1, "a": True}
+        ),
         created_at=_now(),
     )
 

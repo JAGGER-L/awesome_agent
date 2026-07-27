@@ -26,6 +26,7 @@ class CommandName(StrEnum):
     TOOLS = "tools"
     SKILLS = "skills"
     MCP = "mcp"
+    WEB = "web"
     MEMORY = "memory"
     STATUS = "status"
     USAGE = "usage"
@@ -57,6 +58,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.TOOLS,
             CommandName.SKILLS,
             CommandName.MCP,
+            CommandName.WEB,
             CommandName.MEMORY,
             CommandName.STATUS,
             CommandName.USAGE,

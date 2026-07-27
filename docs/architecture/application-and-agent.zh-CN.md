@@ -70,9 +70,9 @@ Coordinator 还会把 bootstrap interaction 绑定到精确 identity。只有类
 non-ready，直到后续 initialize 完成。
 
 界面在 dispatch 前向 Application 查询提供商中立的 admission decision。stdio Host 会把拒绝
-映射成既有 Protocol v3 `-32002` diagnostic，但绝不维护第二套状态机，也不解析序列化的
+映射成既有 Protocol v4 `-32002` diagnostic，但绝不维护第二套状态机，也不解析序列化的
 request/result payload 来推断 readiness。Cancellation 与 shutdown 在每个 phase 都保持准入。
-这是一次内部所有权变更：Protocol v3 的 wire shape、status value 和 error 语义均不变。
+Protocol v4 的 wire shape、status value 和 error 语义仍由 Application 统一拥有。
 
 ### Workspace runtime 快照
 
@@ -178,13 +178,14 @@ execute_one_tool
 - 上下文 manifest、token 估算、生效上限和压缩请求；
 - 提供商中立消息和 continuation 状态；
 - 待处理工具调用、下一调用索引和结果；
-- 模型/工具/重试/压缩/活动时间计数器；
+- 模型/工具/Web/重试/压缩/活动时间计数器；
 - usage、恢复问题、最终回答和终止原因。
 
 `tool_results` 存储每个完整序列化的 `ToolResult`，包括其中由 Core 定义的最小
-`Citation` tuple。Graph 不会把这些值再次聚合为独立的顶层 citations 字段：保留 result
-已经足以支持 checkpoint 往返，并能避免第二个事实源。Conversation、Protocol v3 与 TUI
-投影仍位于这条内部契约之外，直到 citation wire 随 Web 原子升级到 Protocol v4。
+`Citation` tuple。每个 result 完成后，Agent 会在 `AgentState.citations` 中派生有序 Turn
+快照；该快照和 `web_requests` 计数都会经过 checkpoint recovery。Finalization 校验
+`[[S1]]` marker，Conversation 把同一来源随 assistant entry 持久化，Protocol v4 再投影给
+TUI 与 headless 界面。
 
 新增 channel 会改变 checkpoint 兼容性和恢复校验。这里不是放置任意 UI 或产品状态
 的便捷容器。

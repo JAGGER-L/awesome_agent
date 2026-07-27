@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def test_command_authority_matches_protocol_fixture_exactly() -> None:
     fixture = json.loads(
-        (ROOT / "protocol/fixtures/v3/commands.json").read_text(encoding="utf-8")
+        (ROOT / "protocol/fixtures/v4/commands.json").read_text(encoding="utf-8")
     )
     expected = [
         {"name": name.value, "owner": COMMAND_OWNERS[name].value}
@@ -18,7 +18,7 @@ def test_command_authority_matches_protocol_fixture_exactly() -> None:
     ]
 
     assert fixture == {"commands": expected}
-    assert len(expected) == 25
+    assert len(expected) == 26
 
 
 def test_removed_command_names_are_not_accepted() -> None:

@@ -26,7 +26,6 @@ from awesome_agent.config.credentials import (
     resolve_provider_credential_statuses,
 )
 from awesome_agent.config.models import (
-    BudgetConfig,
     CredentialSelectionConfig,
     CredentialSource,
     MemoryConfig,
@@ -64,6 +63,19 @@ class _UserCredentialSelectionV1(BaseModel):
         return value
 
 
+class _UserBudgetConfigV1(BaseModel):
+    """The exact v1 budget surface, before Web request budgets existed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    model_calls: int = Field(default=32, ge=1, le=256)
+    tool_calls: int = Field(default=64, ge=1, le=512)
+    provider_retries: int = Field(default=2, ge=0, le=6)
+    compressions: int = Field(default=2, ge=0, le=10)
+    active_execution_seconds: int = Field(default=1_800, ge=1, le=21_600)
+    total_context_tokens: int = Field(default=262_144, ge=1)
+
+
 class _UserConfigDocumentV1(BaseModel):
     """Closed legacy schema used only as the input to the v1 -> v2 migration."""
 
@@ -74,7 +86,7 @@ class _UserConfigDocumentV1(BaseModel):
     credentials: _UserCredentialSelectionV1 = Field(
         default_factory=_UserCredentialSelectionV1
     )
-    budgets: BudgetConfig = Field(default_factory=BudgetConfig)
+    budgets: _UserBudgetConfigV1 = Field(default_factory=_UserBudgetConfigV1)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
     mcp_servers: tuple[UserMcpServerConfig, ...] = Field(default=(), strict=False)

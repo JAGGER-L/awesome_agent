@@ -391,7 +391,7 @@ async def _restart_with_graph(
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -1270,7 +1270,7 @@ async def test_recovery_response_waits_for_startup_bootstrap_to_finish(
                 "id": 1,
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 3,
+                    "protocol_version": 4,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },

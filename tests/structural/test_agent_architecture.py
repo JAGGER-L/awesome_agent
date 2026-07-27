@@ -6,6 +6,7 @@ from pathlib import Path
 AGENT_STATE_FIELDS = {
     "active_execution_seconds",
     "compressions",
+    "citations",
     "compression_reason",
     "compression_requested",
     "context_effective_limit",
@@ -28,6 +29,7 @@ AGENT_STATE_FIELDS = {
     "tool_results",
     "turn_id",
     "usage",
+    "web_requests",
     "workspace_key",
 }
 

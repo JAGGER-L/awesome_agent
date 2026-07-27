@@ -315,6 +315,67 @@ async def test_finalizer_receives_ordered_deduplicated_tool_citations() -> None:
     assert finalizer.calls[0].citations == (first, second)
 
 
+@pytest.mark.asyncio
+async def test_uncited_web_sources_are_appended_and_checkpointed() -> None:
+    citation = Citation(
+        id="S1",
+        title="Web source",
+        url="https://example.com/source",
+    )
+
+    result, snapshot, projector = await _run(
+        Finalizer(use_model=False),
+        tool_results=(_tool_result("call_1", citation),),
+    )
+
+    final_answer = result["final_answer"]
+    assert final_answer is not None
+    assert final_answer.endswith(
+        "Sources:\n- [[S1]] Web source — https://example.com/source"
+    )
+    assert result["citations"] == [citation.model_dump(mode="json")]
+    assert snapshot.values["citations"] == [citation.model_dump(mode="json")]
+    assert projector.warnings == [
+        (
+            "citation_sources_appended",
+            "Web sources were appended because the answer cited none.",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_citation_id_stays_text_and_emits_warning() -> None:
+    citation = Citation(
+        id="S1",
+        title="Web source",
+        url="https://example.com/source",
+    )
+
+    class CitationFinalizer:
+        async def finalize(
+            self,
+            request: PostAnswerFinalizationRequest,
+        ) -> PostAnswerFinalizationResult:
+            return PostAnswerFinalizationResult(
+                final_answer=f"{request.final_answer} [[S1]] [[S999]]"
+            )
+
+    result, _, projector = await _run(
+        CitationFinalizer(),
+        tool_results=(_tool_result("call_1", citation),),
+    )
+
+    final_answer = result["final_answer"]
+    assert final_answer is not None
+    assert final_answer.endswith("[[S1]] [[S999]]")
+    assert projector.warnings == [
+        (
+            "citation_invalid_id",
+            "The answer contains a citation ID with no matching source.",
+        )
+    ]
+
+
 def test_conflicting_citation_ids_are_an_agent_invariant() -> None:
     first = Citation(id="S1", title="First", url="https://example.com/first")
     conflict = Citation(id="S1", title="Changed", url="https://example.com/other")

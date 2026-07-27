@@ -115,7 +115,35 @@
               ],
               "has_more": false,
               "view": {
-                "entries": [],
+                "entries": [
+                  {
+                    "client_message_id": "client_44444444444444444444444444444444",
+                    "content": "Inspect the repository.",
+                    "created_at": "2026-07-11T08:00:00Z",
+                    "id": "entry_55555555555555555555555555555555",
+                    "kind": "user_message",
+                    "metadata": {},
+                    "sequence": 1,
+                    "thread_id": "thread_11111111111111111111111111111111"
+                  },
+                  {
+                    "content": "The source confirms the result. [[S1]]",
+                    "created_at": "2026-07-11T08:00:00Z",
+                    "id": "entry_66666666666666666666666666666666",
+                    "kind": "assistant_message",
+                    "metadata": {
+                      "citations": [
+                        {
+                          "id": "S1",
+                          "title": "Fixture source",
+                          "url": "https://example.com/source"
+                        }
+                      ]
+                    },
+                    "sequence": 2,
+                    "thread_id": "thread_11111111111111111111111111111111"
+                  }
+                ],
                 "thread": {
                   "created_at": "2026-07-11T08:00:00Z",
                   "current_model": "deepseek/deepseek-v4-flash",
@@ -128,7 +156,47 @@
                   "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 },
                 "tool_activities": [],
-                "turns": []
+                "turns": [
+                  {
+                    "assistant_entry_id": "entry_66666666666666666666666666666666",
+                    "budgets": {
+                      "active_execution_seconds": 1800,
+                      "compressions": 2,
+                      "model_calls": 32,
+                      "provider_retries": 2,
+                      "tool_calls": 64,
+                      "total_context_tokens": 262144,
+                      "web_requests": 8
+                    },
+                    "checkpoint_key": "turn_22222222222222222222222222222222",
+                    "completed_at": "2026-07-11T08:00:00Z",
+                    "context_manifest": [],
+                    "created_at": "2026-07-11T08:00:00Z",
+                    "id": "turn_22222222222222222222222222222222",
+                    "model": "deepseek-chat",
+                    "provider": "deepseek",
+                    "skill_mode": "auto",
+                    "status": "completed",
+                    "termination_reason": "stop",
+                    "thinking_enabled": true,
+                    "thread_id": "thread_11111111111111111111111111111111",
+                    "updated_at": "2026-07-11T08:00:00Z",
+                    "usage": {
+                      "active_execution_seconds": 0.0,
+                      "cache_read_tokens": 0,
+                      "cache_write_tokens": 0,
+                      "compressions": 0,
+                      "input_tokens": 0,
+                      "model_calls": 1,
+                      "output_tokens": 0,
+                      "provider_retries": 0,
+                      "reasoning_tokens": 0,
+                      "tool_calls": 0,
+                      "web_requests": 1
+                    },
+                    "user_entry_id": "entry_55555555555555555555555555555555"
+                  }
+                ]
               }
             }
           }
@@ -202,7 +270,8 @@
             "output_tokens": 0,
             "provider_retries": 0,
             "reasoning_tokens": 0,
-            "tool_calls": 0
+            "tool_calls": 0,
+            "web_requests": 0
           }
         }
       }
@@ -278,6 +347,23 @@
               "read_only": true
             }
           ]
+        }
+      }
+    },
+    {
+      "name": "result.web_status",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "available": true,
+          "credential_configured": true,
+          "disclosure": "Web search sends the query to Tavily. Tavily processes that data under https://www.tavily.com/privacy and https://www.tavily.com/terms.",
+          "enabled": true,
+          "kind": "web_status",
+          "provider": "tavily",
+          "proxy_configured": false,
+          "requests_per_turn": 8,
+          "thread_authorized": false
         }
       }
     },
@@ -430,7 +516,8 @@
             "output_tokens": 0,
             "provider_retries": 0,
             "reasoning_tokens": 0,
-            "tool_calls": 0
+            "tool_calls": 0,
+            "web_requests": 0
           }
         }
       }

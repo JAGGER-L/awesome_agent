@@ -386,7 +386,7 @@ function startupHarness({
             ok: true,
             value: {
               product_version: "0.1.0",
-              protocol_version: 3,
+              protocol_version: 4,
               status,
               session_id: "session_1",
               ...(status === "ready"
@@ -397,7 +397,7 @@ function startupHarness({
                       : "interaction_response",
                   }),
               workspace: { display_path: "E:\\projects\\awesome" },
-              capabilities: [],
+              capabilities: ["web", "citations"],
             },
           } as never;
         }

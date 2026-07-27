@@ -43,7 +43,7 @@ from awesome_agent.protocol.jsonrpc import (
 from awesome_agent.version import PRODUCT_VERSION
 
 INITIALIZE_PARAMS = {
-    "protocol_version": 3,
+    "protocol_version": 4,
     "client_name": "awesome",
     "client_version": PRODUCT_VERSION,
 }
@@ -65,7 +65,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=3,
+                protocol_version=4,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -170,7 +170,7 @@ class Facade:
         return ApplicationResult.success(ShutdownResult())
 
 
-def test_dispatcher_exposes_exact_protocol_v3_method_table() -> None:
+def test_dispatcher_exposes_exact_protocol_v4_method_table() -> None:
     assert set(JsonRpcDispatcher(Facade()).methods) == {
         "initialize",
         "application.getState",
@@ -393,7 +393,7 @@ async def test_interaction_decision_contract_accepts_recovery_and_rejects_unknow
     ("params", "error_code"),
     [
         (
-            {**INITIALIZE_PARAMS, "protocol_version": 2},
+            {**INITIALIZE_PARAMS, "protocol_version": 3},
             "protocol_version_incompatible",
         ),
         (
@@ -432,9 +432,9 @@ async def test_initialize_rejects_incompatible_identity_before_facade_work(
     "params",
     [
         {},
-        {"protocol_version": 3, "client_name": "awesome"},
+        {"protocol_version": 4, "client_name": "awesome"},
         {**INITIALIZE_PARAMS, "extra": True},
-        {**INITIALIZE_PARAMS, "protocol_version": "3"},
+        {**INITIALIZE_PARAMS, "protocol_version": "4"},
     ],
 )
 async def test_initialize_rejects_malformed_identity_as_invalid_params(
@@ -635,7 +635,7 @@ async def test_wire_integral_json_numbers_match_javascript_semantics() -> None:
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": {**INITIALIZE_PARAMS, "protocol_version": 3.0},
+            "params": {**INITIALIZE_PARAMS, "protocol_version": 4.0},
         }
     )
     listed = await dispatcher.dispatch(

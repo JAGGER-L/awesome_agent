@@ -44,6 +44,7 @@ from awesome_agent.core.cancellation import (
     finish_bounded_cancellation_cleanup,
     finish_cancellation_safe,
 )
+from awesome_agent.core.citations import Citation, CitationAllocator
 from awesome_agent.core.events import EventEmitter
 from awesome_agent.core.tools import ToolErrorCode, ToolResult, ToolStatus
 from awesome_agent.core.tools.registry import ToolReplaySafety
@@ -543,6 +544,7 @@ class TurnCoordinator:
                         facts.usage,
                         state["termination_reason"] or "completed",
                         facts.context_manifest,
+                        facts.citations,
                     )
                     await self._cleanup_committed_turn(turn.id)
                     await self._emit_recovery_events(turn)
@@ -765,6 +767,7 @@ class TurnCoordinator:
                 facts.usage,
                 reason,
                 facts.context_manifest,
+                facts.citations,
             ),
             committed=lambda: self._completed_turn_matches(
                 turn,
@@ -885,6 +888,9 @@ class TurnCoordinator:
             and assistant is not None
             and assistant.kind is ThreadEntryKind.ASSISTANT_MESSAGE
             and assistant.content == answer
+            and assistant.metadata == {"citations": [
+                citation.model_dump(mode="json") for citation in facts.citations
+            ]}
             and observed.usage == facts.usage
             and observed.termination_reason == reason
             and observed.context_manifest == expected_manifest
@@ -1235,6 +1241,10 @@ def _checkpoint_identity_is_valid(
 def _checkpoint_budget_state_is_valid(state: AgentState, turn: Turn) -> bool:
     try:
         ModelUsage.model_validate(state["usage"])
+        citations = tuple(
+            Citation.model_validate(item) for item in state["citations"]
+        )
+        CitationAllocator(citations)
     except ValueError:
         return False
     reason = state["termination_reason"]
@@ -1245,6 +1255,7 @@ def _checkpoint_budget_state_is_valid(state: AgentState, turn: Turn) -> bool:
         executed_result_count is not None
         and 0 <= state["model_calls"] <= turn.budgets.model_calls
         and 0 <= state["tool_calls"] <= turn.budgets.tool_calls
+        and 0 <= state["web_requests"] <= turn.budgets.web_requests
         and 0 <= state["provider_retries"] <= turn.budgets.provider_retries
         and 0 <= state["compressions"] <= turn.budgets.compressions
         and state["active_execution_seconds"] >= 0

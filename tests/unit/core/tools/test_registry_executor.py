@@ -35,6 +35,7 @@ from awesome_agent.core.tools import (
     ToolSpec,
     ToolStatus,
 )
+from awesome_agent.core.tools.context import CapabilityQuotaLedger
 from awesome_agent.core.tools.errors import ToolInvariantError
 from awesome_agent.core.tools.executor import ToolExecutor
 from awesome_agent.core.tools.permissions import (
@@ -45,6 +46,7 @@ from awesome_agent.core.tools.permissions import (
     PolicyRequest,
     ToolApprovalDecision,
     ToolApprovalRequest,
+    ToolCapability,
 )
 from awesome_agent.core.tools.registry import (
     MAX_REGISTERED_TOOL_CATALOG_BYTES,
@@ -1087,6 +1089,155 @@ async def test_thread_write_grant_suppresses_later_write_approval(
         assert result.status is ToolStatus.SUCCESS
 
     assert len(approvals) == 1
+
+
+@pytest.mark.asyncio
+async def test_thread_network_grant_is_scoped_to_the_exact_context_thread(
+    tmp_path: Path,
+) -> None:
+    approvals: list[ToolApprovalRequest] = []
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        approvals.append(request)
+        return ToolApprovalDecision.ALLOW_THREAD_NETWORK
+
+    context, _, _ = execution_context(tmp_path)
+    context = replace(context, approval_resolver=approve)
+    executor = ToolExecutor(echo_registry(capability=ToolCapability.NETWORK_READ))
+
+    first = await executor.execute(
+        ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "ok"}),
+        context=context,
+    )
+    second = await executor.execute(
+        ToolRequest(call_id="call_2", tool_name="echo", arguments={"text": "ok"}),
+        context=context,
+    )
+    other_thread = replace(context, thread_id="thread_2")
+    third = await executor.execute(
+        ToolRequest(call_id="call_3", tool_name="echo", arguments={"text": "ok"}),
+        context=other_thread,
+    )
+
+    assert (first.status, second.status, third.status) == (
+        ToolStatus.SUCCESS,
+        ToolStatus.SUCCESS,
+        ToolStatus.SUCCESS,
+    )
+    assert [request.capability for request in approvals] == [
+        ToolCapability.NETWORK_READ.value,
+        ToolCapability.NETWORK_READ.value,
+    ]
+    assert context.permission_session.thread_granted_capabilities == frozenset(
+        {
+            ("thread_1", ToolCapability.NETWORK_READ.value),
+            ("thread_2", ToolCapability.NETWORK_READ.value),
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("capability", "decision"),
+    [
+        (ToolCapability.WORKSPACE_WRITE, ToolApprovalDecision.ALLOW_THREAD_NETWORK),
+        (ToolCapability.NETWORK_READ, ToolApprovalDecision.ALLOW_THREAD_WRITES),
+    ],
+)
+async def test_scoped_approval_cannot_grant_another_capability(
+    tmp_path: Path,
+    capability: ToolCapability,
+    decision: ToolApprovalDecision,
+) -> None:
+    async def invalid_approval(
+        request: ToolApprovalRequest,
+    ) -> ToolApprovalDecision:
+        del request
+        return decision
+
+    context, _, _ = execution_context(tmp_path)
+    context = replace(context, approval_resolver=invalid_approval)
+
+    with pytest.raises(ToolInvariantError, match="Unexpected tool handler failure"):
+        await ToolExecutor(echo_registry(capability=capability)).execute(
+            ToolRequest(
+                call_id="call_invalid_scope",
+                tool_name="echo",
+                arguments={"text": "ok"},
+            ),
+            context=context,
+        )
+
+
+@pytest.mark.asyncio
+async def test_capability_quota_is_checked_before_approval_and_consumed_once(
+    tmp_path: Path,
+) -> None:
+    approvals = 0
+    handler_calls = 0
+
+    def admit(arguments: BaseModel, context: ToolExecutionContext) -> None:
+        assert isinstance(arguments, EchoArguments)
+        context.capability_quotas.require_remaining(
+            ToolCapability.NETWORK_READ.value
+        )
+
+    async def web_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        nonlocal handler_calls
+        assert isinstance(arguments, EchoArguments)
+        handler_calls += 1
+        context.capability_quotas.consume(ToolCapability.NETWORK_READ.value)
+        return ToolOutput(content=arguments.text)
+
+    async def approve(request: ToolApprovalRequest) -> ToolApprovalDecision:
+        nonlocal approvals
+        approvals += 1
+        return ToolApprovalDecision.ALLOW_ONCE
+
+    registry = ToolRegistry()
+    registry.register(
+        spec=ToolSpec(
+            name="echo",
+            description="Echo text",
+            input_schema=EchoArguments.model_json_schema(),
+            capability=ToolCapability.NETWORK_READ,
+            read_only=True,
+        ),
+        input_model=EchoArguments,
+        handler=web_handler,
+        admit=admit,
+    )
+    context, _, _ = execution_context(tmp_path)
+    context = replace(
+        context,
+        approval_resolver=approve,
+        capability_quotas=CapabilityQuotaLedger(
+            {ToolCapability.NETWORK_READ.value: 1}
+        ),
+    )
+    executor = ToolExecutor(registry)
+
+    first = await executor.execute(
+        ToolRequest(call_id="call_1", tool_name="echo", arguments={"text": "ok"}),
+        context=context,
+    )
+    second = await executor.execute(
+        ToolRequest(call_id="call_2", tool_name="echo", arguments={"text": "ok"}),
+        context=context,
+    )
+
+    assert first.status is ToolStatus.SUCCESS
+    assert second.status is ToolStatus.ERROR
+    assert second.error is not None
+    assert second.error.code is ToolErrorCode.WEB_REQUEST_BUDGET_EXHAUSTED
+    assert approvals == 1
+    assert handler_calls == 1
+    assert context.capability_quotas.used_counts == {
+        ToolCapability.NETWORK_READ.value: 1
+    }
 
 
 @pytest.mark.asyncio

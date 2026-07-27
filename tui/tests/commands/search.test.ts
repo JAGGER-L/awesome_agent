@@ -17,7 +17,7 @@ describe("searchCommands", () => {
 
   it("accepts slash-prefixed queries and returns the complete result set", () => {
     expect(searchCommands("/th")[0]?.name).toBe("thinking");
-    expect(searchCommands("")).toHaveLength(25);
+    expect(searchCommands("")).toHaveLength(26);
   });
 
   it("does not provide fuzzy aliases", () => {

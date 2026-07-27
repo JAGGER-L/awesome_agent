@@ -100,9 +100,10 @@ a later tool call needs an approval that cannot be resolved non-interactively,
 the runner requests cancellation, writes no partial answer to stdout, and
 exits with code 3.
 
-`--allow-network` is only a process-local declaration of intent in this
-increment. No built-in Web tool consumes it yet, so it grants no capability,
-does not make a disabled tool available, and cannot bypass hard denial.
+`--allow-network` authorizes this process to resolve only the active headless
+Turn's exact `network.read` prompt as `allow_once`. It does not make disabled
+Web available, cannot create a Thread grant or resolve another interaction,
+and cannot bypass hard denial.
 
 ## Approval Semantics
 
@@ -116,6 +117,12 @@ A write approval can offer:
 The temporary write grant never includes delete or shell execution. Delete,
 shell, MCP, and unknown capabilities only offer a one-call decision. Escape
 denies the current approval.
+
+`network.read` is different from local Full access: its first call asks in
+every permission mode. The choices are **No** (default), **Allow once**, and
+**Allow for this Thread**. A Thread network grant is cleared when the selected
+Thread changes, the runtime is rebuilt, the permission mode changes,
+`/web revoke` or `/web off` runs, or Awesome exits.
 
 Each tool approval is bound to its Thread, Turn, Operation, and interaction
 identity. A response is accepted at most once and only while those facts are

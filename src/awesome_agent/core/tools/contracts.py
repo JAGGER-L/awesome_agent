@@ -44,6 +44,15 @@ class ToolErrorCode(StrEnum):
     MEMORY_DISABLED = "memory_disabled"
     MEMORY_CONFLICT = "memory_conflict"
     MEMORY_REJECTED = "memory_rejected"
+    WEB_REQUEST_BUDGET_EXHAUSTED = "web_request_budget_exhausted"
+    WEB_REQUEST_REJECTED = "web_request_rejected"
+    WEB_CREDENTIAL_REJECTED = "web_credential_rejected"
+    WEB_RATE_LIMITED = "web_rate_limited"
+    WEB_QUOTA_EXHAUSTED = "web_quota_exhausted"
+    WEB_PROVIDER_UNAVAILABLE = "web_provider_unavailable"
+    WEB_TIMEOUT = "web_timeout"
+    WEB_CONNECTION_FAILED = "web_connection_failed"
+    WEB_MALFORMED_RESPONSE = "web_malformed_response"
     CANCELLED = "cancelled"
 
 

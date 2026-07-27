@@ -25,7 +25,10 @@ Awesome currently provides:
 - independently optional local Memory and Mem0 Cloud;
 - bundled, user, and trusted Workspace Skills;
 - configured MCP stdio servers with validated, generation-bound catalogs;
-- a versioned Protocol v3 boundary between Python Core and the Ink TUI;
+- opt-in structured Tavily Web search through the same Registry, Policy, and
+  Executor, with per-Turn budgets, Thread-scoped network consent, and durable
+  citations;
+- a versioned Protocol v4 boundary between Python Core and the Ink TUI;
 - a searchable GitHub Pages documentation site generated from this directory.
 
 The [architecture overview](../ARCHITECTURE.md) defines the current component
@@ -90,15 +93,20 @@ capability negotiation, context limits, and credential validation.
 
 ### Search tools
 
-**User need:** coding work often requires current web or documentation facts
-that are not present in the Workspace.
+**Current baseline:** opt-in Tavily Web search already uses the common tool,
+permission, budget, recovery, and citation contracts described in the reference
+documentation.
 
-**Invariant:** Web Search and Web Fetch would enter the same Registry, Policy,
-Executor, result, event, timeout, and approval path as every other tool. Remote
-content remains untrusted context.
+**User need beyond the baseline:** search quality and source selection may need
+to evolve as real coding and documentation workflows expose concrete gaps.
 
-**Open decisions:** provider choice, network allowlists, citation preservation,
-privacy, caching, output limits, and uncertain-result handling.
+**Invariant:** future search improvements must preserve provider-neutral tool
+results, explicit network consent, bounded untrusted content, and end-to-end
+citations instead of creating another execution path.
+
+**Open decisions:** changes require measured gaps in the current basic search;
+Awesome will not add speculative backends or transparent retries merely to
+broaden the abstraction.
 
 ## Later directions
 

@@ -1,4 +1,4 @@
-# Private Core/TUI protocol v3
+# Private Core/TUI protocol v4
 
 Awesome's Ink process and its one Python Core child communicate over private
 stdio using newline-delimited JSON-RPC 2.0. The protocol is an internal
@@ -6,7 +6,7 @@ component boundary, not a remote API: it has no network listener, authentication
 scheme, compatibility proxy, or promise that third-party clients can mix
 versions independently.
 
-Protocol version **3** is paired with the exact installed product version. The
+Protocol version **4** is paired with the exact installed product version. The
 current repository product version is **1.3.0**. Event envelopes have their own
 version **1**.
 
@@ -38,7 +38,7 @@ version **1**.
 ```text
 Ink                     Protocol Host              Application
  |                            |                          |
- |-- initialize(v3, exact) -->|                          |
+ |-- initialize(v4, exact) -->|                          |
  |                            |------- initialize ------>|
  |                            |<-- ApplicationResult ----|
  |<---- JSON-RPC response ----|                          |
@@ -103,7 +103,7 @@ rejection to the existing handshake error. `initialize` must use:
   "id": "init-1",
   "method": "initialize",
   "params": {
-    "protocol_version": 3,
+    "protocol_version": 4,
     "client_name": "awesome",
     "client_version": "1.3.0"
   }
@@ -112,7 +112,7 @@ rejection to the existing handshake error. `initialize` must use:
 
 Protocol mismatch returns product error `protocol_version_incompatible`.
 `client_name` other than `awesome` or a product version unequal to Core returns
-`client_version_incompatible`. A v2 client therefore fails explicitly even when
+`client_version_incompatible`. A v3 client therefore fails explicitly even when
 its package version happens to equal Core's.
 
 A successful `InitializeResult` contains product/protocol versions, session ID,
@@ -125,11 +125,11 @@ workspace presentation, capabilities, and one status:
 | `state_reset_required` | Application state is older than schema 7. | Resolve reset/deny; after reset, initialize again. |
 
 Current capabilities are `threads`, `turns`, `direct_commands`, `commands`,
-`tools`, `skills`, `mcp`, `local_memory`, and `mem0_cloud`.
+`tools`, `skills`, `mcp`, `local_memory`, `mem0_cloud`, `web`, and `citations`.
 
 The Host never parses a serialized result payload to advance readiness; typed
 initialize and interaction outcomes update Application first. This ownership
-is internal and does not change the Protocol v3 wire contract.
+is internal and remains part of the Protocol v4 wire contract.
 
 Before ready, ordinary requests receive JSON-RPC `-32002` with diagnostic
 `server_not_initialized` or `server_not_ready`. While initialize is running, a
@@ -182,6 +182,12 @@ are invalid so “not supplied” has one unambiguous wire representation. The
 Application dynamically reduces a requested page until the encoded result fits
 its 900 KiB budget and preserves `next_before_sequence` for the omitted entries.
 
+Assistant entry metadata contains an ordered `citations` array. Each strict
+source has `id` (`S1...`), bounded single-line `title`, and an absolute HTTPS
+`url`; IDs are contiguous and URLs unique within the Turn. Turn budgets and
+usage also include non-negative `web_requests`, whose configured hard maximum
+is eight.
+
 ### Turn and direct acceptance
 
 `turn.submit` and `direct.execute` acknowledge admission, not completion. The
@@ -204,7 +210,7 @@ Params are a closed `CommandIntent`:
 {"name":"mcp","arguments":["status","repository-index"]}
 ```
 
-Only the 21 Application-owned names are normally sent over this method. Ink
+Only the 22 Application-owned names are normally sent over this method. Ink
 owns `help`, `theme`, `copy`, and `quit` locally. A `CommandOutcome` contains
 exactly one branch: typed `result`, typed `interaction`, or stable command
 `error`. Exact grammar and foreground snapshot exceptions are in
@@ -233,13 +239,14 @@ fails only when a later Mem0 initialization or operation reaches the service.
 The result contains `source` only when Core can report a selected credential
 source. It is normally `awesome` after a successful save, but invalid,
 save-unverified-confirmation, or delete results can have no selected source; in
-that case the field is omitted. Explicit `"source": null` is not a valid v3
+that case the field is omitted. Explicit `"source": null` is not a valid v4
 result.
 
 ### `interaction.respond`
 
 Decision values are `trust`, `reset_state`, `allow_once`,
-`allow_thread_writes`, `enable_full_access`, `retry`, `abort`, and `deny`. The
+`allow_thread_writes`, `allow_thread_network`, `enable_full_access`, `retry`,
+`abort`, and `deny`. The
 interaction kind and advertised choices determine which values are valid.
 Core revalidates the pending interaction's generation and its required
 Thread/Turn/operation/permission binding. Stale responses do not mutate current
@@ -305,7 +312,7 @@ Product error codes are:
 Clients use the `retryable` flag plus current state, not string matching on the
 message, to decide whether a retry is appropriate.
 
-In Protocol v3, an Application-level `state_unavailable` error is retryable and
+In Protocol v4, an Application-level `state_unavailable` error is retryable and
 includes bounded `state_directory` metadata. This is distinct from the
 non-retryable `state_unavailable` inside a built-in Memory tool's `ToolOutput`;
 the two envelopes must not be normalized by code string alone.
@@ -366,7 +373,7 @@ IDs.
 | Provider retry | `provider.retrying` | attempt 2–7, maximum 1–7, delay 0–30 seconds, error code |
 | Tool | `tool.started`, `.completed`, `.failed`, `.cancelled` | call/name/verb/target; terminal outcome, summary/detail, duration, optional error code |
 | Context | `context.prepared`, `context.compressed` | source count and estimated tokens |
-| Usage | `usage.updated` | non-negative input/output/reasoning/cache token counters |
+| Usage | `usage.updated` | non-negative input/output/reasoning/cache token and Web-request counters |
 | Memory | `memory.status` | `local` or `external`, enabled flag, status |
 | Interaction | `interaction.required`, `interaction.resolved` | bound IDs/kind/prompt/operation/target/capability/choices or decision |
 | Warning | `warning` | stable code and bounded message |
@@ -395,7 +402,7 @@ where the command contract explicitly allows them.
 
 ## Fixtures and compatibility testing
 
-`protocol/fixtures/v3/` is the cross-language source of truth. It contains valid
+`protocol/fixtures/v4/` is the cross-language source of truth. It contains valid
 and invalid methods, command results, events, product failures, plus a manifest
 with file hashes, method names, event names, product version, and protocol
 version. Python Pydantic models and the TUI's strict TypeScript/Zod schemas both

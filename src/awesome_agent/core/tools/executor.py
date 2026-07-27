@@ -240,6 +240,10 @@ class ToolExecutor:
                     granted_capabilities=frozenset(
                         context.permission_session.granted_capabilities
                     ),
+                    thread_id=context.thread_id,
+                    granted_thread_capabilities=(
+                        context.permission_session.thread_granted_capabilities
+                    ),
                 )
             )
             if (
@@ -287,6 +291,12 @@ class ToolExecutor:
                             "Thread write approval cannot grant another capability."
                         )
                     context.permission_session.grant_thread_writes()
+                elif approval is ToolApprovalDecision.ALLOW_THREAD_NETWORK:
+                    if registered.spec.capability != ToolCapability.NETWORK_READ:
+                        raise ToolInvariantError(
+                            "Thread network approval cannot grant another capability."
+                        )
+                    context.permission_session.grant_thread_network(context.thread_id)
                 elif approval is not ToolApprovalDecision.ALLOW_ONCE:
                     raise ToolInvariantError(
                         "Approval resolver returned an invalid decision."

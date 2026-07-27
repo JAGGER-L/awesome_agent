@@ -27,11 +27,19 @@ change, and helps verify the result.
 - run one Agent Turn non-interactively with deterministic text or JSON output;
 - choose Request approval, Accept edits, or Thread-scoped Full access;
 - extend tasks with Skills, MCP tools, local Memory, and Mem0 Cloud;
+- search the public Web through an optional, cited Tavily integration;
 - work with DeepSeek and Kimi models.
 
 Awesome starts with `ls`, `read_file`, `write_file`, `edit_file`, `delete`,
 `glob`, `grep`, and `execute`. Extensions can add more tools; the total is not limited to eight.
 Local memory and Mem0 Cloud are independent and default off.
+
+Web search also defaults off. Set `TAVILY_API_KEY`, enable it with `/web on`,
+and approve the first `network.read` request in each Thread. Queries are sent
+to Tavily under its [Privacy Policy](https://www.tavily.com/privacy) and
+[Platform Terms](https://www.tavily.com/terms); Awesome assigns stable `S1...`
+sources and carries them into the final answer. Use `/web off` or `/web revoke`
+to disable the integration or clear the active Thread grant.
 
 ## Install
 
@@ -146,3 +154,7 @@ or hard-link aliases. Bounded process-tree cleanup limits orphaned children but
 does not isolate host execution.
 Process-environment variables and `<AWESOME_HOME>/.env` remain advanced
 configuration options; never put credentials in project files.
+Optional Web search sends the query to Tavily. Awesome does not fetch arbitrary
+target sites locally, inherit ambient proxy variables, or record query and URL
+text in its structured diagnostics; use `AWESOME_WEB_PROXY_URL` only when an
+explicit proxy is required.

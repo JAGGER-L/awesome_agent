@@ -28,8 +28,10 @@ _AGENT_STATE_KEYS = (
     "pending_tool_calls",
     "next_tool_index",
     "tool_results",
+    "citations",
     "model_calls",
     "tool_calls",
+    "web_requests",
     "provider_retries",
     "compressions",
     "active_execution_seconds",
@@ -39,6 +41,7 @@ _AGENT_STATE_KEYS = (
     "termination_reason",
 )
 _AGENT_STATE_KEY_SET = frozenset(_AGENT_STATE_KEYS)
+_LEGACY_AGENT_STATE_KEYS = _AGENT_STATE_KEY_SET - {"citations", "web_requests"}
 
 
 class CheckpointCorrupt(RuntimeError):
@@ -67,7 +70,7 @@ class LangGraphCheckpointStore:
             if not isinstance(values, dict):
                 raise TypeError("checkpoint channel values must be a mapping")
             keys = frozenset(values)
-            if not _AGENT_STATE_KEY_SET.issubset(keys):
+            if not _LEGACY_AGENT_STATE_KEYS.issubset(keys):
                 raise ValueError("checkpoint is missing AgentState channels")
             unexpected = keys - _AGENT_STATE_KEY_SET
             if any(
@@ -75,7 +78,13 @@ class LangGraphCheckpointStore:
                 for key in unexpected
             ):
                 raise ValueError("checkpoint contains an unknown public channel")
-            projected = {key: values[key] for key in _AGENT_STATE_KEYS}
+            projected = {
+                key: values[key]
+                for key in _AGENT_STATE_KEYS
+                if key in values
+            }
+            projected.setdefault("citations", [])
+            projected.setdefault("web_requests", 0)
             return validate_agent_state(projected)
         except (KeyError, TypeError, ValueError) as error:
             raise CheckpointCorrupt(turn_id) from error

@@ -87,7 +87,7 @@ npm pack ./tui --dry-run
 `npm pack --dry-run`，作为便于人工阅读的内容检查；在 build 前运行可能检查过期 `dist`，
 或无法证明 bin target。
 
-### 6. Protocol v3 fixtures
+### 6. Protocol v4 fixtures
 
 ```powershell
 uv run python scripts/generate_protocol_fixtures.py --check
@@ -96,6 +96,11 @@ uv run python scripts/generate_protocol_fixtures.py --check
 如果有意改变契约，请不带 `--check` 重新生成，检查所有 fixture 与 manifest 变更，更新
 严格 TypeScript schema/presenter，然后重新运行 Python 与 TUI fixture 测试。不要手工编辑
 生成的 JSON。
+
+Web 变更使用 fake Tavily transport/provider suite，覆盖严格请求边界、`trust_env=False`、
+显式 proxy 选择、每种稳定 HTTP failure、不自动 retry、permission choice 与 grant 撤销、
+八次请求硬 budget、non-replayable recovery、citation finalization，以及 Python/TypeScript
+round trip。Live Tavily 请求只作为显式 release gate；普通测试不得要求网络访问或真实 key。
 
 ### 7. 文档站
 

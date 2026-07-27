@@ -65,6 +65,7 @@ class DiagnosticUsage(BaseModel):
     tool_calls: JsonSafeInteger = Field(default=0, ge=0)
     provider_retries: JsonSafeInteger = Field(default=0, ge=0)
     compressions: JsonSafeInteger = Field(default=0, ge=0)
+    web_requests: JsonSafeInteger = Field(default=0, ge=0)
     active_execution_ms: JsonSafeInteger = Field(default=0, ge=0)
 
 
@@ -282,6 +283,7 @@ def _usage_from_summary(usage: UsageSummary) -> DiagnosticUsage:
         tool_calls=usage.tool_calls,
         provider_retries=usage.provider_retries,
         compressions=usage.compressions,
+        web_requests=usage.web_requests,
         active_execution_ms=min(active_execution_ms, MAX_JSON_SAFE_INTEGER),
     )
 
@@ -297,6 +299,7 @@ def _usage_from_mapping(usage: Mapping[str, int | float]) -> DiagnosticUsage | N
         "tool_calls",
         "provider_retries",
         "compressions",
+        "web_requests",
     )
     values: dict[str, int] = {}
     for field in integer_fields:

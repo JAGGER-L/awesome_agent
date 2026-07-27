@@ -6,11 +6,11 @@ Journal 捕获、超时或操作系统隔离。
 
 ## 精确矩阵
 
-| 模式 | Workspace 读取 | 创建/修改 | 删除 | Shell | MCP/未知扩展 |
-| --- | --- | --- | --- | --- | --- |
-| Request approval | Allow | Ask | Ask | Ask | Ask |
-| Accept edits | Allow | Allow | Ask | Ask | Ask |
-| Full access | Allow | Allow | Allow | Allow | Ask |
+| 模式 | Workspace 读取 | 创建/修改 | 删除 | Shell | 网络读取 | MCP/未知扩展 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Request approval | Allow | Ask | Ask | Ask | Ask | Ask |
+| Accept edits | Allow | Allow | Ask | Ask | Ask | Ask |
+| Full access | Allow | Allow | Allow | Allow | Ask | Ask |
 
 该矩阵适用于已选中 Thread 权限会话中的 Agent 工具调用。直接 `! command` 是对该精确命令的
 显式授权，并使用独立的 Direct Full-access 会话，因此不显示普通 shell prompt；所有 schema、
@@ -32,8 +32,8 @@ picker；`/permissions <value>` 直接请求一种模式。
 任意进程具有更广的故障面。
 
 **Full access** 免除内置本地 capability 的逐次调用 prompt。它适合受信任仓库和有人监督的
-长任务，但并不等于“允许一切”。MCP 和未来未知扩展 capability 仍然逐次询问，因为 Core
-无法推断它们的外部权限或幂等性。
+长任务，但并不等于“允许一切”。第一次 `network.read` 仍会询问；MCP 和未来未知扩展
+capability 仍然逐次询问，因为 Core 无法推断它们的外部权限或幂等性。
 
 这种非对称设计遵循最小权限原则：只有在 Awesome 知道 capability 语义的地方才授予便利。
 
@@ -46,6 +46,9 @@ picker；`/permissions <value>` 直接请求一种模式。
 3. 针对请求的词法 working directory 执行 shell circuit breaker；
 4. capability policy：先检查有效 temporary grant，再检查当前模式矩阵；
 5. 结果为 `ask` 时，创建一个与 Tool call 绑定的 interaction。
+
+`network.read` 是显式的矩阵例外：如果当前没有 Thread grant，它在三种模式下都返回
+`ask`。Permission mode 不能静默授权把搜索 query 发送给 Tavily。
 
 准入后、产生效果前，handler 会应用特定后端的检查。Filesystem handler 解析包含关系、
 link/reparse 状态、对象身份、敏感名称和受保护删除目标。`execute` 解析其实际 working
@@ -88,6 +91,10 @@ handler safety checks ------------> EFFECT or DENY
   `workspace.write` 显示；授权当前所选 Thread 后续的创建/修改；
 - **No**（`deny`）：拒绝调用。
 
+对 `network.read`，安全的第一项/默认项是 **Deny**（`deny`），随后是 **Allow once**
+（`allow_once`）与 **Allow for this Thread**（`allow_thread_network`）。Thread 选项只覆盖
+后续 Web Search，不会授予其他网络 capability。
+
 “all edits”标签不包括 delete、shell、MCP 或未知 capability。Core 会把任何尝试将该决定
 用于非 write capability 的行为作为不变量违规而拒绝。
 
@@ -95,6 +102,20 @@ Temporary capability grant 是内存中的会话状态。每次模式变化—�
 模式回到概念上相同的权限——都会清除 grant 集合，并递增 permission generation。选择、创建
 或恢复另一个 Thread 会将模式重置为 Request approval 并清除 grant。任何内容都不会作为
 永久规则持久化。
+
+Runtime 重建、`/web revoke`、`/web off` 或 shutdown 也会清除网络 grant。因此，启用 Web
+与授予联网权限是两个独立决定。
+
+## Web 网络读取
+
+启用的 `web_search` 会把 query 发送给 Tavily。审批会说明这项传输，数据按照
+[Tavily 隐私政策](https://www.tavily.com/privacy)与
+[Tavily 平台条款](https://www.tavily.com/terms)处理。搜索结果仍是不受信任的模型上下文；
+审批不会让其内容自动成为权威事实。
+
+Headless 模式下，`--allow-network` 只会把当前 headless Turn 中匹配的 `network.read`
+interaction 解析为 `allow_once`。它不能启用 Web、创建 Thread grant、批准其他 interaction，
+也不能绕过 hard denial。
 
 ## Full access 确认
 

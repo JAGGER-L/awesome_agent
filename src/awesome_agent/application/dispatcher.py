@@ -126,11 +126,13 @@ class CommandDispatcher:
 def _is_observation(intent: CommandIntent) -> bool:
     if intent.name in _OBSERVATION_COMMANDS:
         return True
-    if intent.name is not CommandName.MCP:
-        return False
-    return not intent.arguments or (
-        intent.arguments[0] == "status" and len(intent.arguments) <= 2
-    )
+    if intent.name is CommandName.MCP:
+        return not intent.arguments or (
+            intent.arguments[0] == "status" and len(intent.arguments) <= 2
+        )
+    if intent.name is CommandName.WEB:
+        return not intent.arguments or intent.arguments == ("status",)
+    return False
 
 
 def _operation_busy() -> CommandOutcome:

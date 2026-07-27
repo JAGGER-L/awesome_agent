@@ -603,7 +603,7 @@ def test_virtual_environment_scripts_do_not_follow_interpreter_symlinks() -> Non
     )
 
 
-def test_installed_core_protocol_handshake_is_v3_trusted_and_bounded(
+def test_installed_core_protocol_handshake_is_v4_trusted_and_bounded(
     tmp_path: Path,
 ) -> None:
     server = tmp_path / "fake_core.py"
@@ -638,7 +638,7 @@ def test_installed_core_protocol_handshake_is_v3_trusted_and_bounded(
 
             params = receive(1, "initialize")
             assert params == {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": expected_version,
             }
@@ -648,7 +648,7 @@ def test_installed_core_protocol_handshake_is_v3_trusted_and_bounded(
                 "params": {},
             }), flush=True)
             respond(1, {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "product_version": expected_version,
                 "status": "trust_required",
                 "interaction_id": "interaction_release",

@@ -179,7 +179,7 @@ async def test_stdio_full_flow_and_restart(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -288,7 +288,7 @@ async def test_stdio_full_flow_and_restart(
     ready = await restarted.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -329,7 +329,7 @@ async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -356,7 +356,7 @@ async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
     after_reset = await client.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -398,7 +398,7 @@ async def test_stdio_rejects_newer_state_without_offering_reset(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },

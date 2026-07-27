@@ -6,6 +6,11 @@ import type {
   TranscriptBlock,
 } from "./model.js";
 
+type AssistantEntry = Extract<
+  MethodValue["thread.read"]["view"]["entries"][number],
+  { readonly kind: "assistant_message" }
+>;
+
 export class ReconciliationError extends Error {
   constructor(message: string) {
     super(message);
@@ -42,7 +47,9 @@ export function reconcileTerminalTurn(
     (candidate) => candidate.id === live.turn_id,
   );
   const assistantEntry = page.view.entries.find(
-    (entry) => entry.id === turn?.assistant_entry_id,
+    (entry): entry is AssistantEntry =>
+      entry.id === turn?.assistant_entry_id &&
+      entry.kind === "assistant_message",
   );
   const durableTools = new Map(
     page.view.tool_activities
@@ -107,6 +114,7 @@ export function reconcileTerminalTurn(
       key: `entry:${assistantEntry.id}`,
       kind: "assistant",
       text: assistantEntry.content,
+      citations: assistantEntry.metadata.citations,
     });
   }
   if (turn?.status === "failed" || turn?.status === "cancelled") {

@@ -73,7 +73,7 @@ def _validate_repository_version_surfaces(root: Path, version: str) -> None:
     try:
         project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
         manifest = json.loads(
-            (root / "protocol" / "fixtures" / "v3" / "manifest.json").read_text(
+            (root / "protocol" / "fixtures" / "v4" / "manifest.json").read_text(
                 encoding="utf-8"
             )
         )
@@ -101,8 +101,8 @@ def _validate_repository_version_surfaces(root: Path, version: str) -> None:
         raise ReleaseIdentityError(
             "Python version metadata is not sourced from VERSION"
         )
-    if manifest.get("protocol_version") != 3:
-        raise ReleaseIdentityError("Protocol fixture major must remain v3")
+    if manifest.get("protocol_version") != 4:
+        raise ReleaseIdentityError("Protocol fixture major must remain v4")
     if manifest.get("product_version") != version:
         raise ReleaseIdentityError(
             "Protocol fixture product version does not match VERSION"

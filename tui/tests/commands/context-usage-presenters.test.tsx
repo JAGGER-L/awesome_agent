@@ -41,6 +41,7 @@ describe("context and usage presenters", () => {
         tool_calls: 3,
         provider_retries: 1,
         compressions: 1,
+        web_requests: 3,
         active_execution_seconds: 2.2,
       },
     });
@@ -57,6 +58,7 @@ describe("context and usage presenters", () => {
       "Tool calls",
       "Provider retries",
       "Compressions",
+      "Web requests",
       "Active execution",
     ]);
     expect(result.rows.map((row) => row.value)).toEqual([
@@ -69,7 +71,38 @@ describe("context and usage presenters", () => {
       "3",
       "1",
       "1",
+      "3",
       "2.2s",
     ]);
+  });
+
+  it("presents Web availability, authority, and disclosure together", () => {
+    const result = presentCommandPayload("web", {
+      kind: "web_status",
+      enabled: true,
+      provider: "tavily",
+      available: false,
+      credential_configured: false,
+      proxy_configured: true,
+      thread_authorized: false,
+      requests_per_turn: 8,
+      diagnostic_code: "tavily_credential_missing",
+      disclosure: "Queries and URLs are sent to Tavily.",
+    });
+
+    expect(result).toMatchObject({ kind: "panel", title: "/web" });
+    if (result.kind !== "panel") return;
+    expect(result.rows).toEqual(
+      expect.arrayContaining([
+        { label: "Available", value: "No", status: "warning" },
+        { label: "Thread access", value: "Approval required" },
+        {
+          label: "Diagnostic",
+          value: "tavily_credential_missing",
+          status: "warning",
+        },
+        { label: "Disclosure", value: "Queries and URLs are sent to Tavily." },
+      ]),
+    );
   });
 });

@@ -72,7 +72,7 @@ class Backend:
         self.calls.append(("initialize", None))
         return InitializeResult(
             product_version="0.1.0",
-            protocol_version=3,
+            protocol_version=4,
             status=InitializeStatus.READY,
             session_id="session_1",
             workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -261,7 +261,7 @@ async def test_facade_bootstrap_transition_requires_exact_resolved_trust() -> No
             self.calls.append(("initialize", None))
             return InitializeResult(
                 product_version="0.1.0",
-                protocol_version=3,
+                protocol_version=4,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id="session_1",
                 interaction_id="interaction_trust",

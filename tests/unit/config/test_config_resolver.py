@@ -11,19 +11,24 @@ from awesome_agent.config import (
     ConfigurationInvalid,
     ConfigurationResolutionError,
     CredentialSource,
+    LoadedConfigSources,
     MemoryConfig,
     ProjectBudgetConfig,
+    ProjectWebConfig,
     ProviderConfig,
     ProviderCredentialStatus,
     ProviderCredentialStatuses,
     SecretStatus,
+    SecretValues,
     StartupOverrides,
     ThreadConfigState,
     UserBudgetConfig,
     UserConfigDocument,
     UserConfigWriter,
+    WebConfig,
     WorkspaceConfigDocument,
     load_config_sources,
+    missing_provider_credential_statuses,
     resolve_application_config,
     resolve_turn_config,
 )
@@ -274,9 +279,60 @@ def test_workspace_limits_can_only_reduce_user_limits() -> None:
         compressions=2,
         active_execution_seconds=900,
         total_context_tokens=200_000,
+        web_requests=3,
     )
-    assert application.web_requests == 3
+    assert application.budgets.web_requests == 3
     assert turn.budgets.total_context_tokens == 180_000
+
+
+def test_workspace_web_domains_only_add_restrictions() -> None:
+    sources = LoadedConfigSources(
+        user=UserConfigDocument(
+            web=WebConfig(
+                enabled=True,
+                blocked_domains=("user.example",),
+            )
+        ),
+        workspace=WorkspaceConfigDocument(
+            web=ProjectWebConfig(
+                blocked_domains=("workspace.example", "user.example")
+            )
+        ),
+        secrets=SecretValues(),
+        secret_status=SecretStatus(),
+        provider_credentials=missing_provider_credential_statuses(),
+    )
+
+    application = resolve_application_config(sources)
+
+    assert application.web.enabled is True
+    assert application.web.blocked_domains == (
+        "user.example",
+        "workspace.example",
+    )
+
+
+def test_effective_web_domain_restrictions_remain_bounded() -> None:
+    sources = LoadedConfigSources(
+        user=UserConfigDocument(
+            web=WebConfig(blocked_domains=("user.example",))
+        ),
+        workspace=WorkspaceConfigDocument(
+            web=ProjectWebConfig(
+                blocked_domains=tuple(
+                    f"workspace-{index}.example" for index in range(128)
+                )
+            )
+        ),
+        secrets=SecretValues(),
+        secret_status=SecretStatus(),
+        provider_credentials=missing_provider_credential_statuses(),
+    )
+
+    with pytest.raises(ConfigurationResolutionError) as caught:
+        resolve_application_config(sources)
+
+    assert caught.value.code == "configuration_invalid"
 
 
 def test_hard_budget_limits_fail_during_source_validation() -> None:

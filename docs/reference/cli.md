@@ -50,7 +50,7 @@ contract to stderr and exit with code 2.
 The startup directory is the workspace. Trust, local state compatibility, and
 Core/TUI protocol compatibility are resolved before normal input is admitted.
 See [files and state](files-and-state.md) and
-[Protocol v3](protocol.md).
+[Protocol v4](protocol.md).
 
 ## Headless run
 
@@ -77,21 +77,22 @@ Thread/session scoped and cannot override hard denials. If the Turn later
 requires any interaction that the runner cannot resolve, Awesome requests
 cancellation and exits with code 3.
 
-`--allow-network` declares process-local network intent only. This increment
-has no built-in Web tool that consumes the flag, so it does not enable network
-access or authorize an existing tool call. It never bypasses capability policy
-or a hard denial.
+`--allow-network` authorizes this process to resolve only an exact
+`network.read` prompt for the active headless Turn as `allow_once`. It does not
+enable Web by itself, cannot create a Thread grant or resolve another
+interaction, and never bypasses a hard denial.
 
 With `--format text`, stdout contains only the durable final assistant text
 followed by one newline. With `--format json`, stdout contains one compact JSON
 document followed by one newline:
 
 ```json
-{"version":1,"type":"awesome.run.result","thread_id":"...","turn_id":"...","text":"...","termination_reason":null,"usage":{"input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"model_calls":0,"tool_calls":0,"provider_retries":0,"compressions":0,"active_execution_seconds":0}}
+{"version":2,"type":"awesome.run.result","thread_id":"...","turn_id":"...","text":"... [[S1]]","citations":[{"id":"S1","title":"Example","url":"https://example.com/source"}],"termination_reason":null,"usage":{"input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"model_calls":0,"tool_calls":0,"provider_retries":0,"compressions":0,"web_requests":1,"active_execution_seconds":0}}
 ```
 
-The JSON document is versioned independently from Protocol v3. It reports the
-durable answer and Turn facts; it is not a stream of protocol events. On every
+The JSON document is versioned independently from Protocol v4. Version 2 adds
+the ordered `citations` array and `usage.web_requests`; it reports the durable
+answer and Turn facts, not a stream of protocol events. On every
 nonzero exit, stdout is empty and diagnostics go to stderr.
 
 | Exit code | Meaning |

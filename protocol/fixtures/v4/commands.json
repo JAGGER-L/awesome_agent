@@ -61,6 +61,10 @@
       "owner": "application"
     },
     {
+      "name": "web",
+      "owner": "application"
+    },
+    {
       "name": "memory",
       "owner": "application"
     },

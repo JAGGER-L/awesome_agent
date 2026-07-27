@@ -293,6 +293,7 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           reasoning_tokens: event.payload.reasoning_tokens,
           cache_read_tokens: event.payload.cache_read_tokens,
           cache_write_tokens: event.payload.cache_write_tokens,
+          web_requests: event.payload.web_requests,
         },
       };
     case "interaction.required":
@@ -307,6 +308,13 @@ function reduceEvent(state: SurfaceState, event: EventEnvelope): SurfaceState {
           ...(event.payload.capability === undefined
             ? {}
             : { capability: event.payload.capability }),
+          ...(event.thread_id === undefined
+            ? {}
+            : { thread_id: event.thread_id }),
+          ...(event.turn_id === undefined ? {} : { turn_id: event.turn_id }),
+          ...(event.operation_id === undefined
+            ? {}
+            : { operation_id: event.operation_id }),
           choices: event.payload.choices,
         },
       };

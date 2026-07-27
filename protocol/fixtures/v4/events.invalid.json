@@ -46,7 +46,8 @@
           "input_tokens": 9007199254740992,
           "kind": "usage.updated",
           "output_tokens": 4,
-          "reasoning_tokens": 0
+          "reasoning_tokens": 0,
+          "web_requests": 0
         },
         "sequence": 3,
         "session_id": "session_11111111111111111111111111111111",

@@ -12,7 +12,7 @@
 | [内置工具](built-in-tools.zh-CN.md) | 工具名、capability、参数字段、限制、输出和条件支持工具 |
 | [权限模式](permission-modes.zh-CN.md) | 精确的三模式矩阵、单次与 Thread grant、hard denial 和 Full access 确认 |
 | [文件与状态](files-and-state.zh-CN.md) | User/workspace 路径、SQLite 所有权、schema 行为、锁、备份和重置边界 |
-| [Protocol v3](protocol.zh-CN.md) | 私有 stdio JSON-RPC method、事件、错误、握手和 fixture |
+| [Protocol v4](protocol.zh-CN.md) | 私有 stdio JSON-RPC method、事件、错误、握手和 fixture |
 
 ## 如何阅读参考页面
 

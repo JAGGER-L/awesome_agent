@@ -35,9 +35,9 @@ LangGraph Agent、模型提供商、工具以及持久化状态时，Awesome 如
 | 启动、Turn、直接命令、交互、取消和关闭 | [请求生命周期](request-lifecycles.zh-CN.md) |
 | Application 与 Agent 为什么分离，以及 LangGraph 应位于何处 | [Application 与 Agent](application-and-agent.zh-CN.md) |
 | 提示词来源、预算、模型适配器、Skills、Memory 和 MCP | [上下文、模型与扩展](context-model-and-extensions.zh-CN.md) |
-| 工具注册、审批、Shell 执行和可逆变更 | [工具与变更](tools-and-changes.zh-CN.md) |
+| 工具注册、Web search/citation、审批、Shell 执行和可逆变更 | [工具与变更](tools-and-changes.zh-CN.md) |
 | SQLite 职责、checkpoint、lease、重置和崩溃收敛 | [存储与恢复](storage-and-recovery.zh-CN.md) |
-| Protocol v3、stdio 边界、Ink 状态、输入模式和状态校正 | [协议与 TUI](protocol-and-tui.zh-CN.md) |
+| Protocol v4、stdio 边界、Ink 状态、输入模式和状态校正 | [协议与 TUI](protocol-and-tui.zh-CN.md) |
 | 威胁模型、信任、隔离边界和强制依赖方向 | [安全与依赖](security-and-dependencies.zh-CN.md) |
 
 如果希望从代码入手，请按以下顺序阅读：
@@ -58,7 +58,7 @@ LangGraph Agent、模型提供商、工具以及持久化状态时，Awesome 如
 terminal input
     |
     v
-Ink surface -- Protocol v3 --> LocalApplication
+Ink surface -- Protocol v4 --> LocalApplication
                                      |
                               foreground arbiter
                                      |
@@ -108,7 +108,7 @@ Ink surface -- Protocol v3 --> LocalApplication
 3. 判断变更是否修改公共、协议、存储或扩展契约。
 4. 先在能够证明该不变量的最低层加入失败测试，再为跨越的边界补充集成覆盖。
 5. 如果包的职责或依赖方向发生变化，更新根目录架构概览。
-6. 当相关契约变化时，同步更新专题页面、用户文档、生成的 Protocol v3 fixtures
+6. 当相关契约变化时，同步更新专题页面、用户文档、生成的 Protocol v4 fixtures
    以及 TUI schema/presenter。
 
 贡献者工作流详见[契约与文档](../development/contracts-and-documentation.zh-CN.md)。

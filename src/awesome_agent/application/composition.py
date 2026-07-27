@@ -18,6 +18,7 @@ from pydantic import JsonValue
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
+    AgentState,
     DisabledPostAnswerFinalizer,
     PostAnswerFinalizer,
     TurnBudget,
@@ -92,6 +93,11 @@ from awesome_agent.application.turns import (
     TurnCoordinator,
     TurnExecutionFailed,
 )
+from awesome_agent.application.web_commands import (
+    WebCommandService,
+    WebConfigurationControl,
+    WebRuntimeStatus,
+)
 from awesome_agent.config import (
     ApplicationConfig,
     LoadedConfigSources,
@@ -149,6 +155,7 @@ from awesome_agent.core.changes import (
     merge_file_changes,
 )
 from awesome_agent.core.changes.errors import ChangeLifecycleError
+from awesome_agent.core.citations import Citation, CitationAllocator
 from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.events import (
     EventEmitter,
@@ -167,6 +174,10 @@ from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
 )
+from awesome_agent.core.tools.builtins.web_search import (
+    create_web_search_registration,
+)
+from awesome_agent.core.tools.context import CapabilityQuotaLedger
 from awesome_agent.core.tools.permissions import (
     PermissionMode,
     PermissionSession,
@@ -246,6 +257,11 @@ from awesome_agent.storage.pagination import (
 )
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 from awesome_agent.version import PRODUCT_VERSION
+from awesome_agent.web import (
+    WebSearchProvider,
+    managed_tavily_search_client,
+    validate_web_proxy_url,
+)
 
 type McpClientFactory = Callable[[McpServerConfig], McpClient]
 
@@ -277,6 +293,8 @@ _CAPABILITIES = (
     "mcp",
     "local_memory",
     "mem0_cloud",
+    "web",
+    "citations",
 )
 
 
@@ -289,6 +307,7 @@ async def compose_local_application(
     gateway_factory: GatewayFactory | None = None,
     mcp_client_factory: McpClientFactory | None = None,
     mem0_client: object | None = None,
+    web_search_provider: WebSearchProvider | None = None,
     credential_validator: CredentialValidator | None = None,
 ) -> LocalApplication:
     paths = AwesomePaths.from_home(home)
@@ -311,6 +330,7 @@ async def compose_local_application(
             gateway_factory=gateway_factory,
             mcp_client_factory=mcp_client_factory,
             mem0_client=mem0_client,
+            web_search_provider=web_search_provider,
             credential_validator=credential_validator,
         )
         middleware = (
@@ -394,6 +414,7 @@ class WorkspaceRuntime:
     diagnostic_commands: DiagnosticCommandService
     change_commands: ChangeCommandService
     permission_commands: PermissionCommandService
+    web_commands: WebCommandService
     provider_configuration: ProviderConfigurationService
     direct: DirectCommandService
     extensions: ApplicationExtensionService
@@ -409,6 +430,8 @@ class WorkspaceRuntime:
     change_operations: ChangeOperations
     workspace_branch: str | None
     workspace_instruction_snapshot: WorkspaceInstructionSnapshot
+    web_available: bool
+    web_diagnostic_code: str | None
     resources: RuntimeResources
 
 
@@ -425,6 +448,7 @@ class _LocalApplicationBackend:
         gateway_factory: GatewayFactory | None,
         mcp_client_factory: McpClientFactory | None,
         mem0_client: object | None,
+        web_search_provider: WebSearchProvider | None,
         credential_validator: CredentialValidator | None,
     ) -> None:
         self._paths = paths
@@ -434,6 +458,7 @@ class _LocalApplicationBackend:
         self._injected_gateway_factory = gateway_factory
         self._mcp_client_factory = mcp_client_factory
         self._injected_mem0_client = mem0_client
+        self._injected_web_search_provider = web_search_provider
         self._credential_validator = (
             credential_validator or ProviderCredentialValidator()
         )
@@ -498,6 +523,7 @@ class _LocalApplicationBackend:
         self._recovery_required_delivery_lock = asyncio.Lock()
         self._recovery_event_deliveries: set[asyncio.Task[None]] = set()
         self._permission_session = PermissionSession()
+        self._web_configuration_control = WebConfigurationControl()
         self._bootstrap_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
 
@@ -515,7 +541,7 @@ class _LocalApplicationBackend:
             await self._flush_recovery_notifications()
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=3,
+                protocol_version=4,
                 status=InitializeStatus.READY,
                 session_id=self._session_id,
                 workspace=self._workspace_presentation(include_branch=True),
@@ -594,7 +620,7 @@ class _LocalApplicationBackend:
                 )
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=3,
+                protocol_version=4,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id=self._session_id,
                 interaction_id=pending.id,
@@ -604,7 +630,7 @@ class _LocalApplicationBackend:
         await self._activate_workspace()
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=3,
+            protocol_version=4,
             status=InitializeStatus.READY,
             session_id=self._session_id,
             workspace=self._workspace_presentation(include_branch=True),
@@ -647,7 +673,7 @@ class _LocalApplicationBackend:
             )
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=3,
+            protocol_version=4,
             status=InitializeStatus.STATE_RESET_REQUIRED,
             session_id=self._session_id,
             interaction_id=pending.id,
@@ -1802,6 +1828,7 @@ class _LocalApplicationBackend:
 
     async def _close_application_once(self) -> None:
         try:
+            self._permission_session.revoke_thread_network()
             for delivery in tuple(self._recovery_event_deliveries):
                 delivery.cancel()
             await self._operations.shutdown()
@@ -2127,6 +2154,45 @@ class _LocalApplicationBackend:
                 ProcessRunner(),
                 workspace=self._workspace,
             )
+            web_available = False
+            web_diagnostic_code: str | None = "web_disabled"
+            if application_config.web.enabled:
+                tavily_key = sources.secrets.tavily_api_key
+                if tavily_key is None:
+                    web_diagnostic_code = "web_credential_missing"
+                else:
+                    try:
+                        validate_web_proxy_url(sources.secrets.web_proxy_url)
+                    except ValueError:
+                        web_diagnostic_code = "web_proxy_invalid"
+                    else:
+                        try:
+                            web_provider = self._injected_web_search_provider
+                            if web_provider is None:
+                                web_provider = (
+                                    await runtime_resources.enter_async_context(
+                                        managed_tavily_search_client(
+                                            api_key=tavily_key,
+                                            proxy_url=sources.secrets.web_proxy_url,
+                                        )
+                                    )
+                                )
+                            registry.replace_exact_set(
+                                ("web_search",),
+                                (
+                                    create_web_search_registration(
+                                        web_provider,
+                                        blocked_domains=(
+                                            application_config.web.blocked_domains
+                                        ),
+                                    ),
+                                ),
+                            )
+                        except ValueError:
+                            web_diagnostic_code = "web_client_invalid"
+                        else:
+                            web_available = True
+                            web_diagnostic_code = None
             executor = ToolExecutor(registry)
             change_scope = ChangeScope(
                 journal=journal,
@@ -2284,7 +2350,7 @@ class _LocalApplicationBackend:
                     state: object,
                     request: ToolRequest,
                 ) -> ToolExecutionContext:
-                    del state
+                    agent_state = cast(AgentState, state)
                     return ToolExecutionContext(
                         workspace=self._workspace,
                         thread_id=turn.thread_id,
@@ -2301,6 +2367,18 @@ class _LocalApplicationBackend:
                         ),
                         permission_session=self._permission_session,
                         approval_resolver=resolve_tool_interaction,
+                        capability_quotas=CapabilityQuotaLedger(
+                            {"network.read": budgets.web_requests},
+                            used_counts={
+                                "network.read": agent_state["web_requests"]
+                            },
+                        ),
+                        citation_allocator=CitationAllocator(
+                            tuple(
+                                Citation.model_validate(item)
+                                for item in agent_state["citations"]
+                            )
+                        ),
                     )
 
                 async def record_context_snapshot(
@@ -2338,6 +2416,7 @@ class _LocalApplicationBackend:
                         provider_retries=budgets.provider_retries,
                         compressions=budgets.compressions,
                         active_execution_seconds=budgets.active_execution_seconds,
+                        web_requests=budgets.web_requests,
                     ),
                     monotonic=monotonic,
                     context_token_estimator=estimate_messages,
@@ -2481,6 +2560,20 @@ class _LocalApplicationBackend:
                     self._require_runtime().commands.current_thread_id
                 ),
             )
+            web_commands = WebCommandService(
+                config_writer=UserConfigWriter(self._paths.config_file),
+                current_configuration=lambda: (sources, application_config),
+                load_configuration=self._load_provider_configuration,
+                apply_configuration=self._apply_web_configuration,
+                runtime_status=lambda: WebRuntimeStatus(
+                    available=web_available,
+                    diagnostic_code=web_diagnostic_code,
+                ),
+                permission_session=self._permission_session,
+                current_thread_id=lambda: commands.current_thread_id,
+                validate_proxy=validate_web_proxy_url,
+                configuration_control=self._web_configuration_control,
+            )
             command_dispatcher = CommandDispatcher(
                 {
                     CommandName.NEW: commands.new,
@@ -2504,6 +2597,7 @@ class _LocalApplicationBackend:
                     CommandName.DOCTOR: diagnostic_commands.doctor,
                     CommandName.CONFIG: diagnostic_commands.config,
                     CommandName.PERMISSIONS: permission_commands.permissions,
+                    CommandName.WEB: web_commands.web,
                 },
                 foreground=self._foreground,
                 has_pending_interaction=lambda: self._interactions.pending is not None,
@@ -2519,6 +2613,7 @@ class _LocalApplicationBackend:
                 diagnostic_commands=diagnostic_commands,
                 change_commands=change_commands,
                 permission_commands=permission_commands,
+                web_commands=web_commands,
                 provider_configuration=provider_configuration,
                 direct=direct,
                 extensions=extensions,
@@ -2534,6 +2629,8 @@ class _LocalApplicationBackend:
                 change_operations=change_operations,
                 workspace_branch=workspace_branch,
                 workspace_instruction_snapshot=workspace_instruction_snapshot,
+                web_available=web_available,
+                web_diagnostic_code=web_diagnostic_code,
                 resources=runtime_resources,
             )
         except BaseException:
@@ -2549,6 +2646,11 @@ class _LocalApplicationBackend:
         expected_catalog = ModelCatalog.from_application(candidate.application_config)
         if candidate.model_catalog != expected_catalog:
             raise RuntimeError("Workspace runtime Model Catalog is inconsistent.")
+        web_search_registered = (
+            candidate.tool_registry.resolve("web_search") is not None
+        )
+        if web_search_registered is not candidate.web_available:
+            raise RuntimeError("Workspace runtime Web availability is inconsistent.")
 
     def _require_runtime_publication_idle(self) -> None:
         if self._closed or self._foreground.closing:
@@ -2576,6 +2678,7 @@ class _LocalApplicationBackend:
         if self._runtime is not expected_previous:
             raise RuntimeError("Workspace runtime changed before publication.")
         self._runtime = candidate
+        self._permission_session.revoke_thread_network()
 
     async def _close_workspace_runtime(self, runtime: WorkspaceRuntime) -> None:
         retirement = self._schedule_workspace_runtime_retirement(runtime)
@@ -2665,6 +2768,38 @@ class _LocalApplicationBackend:
             # This callback runs inside the request scope bound to ``runtime``.
             # Retirement must begin now but cannot wait for that same reader.
             self._schedule_workspace_runtime_retirement(runtime)
+        except BaseException:
+            if not published:
+                await self._close_workspace_runtime(candidate)
+            raise
+
+    async def _apply_web_configuration(
+        self,
+        snapshot: ProviderConfigurationSnapshot,
+    ) -> WebRuntimeStatus:
+        published_runtime = self._runtime
+        if published_runtime is None:
+            raise RuntimeError("Web configuration requires a published Runtime.")
+        candidate = await self._build_workspace_runtime(
+            configuration=snapshot,
+            selected_thread_id=published_runtime.commands.current_thread_id,
+        )
+        published = False
+        try:
+            self._validate_workspace_runtime(candidate)
+            self._require_runtime_publication_idle()
+            self._publish_workspace_runtime(
+                candidate,
+                expected_previous=published_runtime,
+            )
+            published = True
+            # Publication recovery can run inside a request still bound to an
+            # older Runtime. Retire the actual globally published predecessor.
+            self._schedule_workspace_runtime_retirement(published_runtime)
+            return WebRuntimeStatus(
+                available=candidate.web_available,
+                diagnostic_code=candidate.web_diagnostic_code,
+            )
         except BaseException:
             if not published:
                 await self._close_workspace_runtime(candidate)

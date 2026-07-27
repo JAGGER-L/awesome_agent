@@ -1,4 +1,5 @@
 import type { MethodValue } from "../protocol/methods.js";
+import type { Citation } from "../protocol/product-projections.js";
 
 export type ChangeDelta =
   MethodValue["thread.read"]["change_sets"][number]["changes"][number];
@@ -23,6 +24,7 @@ export interface CommandInputBlock extends BlockBase {
 export interface AssistantBlock extends BlockBase {
   readonly kind: "assistant";
   readonly text: string;
+  readonly citations?: readonly Citation[];
 }
 export interface DirectCommandBlock extends BlockBase {
   readonly kind: "direct_command";

@@ -36,7 +36,7 @@ from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
 JSONRPC_VERSION = "2.0"
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 logger = logging.getLogger(__name__)
 

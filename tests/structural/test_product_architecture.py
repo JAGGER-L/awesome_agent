@@ -32,9 +32,11 @@ CURRENT_PACKAGES = {
     "providers",
     "safety",
     "storage",
+    "web",
 }
 EXPECTED_DIRECT_DEPENDENCIES = {
     "jsonschema",
+    "httpx",
     "langgraph",
     "langgraph-checkpoint-sqlite",
     "mcp",
@@ -69,6 +71,7 @@ CURRENT_COMMANDS = {
     "undo",
     "usage",
     "workspace",
+    "web",
 }
 SUPERSEDED_PRODUCT_PACKAGES = {
     "api",

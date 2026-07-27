@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated
 
 from pydantic import ConfigDict, Field, JsonValue, TypeAdapter, with_config
@@ -24,8 +25,10 @@ class AgentState(TypedDict):
     pending_tool_calls: list[dict[str, JsonValue]]
     next_tool_index: int
     tool_results: list[dict[str, JsonValue]]
+    citations: list[dict[str, JsonValue]]
     model_calls: int
     tool_calls: int
+    web_requests: int
     provider_retries: int
     compressions: int
     active_execution_seconds: float
@@ -64,8 +67,10 @@ def new_agent_state(
         pending_tool_calls=[],
         next_tool_index=0,
         tool_results=[],
+        citations=[],
         model_calls=0,
         tool_calls=0,
+        web_requests=0,
         provider_retries=0,
         compressions=0,
         active_execution_seconds=0.0,
@@ -77,4 +82,9 @@ def new_agent_state(
 
 
 def validate_agent_state(value: object) -> AgentState:
+    if isinstance(value, Mapping):
+        normalized = dict(value)
+        normalized.setdefault("citations", [])
+        normalized.setdefault("web_requests", 0)
+        value = normalized
     return _STATE_ADAPTER.validate_python(value)

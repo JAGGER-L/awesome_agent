@@ -38,6 +38,7 @@ Built-in 基线如下：
 | `write_file`、`edit_file` | `workspace.write` | 记入 journal |
 | `delete` | `workspace.delete` | 记入 journal |
 | `execute` | `shell.execute` | 仅 observation |
+| `web_search`（启用且配置有效时） | `network.read` | 无；外部且不可重放 |
 
 Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式替换，名称形如
 `mcp.<server>.<tool>`。
@@ -51,12 +52,11 @@ Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式
 后，Executor 会严格重建每条 citation 与 output，再把 citations 原样复制到规范化 result。
 对文本 `content` 设限或截断不会丢弃这些 citations。
 
-Agent 会把完整 `ToolResult` 序列化到 `AgentState.tool_results`，因此相同的 citation 值会
-保留在 LangGraph checkpoint 中，而不需要第二个顶层 `AgentState` citation channel。当前
-这只是一条内部值路径：Conversation record、Protocol v3 与 TUI wire 均不改变。公开
-citation wire 延后到 Web citation 与 Protocol v4 的原子变更，不提供临时 compatibility
-adapter。仅靠这项值契约不会分配 source ID、校验模型正文中的 citation marker，也不会
-渲染 Sources UI。
+`web_search` 会在一个 Turn 内分配稳定、按 URL 去重的 `S1...Sn` identity。Agent 序列化
+完整 result，并派生有序的 `AgentState.citations` 快照，使两者都能经过 checkpoint recovery。
+Finalization 校验模型使用的 `[[S1]]` marker：未知 ID 会产生 warning 且不生成链接；使用 Web
+但没有有效引用时，会附加有界且确定性的 Sources 区域并记录 warning。Conversation 将同一
+来源随 assistant entry 持久化，Protocol v4 再把它们传给 TUI、headless JSON v2 与后续导出。
 
 ## Executor 流水线
 
@@ -98,7 +98,8 @@ admission 与 capability policy 回答不同问题：admission 判断这一项�
 
 Replay safety 是注册 metadata，而不是由恢复流程推断的属性。只有受管本地语义能够证明
 重复调用安全的 built-in 才可标记为 replayable。MCP 调用以及其它外部或未分类作用均为
-non-replayable。恢复会在当前 Runtime Registry 中查找同名工具，并消费该注册项的
+non-replayable。`web_search` 被明确标为 non-replayable，因此 dispatch 后崩溃会默认 Abort，
+不会重复一次可能计费或已被外部观察到的请求。恢复会在当前 Runtime Registry 中查找同名工具，并消费该注册项的
 metadata。Replayable 工作可以继续；non-replayable、metadata 缺失或未知时会 fail closed，
 进入恢复 interaction，绝不自动重试。用户可以显式选择 Retry，而不是默认的 Abort。因此，
 同名工具的契约变更必须按 checkpoint compatibility 变更管理。Executor 与恢复流程都不
@@ -109,11 +110,11 @@ metadata。Replayable 工作可以继续；non-replayable、metadata 缺失或�
 权限是纯 capability 决策，只在注册的 hard admission 成功后求值。Hard rejection 始终
 优先，表中任何一行都不能把它转为允许：
 
-| 模式 | 读取 | 创建/修改 | 删除 | Shell | MCP/未知扩展 |
-| --- | --- | --- | --- | --- | --- |
-| Request approval | 允许 | 询问 | 询问 | 询问 | 询问 |
-| Accept edits | 允许 | 允许 | 询问 | 询问 | 询问 |
-| Full access | 允许 | 允许 | 允许 | 允许 | 询问 |
+| 模式 | 读取 | 创建/修改 | 删除 | Shell | 网络读取 | MCP/未知扩展 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Request approval | 允许 | 询问 | 询问 | 询问 | 询问 | 询问 |
+| Accept edits | 允许 | 允许 | 询问 | 询问 | 询问 | 询问 |
+| Full access | 允许 | 允许 | 允许 | 允许 | 询问 | 询问 |
 
 该表适用于使用选中 Thread permission session 的 Agent 工具调用。直接 `! command` 输入
 是用户对该确切命令的显式授权：Application 为其建立独立 Full-access permission
@@ -122,8 +123,9 @@ command circuit breaker（词法检查和 spawn 前检查）、Process Runner、
 与脱敏边界。
 
 Allow-once 结果只作用于当前 Tool call。“Allow all edits during this session”只 grant
-`workspace.write`；它不能 grant delete、shell 或扩展 capability。切换 mode 或 Thread
-会清除临时 grant。
+`workspace.write`；它不能 grant delete、shell 或扩展 capability。网络审批提供默认 deny、
+allow once 和 allow for the active Thread。选择其他 Thread、重建 runtime、更改 permission
+mode、运行 `/web revoke` 或 `/web off`，以及 shutdown 时，Thread grant 都会被撤销。
 
 Tool Executor 根据经过校验的操作事实创建审批文本。TUI 渲染该类型化请求并返回决策；
 它绝不会从提示词文本推断 capability，也不执行操作。

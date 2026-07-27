@@ -96,10 +96,11 @@ class BudgetConfig(BaseModel):
     compressions: int = Field(default=2, ge=0, le=10)
     active_execution_seconds: int = Field(default=1_800, ge=1, le=21_600)
     total_context_tokens: int = Field(default=262_144, ge=1)
+    web_requests: int = Field(default=8, ge=0, le=8)
 
 
 class UserBudgetConfig(BudgetConfig):
-    web_requests: int = Field(default=8, ge=0, le=8)
+    pass
 
 
 class ProjectBudgetConfig(BaseModel):
@@ -128,12 +129,20 @@ class WebConfig(BaseModel):
     @field_validator("blocked_domains")
     @classmethod
     def validate_blocked_domains(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(value) != len(set(value)):
-            raise ValueError("blocked domains must be unique")
-        for domain in value:
-            if domain != domain.strip().lower() or not _valid_domain(domain):
-                raise ValueError("blocked domain must be a normalized ASCII hostname")
-        return value
+        return _validate_blocked_domains(value)
+
+
+class ProjectWebConfig(BaseModel):
+    """Workspace-owned Web restrictions that cannot enable network access."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    blocked_domains: tuple[str, ...] = Field(default=(), strict=False, max_length=128)
+
+    @field_validator("blocked_domains")
+    @classmethod
+    def validate_blocked_domains(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _validate_blocked_domains(value)
 
 
 class MemoryConfig(BaseModel):
@@ -247,6 +256,7 @@ class WorkspaceConfigDocument(BaseModel):
 
     version: Literal[1] = 1
     budgets: ProjectBudgetConfig = Field(default_factory=ProjectBudgetConfig)
+    web: ProjectWebConfig = Field(default_factory=ProjectWebConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
     mcp_servers: tuple[McpServerDeclaration, ...] = Field(default=(), strict=False)
 
@@ -298,7 +308,6 @@ class ApplicationConfig(BaseModel):
 
     providers: ProviderConfig
     budgets: BudgetConfig
-    web_requests: int = Field(default=8, ge=0, le=8)
     web: WebConfig = Field(default_factory=WebConfig)
     memory: MemoryConfig
     user_skills: tuple[SkillSourceConfig, ...] = Field(default=(), strict=False)
@@ -335,3 +344,12 @@ def _valid_domain(value: str) -> bool:
         )
         for label in labels
     )
+
+
+def _validate_blocked_domains(value: tuple[str, ...]) -> tuple[str, ...]:
+    if len(value) != len(set(value)):
+        raise ValueError("blocked domains must be unique")
+    for domain in value:
+        if domain != domain.strip().lower() or not _valid_domain(domain):
+            raise ValueError("blocked domain must be a normalized ASCII hostname")
+    return value

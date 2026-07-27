@@ -93,6 +93,9 @@ export interface SurfaceState {
     readonly operation: string;
     readonly target: string;
     readonly capability?: string;
+    readonly thread_id?: string;
+    readonly turn_id?: string;
+    readonly operation_id?: string;
     readonly choices: readonly {
       readonly decision: string;
       readonly label: string;

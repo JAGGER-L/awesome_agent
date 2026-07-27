@@ -1,6 +1,6 @@
 # Slash Command 参考
 
-Awesome 有一个封闭的命令 catalog。其中二十一条命令属于 Python Application，四条属于
+Awesome 有一个封闭的命令 catalog。其中二十二条命令属于 Python Application，四条属于
 Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中，但不会作为模型对话
 消息存储。
 
@@ -24,6 +24,7 @@ Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中
 | `/tools` | 无参数 | 列出有效 catalog，以及当前模式下是否需要审批。 |
 | `/skills [auto\|off\|name]` | 零或一个 mode/name | 检查或设置当前 Thread 的 Skill mode。 |
 | `/mcp [status [id]\|enable <id>\|disable <id>\|restart <id>]` | 如左所示 | 检查或管理 MCP 服务器。 |
+| `/web [on\|off\|status\|revoke]` | 零或一个 action | 检查或原子启用/关闭 Tavily search，或清除当前 Thread network grant。 |
 | `/memory [local ...\|mem0 ...]` | 见下文 | 检查、启用、搜索或修改 Memory。 |
 | `/status` | 无参数 | 显示已选择 Thread 和 runtime 状态快照。 |
 | `/usage` | 无参数 | 显示已选择 Thread 累计观察到的 usage。 |
@@ -85,6 +86,19 @@ saver 检查；两者都不会修复或重写状态。
 User 服务器只能通过 User YAML 启用；对它们执行 `enable` 和 `disable` 会返回
 `user_config_required`。见 [MCP](../extensions/mcp.zh-CN.md)。
 
+## Web 子命令
+
+| 语法 | 结果 |
+| --- | --- |
+| `/web`、`/web status` | 显示 enablement/runtime availability、Tavily credential 与显式 proxy 是否存在、当前 Thread authorization、请求 budget、diagnostic code 和披露。 |
+| `/web on` | 要求 `TAVILY_API_KEY`，校验显式 proxy，原子持久化 `web.enabled: true`，并在报告成功前重建 runtime。 |
+| `/web off` | 原子持久化 `web.enabled: false`，重建不含 `web_search` 的 runtime，并清除全部 Thread network grant。 |
+| `/web revoke` | 清除选中 Thread 的 `network.read` grant，但不关闭 Web。 |
+
+启用 Web 会披露 search query 将依据 Tavily 的[隐私政策](https://www.tavily.com/privacy)与
+[平台条款](https://www.tavily.com/terms)发送给 Tavily。Apply 失败会回滚 user config；如果
+无法证明已安全恢复，后续 Web mutation 会被 `web_configuration_recovery_required` 隔离。
+
 ## Ink 本地命令
 
 | 命令 | 语法 | 效果 |
@@ -109,6 +123,8 @@ Core 以原子方式准入一个前台 Operation，或一个会改变状态/调�
 /mcp
 /mcp status
 /mcp status <id>
+/web
+/web status
 /status
 /usage
 /config
@@ -132,4 +148,4 @@ Application 命令只返回一个 `CommandOutcome` 分支：
 - `error`：稳定的 code 和有界的用户可见消息。
 
 命令输入和结果保持为两个独立的终端 block。因此 picker 取消、无效参数和 Core 错误都会
-保留精确的已提交命令。完整 wire schema 见 [Protocol v3](protocol.zh-CN.md)。
+保留精确的已提交命令。完整 wire schema 见 [Protocol v4](protocol.zh-CN.md)。

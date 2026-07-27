@@ -152,10 +152,15 @@ retries do not make non-idempotent tools repeat.
 | --- | --- | --- | --- |
 | `enabled` | boolean | `false` | User-owned Web enablement. Workspace configuration cannot turn it on. |
 | `provider` | `tavily` | `tavily` | Static Web Provider selection, separate from model Providers. |
-| `blocked_domains` | up to 128 unique normalized ASCII hostnames | `[]` | Additional destinations rejected before a Web request. |
+| `blocked_domains` | up to 128 unique normalized ASCII hostnames | `[]` | Domains sent as Tavily `exclude_domains`; the Workspace may add restrictions but cannot enable Web. |
 
-This configuration increment establishes the closed contract and credential
-catalog; by itself it does not register a Web tool or grant network authority.
+When `enabled` is true and the Tavily credential and explicit proxy are valid,
+runtime construction registers `web_search`; otherwise `/web status` reports a
+bounded diagnostic and the tool is absent. Enablement never grants
+`network.read`: first use still asks in every permission mode. `/web on|off`
+performs the supported atomic user-config write and runtime rebuild, while
+`/web revoke` clears the active Thread grant. The HTTP client uses
+`trust_env=False`; ambient proxy variables are ignored.
 
 ### `memory`
 
@@ -199,9 +204,9 @@ not have this field. See [MCP](../extensions/mcp.md).
 
 ## Workspace configuration
 
-A workspace can only make budgets stricter, disable Skills, and declare MCP
-servers. It cannot choose credentials, enable Memory, choose a model, or raise a
-user safety limit.
+A workspace can only make budgets stricter, add Web domain blocks, disable
+Skills, and declare MCP servers. It cannot choose credentials, enable Web or
+Memory, choose a model, or raise a user safety limit.
 
 ```yaml
 version: 1
@@ -214,6 +219,10 @@ budgets:
   active_execution_seconds: 900
   total_context_tokens: 131072
   web_requests: 3
+
+web:
+  blocked_domains:
+    - internal.example
 
 skills:
   disabled:
@@ -250,8 +259,8 @@ overwriting another:
 ```text
 User YAML --------------------------> Application configuration
 Trusted workspace YAML ------------> Application configuration
-  (minimum budgets, disabled union,             |
-   and MCP declarations)                        |
+  (minimum budgets, blocked-domain union,       |
+   disabled union, and MCP declarations)        |
                                                 v
 Persisted Thread choices -----------------> Turn configuration
 AWESOME_MODEL at new-Thread creation ------>    |

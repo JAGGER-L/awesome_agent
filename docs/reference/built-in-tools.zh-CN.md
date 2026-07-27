@@ -28,7 +28,8 @@ registered model validation -> lexical hard checks -> permission policy
 
 Catalog 始终包含四个读取工具和两个 Skill 支持工具。正常本地 composition 还包含文件修改和
 shell 工具。只有启用 Local Memory 时才会出现 Local Memory 工具，有效 MCP catalog 会添加
-namespaced tool。动态 MCP 行为在 [MCP](../extensions/mcp.zh-CN.md)中单独说明。
+namespaced tool。动态 MCP 行为在 [MCP](../extensions/mcp.zh-CN.md)中单独说明。只有 user Web
+config 已启用且存在有效 `TAVILY_API_KEY` 时，才会出现 `web_search`。
 
 ## 通用请求与结果契约
 
@@ -46,6 +47,7 @@ JSON Schema，而不是这一静态 model 基类。
 - `status`，取值为 `success` 或 `error`；
 - 最多 30,000 个字符、模型可见的 `content`；
 - 有界结构化 `metadata`；
+- 有序且严格的 `Citation(id, title, url)` tuple，通常为空；
 - 仅错误结果包含的 error code/message；
 - TUI 使用的展示字段：verb、target、outcome、summary、有界 detail、truncation count 和
   duration。
@@ -53,13 +55,17 @@ JSON Schema，而不是这一静态 model 基类。
 稳定的内置 error code 为 `invalid_arguments`、`not_found`、`workspace_not_trusted`、
 `workspace_escape`、`permission_denied`、`conflict`、`timeout`、`state_unavailable`、
 `execution_failed`、`uncertain_outcome`、`memory_disabled`、`memory_conflict`、
-`memory_rejected` 和 `cancelled`。当另一进程持有 Local Memory mutation 锁时，
+`memory_rejected` 和 `cancelled`。Web search 还使用 `web_request_rejected`、
+`web_credential_rejected`、`web_rate_limited`、`web_quota_exhausted`、
+`web_provider_unavailable`、`web_timeout`、`web_connection_failed` 与
+`web_malformed_response`。当另一进程持有 Local Memory mutation 锁时，
 `timeout` 可重试；`state_unavailable` 表示无法安全使用 lock sidecar 或平台锁边界，
 不可重试。`uncertain_outcome` 主要用于 MCP 边界：它表示外部副作用可能已经发生，
 绝不能自动重放。
 
-普通 handler 的外层期限是 30 秒。`execute` 提供下面说明的动态期限。有界清理后会继续传播
-取消；取消不会转换为普通错误结果。
+普通 handler 的外层期限是 30 秒。`execute` 提供下面说明的动态期限；`web_search` 使用
+20 秒 tool deadline，内部 HTTP client timeout 为 15 秒。有界清理后会继续传播取消；取消
+不会转换为普通错误结果。
 
 ## Workspace 路径规则
 
@@ -248,6 +254,45 @@ Tool Executor 总外层期限是该值加十秒清理预算。因此，有效的
 Execute observation 会在 runner 启动前立即记录。参数错误、policy hard-denial 和权限拒绝
 不会生成 observation；spawn/backend failure、timeout 和取消则会保守记录不可逆尝试可能
 已经开始。每次调用仍然最多生成一个 terminal tool event 和一条 ToolActivity。
+
+## 公共 Web search：`web_search`
+
+Web 默认关闭。设置 `TAVILY_API_KEY`、保持 provider 为 `tavily`，再运行 `/web on`；
+Workspace config 可以降低每 Turn budget 或添加 blocked domain，但不能启用 Web 或选择凭据。
+该工具只使用 Tavily Search API：
+
+```text
+POST https://api.tavily.com/search
+```
+
+| 参数 | 类型 | 默认值 | 限制/语义 |
+| --- | --- | --- | --- |
+| `query` | string | 必填 | Trim 后非空，1–2,000 个字符；拒绝控制分隔符 |
+| `max_results` | integer | `5` | 1–10；Tavily `search_depth` 始终为 `basic` |
+
+配置的 `blocked_domains` 会进入 Tavily exclusion list。Awesome 不请求 generated answer、
+raw content、image 或 favicon。Response 限制为 1 MiB 和最多十条严格 HTTPS result；模型可见
+JSON 限制为 28,000 个字符。不跟随 redirect，也没有不透明 automatic retry。HTTP 429、5xx、
+timeout、连接失败、凭据失败、用量限制与 malformed body 都映射成上文稳定且脱敏的 error code。
+
+可复用 async HTTP client 设置 `trust_env=False`，使用 Awesome 显式 User-Agent，并忽略环境
+proxy 变量。可选代理只能通过 `AWESOME_WEB_PROXY_URL`（或对应 Awesome secret）配置；只接受
+不嵌入凭据的 `http`/`https` proxy URL。
+
+`network.read` 在每种 permission mode 下首次使用都会 ASK。用户可以选择默认 deny、allow
+once 或当前 Thread allow。审批完成后，请求才会消耗冻结 `web_requests` budget 的一个单位；
+默认值与硬上限均为每 Turn 八次，Workspace config 只能降低它。切换 Thread、重建 runtime、
+更改 permission mode、运行 `/web revoke` 或 `/web off`，以及退出时都会清除 Thread grant。
+`web_search` 是 `non_replayable`，因此不确定崩溃后的 recovery 默认 Abort。
+
+每条结果获得稳定的 Turn-local source ID（`S1`、`S2`……），并按 URL 去重。模型使用
+`[[S1]]` 引用。未知 ID 只显示为文本而不生成链接，并产生 warning。Web 返回来源但最终回答
+没有使用任何来源时，finalization 会附加有界 Sources 区域并发出 warning。同一 citations
+会贯穿 ToolResult、Agent state/checkpoint、Conversation、Protocol v4、TUI 与 headless JSON v2。
+
+Search query 会发送给 Tavily，并依据 [Tavily 隐私政策](https://www.tavily.com/privacy)与
+[Tavily 平台条款](https://www.tavily.com/terms)处理。结构化诊断不会记录 query、result URL、
+result body 或凭据。
 
 ## Skill 支持工具
 

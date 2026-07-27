@@ -178,6 +178,7 @@ describe("SubmissionCoordinator", () => {
             tool_calls: 0,
             provider_retries: 0,
             compressions: 1,
+            web_requests: 0,
             active_execution_seconds: 0.2,
           },
         },

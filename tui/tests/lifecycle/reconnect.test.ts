@@ -93,7 +93,7 @@ function ready(title = "Feature auth"): StartupResult {
               sequence: 1,
               kind: "assistant_message",
               content: "durable after crash",
-              metadata: {},
+              metadata: { citations: [] },
               created_at: now,
             },
           ],

@@ -197,6 +197,20 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 
 ## 扩展
 
+### Web search 不可用或失败
+
+运行 `/web status`。`enabled: false` 表示需要运行 `/web on`；credential 缺失时需设置非空
+`TAVILY_API_KEY`。`web_proxy_invalid` 表示显式 `AWESOME_WEB_PROXY_URL` 不是有界、不含凭据的
+`http` 或 `https` URL。Web client 使用 `trust_env=False`，因此会有意忽略环境中的
+`HTTP_PROXY`/`HTTPS_PROXY`。
+
+即使 Full access 下仍出现 prompt 也是预期行为：`network.read` 在每种 permission mode 下
+首次使用都会 ASK。可选择 once 或当前 Thread，headless 单 Turn 可使用 `--allow-network`。
+`web_rate_limited`、`web_quota_exhausted`、`web_timeout`、`web_connection_failed` 与
+`web_provider_unavailable` 是稳定 provider-boundary failure；Awesome 不会透明重试。
+`web_malformed_response` 表示有界 Tavily response 不满足严格契约。结构化日志会有意省略
+query 和 result URL。
+
 ### Skill 缺失或无效
 
 运行 `/skills` 并检查来源和诊断。检查 package 名称、disabled list、有界 UTF-8 `SKILL.md`，并检查 Workspace Skills 中 `.awesome/skills/<package>` 的每个路径组件和 resource。修复 discovery-time 问题后重启。一个损坏 package 不应隐藏其他有效 Skills。

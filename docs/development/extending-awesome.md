@@ -18,7 +18,7 @@ Before adding an abstraction, answer:
 4. What inputs are untrusted, and where are they validated and bounded?
 5. What happens on timeout, cancellation, partial output, and process crash?
 6. Is an external effect safe to retry, or must it become uncertain?
-7. Does this change Protocol v3, storage schema, permissions, or packaging?
+7. Does this change Protocol v4, storage schema, permissions, or packaging?
 
 Prefer a concrete implementation behind a current contract. Do not create a
 generic provider/backend/plugin layer for one hypothetical implementation.
@@ -355,7 +355,7 @@ become the product transcript.
 
 ## Add a protocol or TUI surface fact
 
-Follow the full Protocol v3 chain:
+Follow the full Protocol v4 chain:
 
 ```text
 Python strict model

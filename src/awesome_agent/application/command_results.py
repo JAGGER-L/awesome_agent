@@ -266,6 +266,24 @@ class PermissionCommandPayload(_CommandModel):
     mode: PermissionMode
 
 
+class WebStatusCommandPayload(_CommandModel):
+    kind: Literal["web_status"] = "web_status"
+    enabled: bool
+    provider: Literal["tavily"] = "tavily"
+    available: bool
+    credential_configured: bool
+    proxy_configured: bool
+    thread_authorized: bool
+    requests_per_turn: int = Field(ge=0, le=8)
+    diagnostic_code: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z][a-z0-9_]{0,127}$",
+    )
+    disclosure: str = Field(min_length=1, max_length=2_000)
+
+
 CommandPayload = Annotated[
     NoticeCommandPayload
     | ThreadTransitionCommandPayload
@@ -288,7 +306,8 @@ CommandPayload = Annotated[
     | UsageCommandPayload
     | DoctorCommandPayload
     | ConfigCommandPayload
-    | PermissionCommandPayload,
+    | PermissionCommandPayload
+    | WebStatusCommandPayload,
     Field(discriminator="kind"),
 ]
 

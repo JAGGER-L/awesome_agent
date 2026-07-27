@@ -42,7 +42,7 @@ from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).parents[3]
-FIXTURES = ROOT / "protocol" / "fixtures" / "v3"
+FIXTURES = ROOT / "protocol" / "fixtures" / "v4"
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -56,7 +56,7 @@ def test_manifest_freezes_complete_protocol_inventory_and_hashes() -> None:
 
     assert manifest["fixture_version"] == 1
     assert manifest["product_version"] == PRODUCT_VERSION
-    assert manifest["protocol_version"] == 3
+    assert manifest["protocol_version"] == 4
     assert {"command-results.valid.json", "command-results.invalid.json"} <= set(
         manifest["files"]
     )
@@ -239,6 +239,20 @@ def test_thread_read_fixture_contains_discriminated_change_deltas() -> None:
         "directory",
         "symlink",
     ]
+    assistant = next(
+        entry for entry in result.view.entries if entry.kind == "assistant_message"
+    )
+    assert assistant.metadata == {
+        "citations": [
+            {
+                "id": "S1",
+                "title": "Fixture source",
+                "url": "https://example.com/source",
+            }
+        ]
+    }
+    assert result.view.turns[0].budgets.web_requests == 8
+    assert result.view.turns[0].usage.web_requests == 1
 
 
 @pytest.mark.asyncio
@@ -325,6 +339,7 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
         "diff",
         "change",
         "tools",
+        "web_status",
         "skills",
         "mcp",
         "memory_status",
@@ -339,6 +354,11 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
     }
     for case in valid:
         COMMAND_OUTCOME_ADAPTER.validate_python(case["outcome"])
-    for case in _cases("command-results.invalid.json"):
+    invalid = _cases("command-results.invalid.json")
+    assert {
+        "web_status_empty_diagnostic_code",
+        "web_status_invalid_diagnostic_code",
+    }.issubset({case["name"] for case in invalid})
+    for case in invalid:
         with pytest.raises(ValidationError):
             COMMAND_OUTCOME_ADAPTER.validate_python(case["outcome"])

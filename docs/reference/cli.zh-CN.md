@@ -45,7 +45,7 @@ Headless run options:
 退出码 2 退出。
 
 启动目录就是 Workspace。允许普通输入之前，会先解决信任、本地状态兼容性和 Core/TUI
-protocol 兼容性。见[文件与状态](files-and-state.zh-CN.md)和 [Protocol v3](protocol.zh-CN.md)。
+protocol 兼容性。见[文件与状态](files-and-state.zh-CN.md)和 [Protocol v4](protocol.zh-CN.md)。
 
 ## Headless 运行
 
@@ -67,19 +67,20 @@ awesome run "Apply the reviewed fix" --permission-mode accept_edits
 它仍然只在 Thread/Session 范围有效，也不能覆盖硬拒绝。如果 Turn 随后需要 runner 无法
 解决的 interaction，Awesome 会请求取消并以退出码 3 退出。
 
-`--allow-network` 只声明进程级网络意图。本次增量还没有消费该 flag 的内置 Web 工具，
-所以它不会启用网络访问，也不会授权现有工具调用；它绝不能绕过 capability policy 或
-硬拒绝。
+`--allow-network` 只授权本进程把当前 headless Turn 精确匹配的 `network.read` prompt
+解析为 `allow_once`。它本身不会启用 Web，不能创建 Thread grant 或处理其他 interaction，
+也绝不能绕过硬拒绝。
 
 使用 `--format text` 时，stdout 只包含持久化的最终 assistant 文本，后跟一个换行符。
 使用 `--format json` 时，stdout 只包含一行紧凑 JSON 文档，后跟一个换行符：
 
 ```json
-{"version":1,"type":"awesome.run.result","thread_id":"...","turn_id":"...","text":"...","termination_reason":null,"usage":{"input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"model_calls":0,"tool_calls":0,"provider_retries":0,"compressions":0,"active_execution_seconds":0}}
+{"version":2,"type":"awesome.run.result","thread_id":"...","turn_id":"...","text":"... [[S1]]","citations":[{"id":"S1","title":"Example","url":"https://example.com/source"}],"termination_reason":null,"usage":{"input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"model_calls":0,"tool_calls":0,"provider_retries":0,"compressions":0,"web_requests":1,"active_execution_seconds":0}}
 ```
 
-该 JSON 文档独立于 Protocol v3 进行版本管理。它报告持久化回答和 Turn 事实，不是 protocol
-event stream。任何非零退出时 stdout 都为空，诊断写入 stderr。
+该 JSON 文档独立于 Protocol v4 进行版本管理。Version 2 新增有序 `citations` 数组和
+`usage.web_requests`；它报告持久化回答与 Turn 事实，不是 protocol event stream。任何非零
+退出时 stdout 都为空，诊断写入 stderr。
 
 | 退出码 | 含义 |
 | ---: | --- |

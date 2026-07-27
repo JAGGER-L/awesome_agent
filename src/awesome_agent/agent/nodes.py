@@ -23,6 +23,7 @@ from awesome_agent.agent.finalization import (
     PostAnswerFinalizationRequest,
     PostAnswerFinalizationResult,
     collect_tool_citations,
+    validate_answer_citations,
 )
 from awesome_agent.agent.state import AgentState
 from awesome_agent.core.tools import (
@@ -352,15 +353,20 @@ async def execute_one_tool(
                 tool_name=tool_name,
                 arguments=cast(dict[str, JsonValue], arguments),
             )
-            result = await context.executor.execute(
-                request,
-                context=await context.tool_context_factory(updated, request),
+            tool_context = await context.tool_context_factory(updated, request)
+            result = await context.executor.execute(request, context=tool_context)
+            updated["web_requests"] = tool_context.capability_quotas.used(
+                "network.read"
             )
             ended = context.monotonic()
             updated = add_active_segment(updated, started_at=started, ended_at=ended)
     updated["tool_results"].append(
         cast(dict[str, JsonValue], result.model_dump(mode="json"))
     )
+    updated["citations"] = [
+        cast(dict[str, JsonValue], citation.model_dump(mode="json"))
+        for citation in collect_tool_citations(updated["tool_results"])
+    ]
     observation = ToolResultMessage(
         call_id=result.call_id,
         content=result.content,
@@ -381,6 +387,11 @@ async def finalize(
     context = _context(runtime)
     updated = _copy(state)
     if updated["final_answer"] and not _failed_termination(updated):
+        citations = collect_tool_citations(updated["tool_results"])
+        updated["citations"] = [
+            cast(dict[str, JsonValue], citation.model_dump(mode="json"))
+            for citation in citations
+        ]
         active_budget_exhausted = (
             updated["active_execution_seconds"]
             >= context.budget.active_execution_seconds
@@ -396,7 +407,7 @@ async def finalize(
         request = PostAnswerFinalizationRequest(
             user_text=context.current_user_text,
             final_answer=updated["final_answer"],
-            citations=collect_tool_citations(updated["tool_results"]),
+            citations=citations,
             selected_model=SelectedModel(
                 provider=cast(ProviderId, updated["provider"]),
                 model=updated["model"],
@@ -449,6 +460,19 @@ async def finalize(
                     code=diagnostic.code,
                     message=diagnostic.message,
                 )
+        answer = updated["final_answer"]
+        if answer is None:
+            raise RuntimeError("Answer finalization removed the final answer.")
+        validated_answer, citation_diagnostics = validate_answer_citations(
+            answer,
+            citations,
+        )
+        updated["final_answer"] = validated_answer
+        for diagnostic in citation_diagnostics:
+            await context.event_projector.project_warning(
+                code=diagnostic.code,
+                message=diagnostic.message,
+            )
     if updated["termination_reason"] is None:
         updated["termination_reason"] = "completed"
     return updated

@@ -1,6 +1,6 @@
 # Slash Command reference
 
-Awesome has one closed command catalog. Twenty-one commands are owned by the
+Awesome has one closed command catalog. Twenty-two commands are owned by the
 Python Application and four are owned by Ink. A Slash Command is product
 control input: it is displayed in the terminal transcript but is not stored as
 a model conversation message.
@@ -25,6 +25,7 @@ a model conversation message.
 | `/tools` | no arguments | List the effective catalog and approval requirement under the current mode. |
 | `/skills [auto\|off\|name]` | zero or one mode/name | Inspect or set the current Thread's Skill mode. |
 | `/mcp [status [id]\|enable <id>\|disable <id>\|restart <id>]` | as shown | Inspect or manage MCP servers. |
+| `/web [on\|off\|status\|revoke]` | zero or one action | Inspect or atomically enable/disable Tavily search, or clear the active Thread's network grant. |
 | `/memory [local ...\|mem0 ...]` | see below | Inspect, enable, search, or mutate Memory. |
 | `/status` | no arguments | Show the selected Thread and runtime status snapshot. |
 | `/usage` | no arguments | Show cumulative observed usage for the selected Thread. |
@@ -97,6 +98,21 @@ See [Memory](../extensions/memory.md).
 User servers are enabled only by user YAML; `enable` and `disable` return
 `user_config_required` for them. See [MCP](../extensions/mcp.md).
 
+## Web subcommands
+
+| Syntax | Result |
+| --- | --- |
+| `/web`, `/web status` | Show enabled/runtime availability, Tavily credential and explicit proxy presence, active Thread authorization, request budget, diagnostic code, and disclosure. |
+| `/web on` | Require `TAVILY_API_KEY`, validate the explicit proxy, atomically persist `web.enabled: true`, and rebuild the runtime before reporting success. |
+| `/web off` | Atomically persist `web.enabled: false`, rebuild without `web_search`, and clear every Thread network grant. |
+| `/web revoke` | Clear the selected Thread's `network.read` grant without disabling Web. |
+
+Enabling Web discloses that search queries are sent to Tavily under its
+[Privacy Policy](https://www.tavily.com/privacy) and
+[Platform Terms](https://www.tavily.com/terms). A failed apply rolls the user
+configuration back; if safe recovery cannot be proven, later Web mutations are
+fenced with `web_configuration_recovery_required`.
+
 ## Ink-local commands
 
 | Command | Syntax | Effect |
@@ -123,6 +139,8 @@ active operation, only these Application snapshots are allowed:
 /mcp
 /mcp status
 /mcp status <id>
+/web
+/web status
 /status
 /usage
 /config
@@ -152,4 +170,4 @@ Application commands return exactly one `CommandOutcome` branch:
 Command input and result remain separate terminal blocks. Picker cancellation,
 invalid arguments, and Core errors therefore preserve the exact submitted
 command. The full wire schemas are covered by
-[Protocol v3](protocol.md).
+[Protocol v4](protocol.md).

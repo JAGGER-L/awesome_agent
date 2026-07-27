@@ -35,11 +35,18 @@ describe("runHeadless", () => {
 
     const output: unknown = JSON.parse(values.stdout.join(""));
     expect(output).toMatchObject({
-      version: 1,
+      version: 2,
       type: "awesome.run.result",
       thread_id: "thread_1",
       turn_id: "turn_1",
       text: "durable answer\n\n",
+      citations: [
+        {
+          id: "S1",
+          title: "Fixture source",
+          url: "https://example.com/source",
+        },
+      ],
       termination_reason: "stop",
     });
     expect(values.stdout).toHaveLength(1);
@@ -138,6 +145,67 @@ describe("runHeadless", () => {
     expect(values.stdout).toEqual([]);
     expect(values.cancellations).toEqual(["operation_1"]);
     expect(values.methods.at(-1)).toBe("operation.cancel");
+  });
+
+  it("uses --allow-network only for an exact network.read approval", async () => {
+    const values = fixture({ terminal: "network" });
+
+    await expect(
+      runHeadless(
+        values.surface,
+        runIntent({ allowNetwork: true, format: "json" }),
+        values.io,
+      ),
+    ).resolves.toBe(0);
+
+    expect(values.interactions).toContainEqual({
+      interaction_id: "interaction_network",
+      decision: "allow_once",
+    });
+    expect(values.cancellations).toEqual([]);
+    expect(JSON.parse(values.stdout.join(""))).toMatchObject({ version: 2 });
+  });
+
+  it("answers each exact network approval once until the Turn is terminal", async () => {
+    const values = fixture({ terminal: "network_twice" });
+
+    await expect(
+      runHeadless(values.surface, runIntent({ allowNetwork: true }), values.io),
+    ).resolves.toBe(0);
+
+    expect(values.interactions).toEqual([
+      { interaction_id: "interaction_network", decision: "allow_once" },
+      { interaction_id: "interaction_network_2", decision: "allow_once" },
+    ]);
+  });
+
+  it("cancels instead of authorizing a mismatched network interaction", async () => {
+    const values = fixture({ terminal: "network_mismatch" });
+
+    await expect(
+      runHeadless(values.surface, runIntent({ allowNetwork: true }), values.io),
+    ).resolves.toBe(3);
+
+    expect(values.stdout).toEqual([]);
+    expect(values.interactions).not.toContainEqual({
+      interaction_id: "interaction_network",
+      decision: "allow_once",
+    });
+    expect(values.cancellations).toEqual(["operation_1"]);
+  });
+
+  it("cancels when the exact network response cannot be confirmed", async () => {
+    const values = fixture({
+      terminal: "network",
+      networkResponseFailure: true,
+    });
+
+    await expect(
+      runHeadless(values.surface, runIntent({ allowNetwork: true }), values.io),
+    ).resolves.toBe(3);
+
+    expect(values.stdout).toEqual([]);
+    expect(values.cancellations).toEqual(["operation_1"]);
   });
 
   it("lets SIGINT win stdout and requests cancellation first", async () => {
@@ -267,7 +335,14 @@ describe("runHeadless", () => {
 });
 
 type StartupMode = "ready" | "trust" | "reset";
-type TerminalMode = "completed" | "failed" | "interaction" | "pending";
+type TerminalMode =
+  | "completed"
+  | "failed"
+  | "interaction"
+  | "network"
+  | "network_twice"
+  | "network_mismatch"
+  | "pending";
 type SubmissionMode = "immediate" | "pending";
 type CancelMode = "accepted" | "rejected" | "wrong_id" | "pending";
 
@@ -277,6 +352,7 @@ function fixture({
   fullAccessConfirmation = false,
   startupFailure = false,
   startupPendingInteraction = false,
+  networkResponseFailure = false,
   submission = "immediate",
   cancelResult = "accepted",
 }: {
@@ -285,6 +361,7 @@ function fixture({
   readonly fullAccessConfirmation?: boolean;
   readonly startupFailure?: boolean;
   readonly startupPendingInteraction?: boolean;
+  readonly networkResponseFailure?: boolean;
   readonly submission?: SubmissionMode;
   readonly cancelResult?: CancelMode;
 } = {}) {
@@ -298,6 +375,7 @@ function fixture({
   const stderr: string[] = [];
   let trusted = startup !== "trust";
   let permission = "request_approval";
+  let networkApprovalCount = 0;
   let resolveTurnSubmitted!: () => void;
   const turnSubmitted = new Promise<void>((resolve) => {
     resolveTurnSubmitted = resolve;
@@ -385,6 +463,12 @@ function fixture({
         };
         interactions.push(interaction);
         if (
+          networkResponseFailure &&
+          interaction.interaction_id.startsWith("interaction_network")
+        ) {
+          throw new Error("Synthetic interaction response failure");
+        }
+        if (
           interaction.interaction_id === "interaction_trust" &&
           interaction.decision === "trust"
         ) {
@@ -395,6 +479,29 @@ function fixture({
           interaction.decision === "enable_full_access"
         ) {
           permission = "full_access";
+        }
+        if (
+          interaction.interaction_id.startsWith("interaction_network") &&
+          interaction.decision === "allow_once"
+        ) {
+          networkApprovalCount += 1;
+          if (terminal === "network_twice" && networkApprovalCount === 1) {
+            state = {
+              ...state,
+              pending_interaction: networkInteraction("interaction_network_2"),
+            };
+          } else {
+            const {
+              pending_interaction: _pendingInteraction,
+              ...withoutPending
+            } = state;
+            void _pendingInteraction;
+            state = {
+              ...withoutPending,
+              active_operation: { id: "operation_1", status: "completed" },
+            };
+          }
+          for (const listener of [...listeners]) listener();
         }
         return ok({ accepted: true, status: "resolved" });
       }
@@ -411,6 +518,18 @@ function fixture({
               target: "tool",
               choices: [],
             },
+          });
+        } else if (
+          terminal === "network" ||
+          terminal === "network_twice" ||
+          terminal === "network_mismatch"
+        ) {
+          setState({
+            active_operation: { id: "operation_1", status: "active" },
+            pending_interaction: networkInteraction(
+              "interaction_network",
+              terminal === "network_mismatch" ? "turn_other" : "turn_1",
+            ),
           });
         } else if (terminal !== "pending") {
           setState({
@@ -469,6 +588,31 @@ function fixture({
       writeStdout: (value: string) => stdout.push(value),
       writeStderr: (value: string) => stderr.push(value),
     },
+  };
+}
+
+function networkInteraction(
+  interactionId: string,
+  turnId = "turn_1",
+): NonNullable<SurfaceState["pending_interaction"]> {
+  return {
+    interaction_id: interactionId,
+    interaction_kind: "tool_approval",
+    prompt: "Send the query to Tavily?",
+    operation: "web_search",
+    target: "Tavily",
+    capability: "network.read",
+    thread_id: "thread_1",
+    turn_id: turnId,
+    operation_id: "operation_1",
+    choices: [
+      { decision: "deny", label: "Deny" },
+      { decision: "allow_once", label: "Allow once" },
+      {
+        decision: "allow_thread_network",
+        label: "Allow for this Thread",
+      },
+    ],
   };
 }
 
@@ -537,6 +681,15 @@ function threadPage(status: "in_progress" | "completed" | "failed") {
               id: "entry_assistant",
               kind: "assistant_message",
               content: "durable answer\n\n",
+              metadata: {
+                citations: [
+                  {
+                    id: "S1",
+                    title: "Fixture source",
+                    url: "https://example.com/source",
+                  },
+                ],
+              },
             },
           ]
         : [],
@@ -561,6 +714,7 @@ function threadPage(status: "in_progress" | "completed" | "failed") {
             tool_calls: 0,
             provider_retries: 0,
             compressions: 0,
+            web_requests: 1,
             active_execution_seconds: 0.1,
           },
         },

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from awesome_agent.core.citations import Citation
+from awesome_agent.core.citations import Citation, CitationAllocator
 from awesome_agent.core.tools import (
     ToolError,
     ToolErrorCode,
@@ -117,6 +117,43 @@ def test_citation_is_frozen() -> None:
     citation = Citation(id="S1", title="Source", url="https://example.com")
     with pytest.raises(ValidationError):
         citation.title = "Changed"
+
+
+def test_allocator_assigns_contiguous_ids_and_reuses_first_url() -> None:
+    allocator = CitationAllocator()
+
+    first = allocator.allocate(title="First", url="https://example.com/one")
+    repeated = allocator.allocate(
+        title="Changed title",
+        url="https://example.com/one",
+    )
+    second = allocator.allocate(title="Second", url="https://example.com/two")
+
+    assert first.id == "S1"
+    assert repeated is first
+    assert second.id == "S2"
+    assert allocator.snapshot() == (first, second)
+
+
+def test_allocator_restores_only_canonical_turn_sequence() -> None:
+    with pytest.raises(ValueError, match="contiguous"):
+        CitationAllocator(
+            (
+                Citation(
+                    id="S2",
+                    title="Second",
+                    url="https://example.com/two",
+                ),
+            )
+        )
+
+    with pytest.raises(ValueError, match="unique"):
+        CitationAllocator(
+            (
+                Citation(id="S1", title="First", url="https://example.com"),
+                Citation(id="S2", title="Second", url="https://example.com"),
+            )
+        )
 
 
 def test_tool_contracts_default_citations_for_legacy_payloads() -> None:

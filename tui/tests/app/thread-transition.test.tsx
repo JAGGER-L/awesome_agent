@@ -95,7 +95,7 @@ describe("applyThreadTransition", () => {
         sequence: 1,
         kind: "assistant_message",
         content: "selected assistant",
-        metadata: {},
+        metadata: { citations: [] },
         created_at: "2026-07-13T00:00:00Z",
       },
     ]);

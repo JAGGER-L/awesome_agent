@@ -62,3 +62,36 @@ class Citation(BaseModel):
         if port is not None and not 1 <= port <= 65_535:
             raise ValueError("citation URL contains an invalid port")
         return value
+
+
+class CitationAllocator:
+    """Allocate stable, URL-deduplicated source identities within one Turn."""
+
+    def __init__(self, existing: tuple[Citation, ...] = ()) -> None:
+        self._ordered: list[Citation] = []
+        self._by_url: dict[str, Citation] = {}
+        for index, citation in enumerate(existing, start=1):
+            if citation.id != f"S{index}":
+                raise ValueError("Turn citation identities must be contiguous.")
+            if citation.url in self._by_url:
+                raise ValueError("Turn citation URLs must be unique.")
+            self._ordered.append(citation)
+            self._by_url[citation.url] = citation
+
+    def allocate(self, *, title: str, url: str) -> Citation:
+        previous = self._by_url.get(url)
+        if previous is not None:
+            return previous
+        if len(self._ordered) >= 128:
+            raise ValueError("Turn citations exceed the 128-source limit.")
+        citation = Citation(
+            id=f"S{len(self._ordered) + 1}",
+            title=title,
+            url=url,
+        )
+        self._ordered.append(citation)
+        self._by_url[citation.url] = citation
+        return citation
+
+    def snapshot(self) -> tuple[Citation, ...]:
+        return tuple(self._ordered)

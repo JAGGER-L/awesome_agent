@@ -36,7 +36,7 @@ const thread = (): MethodValue["thread.read"] => ({
         sequence: 2,
         kind: "assistant_message",
         content: "old answer",
-        metadata: {},
+        metadata: { citations: [] },
         created_at: "2026-07-11T00:00:01Z",
       },
       {
@@ -54,7 +54,7 @@ const thread = (): MethodValue["thread.read"] => ({
         sequence: 4,
         kind: "assistant_message",
         content: "latest durable answer",
-        metadata: {},
+        metadata: { citations: [] },
         created_at: "2026-07-11T00:00:03Z",
       },
     ],

@@ -9,6 +9,7 @@ from pydantic import JsonValue
 
 from awesome_agent.config.models import TurnConfig
 from awesome_agent.conversation.models import (
+    AssistantEntryMetadata,
     Thread,
     ThreadEntry,
     ThreadEntryKind,
@@ -32,6 +33,7 @@ from awesome_agent.conversation.titles import (
     normalize_title,
     visible_graphemes,
 )
+from awesome_agent.core.citations import Citation
 
 
 class ConversationService:
@@ -211,6 +213,7 @@ class ConversationService:
         usage: UsageSummary,
         termination_reason: str,
         context_manifest: tuple[dict[str, JsonValue], ...] = (),
+        citations: tuple[Citation, ...] = (),
     ) -> Turn:
         view, current = await self._turn_view(turn_id)
         recorded_manifest = context_manifest or current.context_manifest
@@ -219,6 +222,8 @@ class ConversationService:
             if (
                 entry is not None
                 and entry.content == assistant_content
+                and entry.metadata
+                == AssistantEntryMetadata(citations=citations).model_dump(mode="json")
                 and current.usage == usage
                 and current.termination_reason == termination_reason
                 and current.context_manifest == recorded_manifest
@@ -233,6 +238,7 @@ class ConversationService:
             sequence=_next_sequence(view),
             kind=ThreadEntryKind.ASSISTANT_MESSAGE,
             content=assistant_content,
+            metadata=AssistantEntryMetadata(citations=citations).model_dump(mode="json"),
             created_at=now,
         )
         completed = current.model_copy(

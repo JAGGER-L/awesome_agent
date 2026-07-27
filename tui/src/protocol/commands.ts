@@ -30,6 +30,7 @@ export const applicationCommandNames = [
   "tools",
   "skills",
   "mcp",
+  "web",
   "memory",
   "status",
   "usage",
@@ -95,6 +96,7 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   tools: "application",
   skills: "application",
   mcp: "application",
+  web: "application",
   memory: "application",
   status: "application",
   usage: "application",
@@ -277,6 +279,21 @@ export const commandPayloadSchema = z.discriminatedUnion("kind", [
     kind: z.literal("tools"),
     permission_mode: permissionModeSchema,
     tools: z.array(toolItemSchema),
+  }),
+  z.strictObject({
+    kind: z.literal("web_status"),
+    enabled: z.boolean(),
+    provider: z.literal("tavily"),
+    available: z.boolean(),
+    credential_configured: z.boolean(),
+    proxy_configured: z.boolean(),
+    thread_authorized: z.boolean(),
+    requests_per_turn: safeIntegerSchema.min(0).max(8),
+    diagnostic_code: boundedText(1, 128)
+      .regex(/^[a-z][a-z0-9_]{0,127}$/u)
+      .nullable()
+      .optional(),
+    disclosure: boundedText(1, 2_000),
   }),
   z.strictObject({
     kind: z.literal("skills"),

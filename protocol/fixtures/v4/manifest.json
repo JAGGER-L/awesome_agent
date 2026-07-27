@@ -24,6 +24,7 @@
     "tools": "application",
     "undo": "application",
     "usage": "application",
+    "web": "application",
     "workspace": "application"
   },
   "event_types": [
@@ -51,13 +52,13 @@
     "warning"
   ],
   "files": {
-    "command-results.invalid.json": "30d84fdbe274597e3f2b25eca8ee3411520fe347692c8e0a93d8f4c026f64634",
-    "command-results.valid.json": "69421a0e81ff272e2a90e0b269f300d51e20bb302cee1d5917968d5654669441",
-    "commands.json": "f1c3ef46e58fef972715d528d5c1d31ab2e79b590323b8fb17a956dd8dabd196",
-    "events.invalid.json": "5c1fce6dd2c4b2e6aa24f651231437a6d2e00bed711c2527a729f5ec8c917de0",
-    "events.valid.json": "18875661a2f38c83bc7638e2003c5cf1fcb41c1c07e386ade7dc53005d8f08fb",
-    "methods.invalid.json": "c0315503389f11d98ded692077057892dd067c60a24275a7e157a598ae898e04",
-    "methods.valid.json": "979df8945f5267e6cd62f161ad147ab8a8a7eae35acd22707ae0984ace06f058",
+    "command-results.invalid.json": "22c5efc76a917e165f9e9a97459845925a30b56f14162687d5e8f47d1047745a",
+    "command-results.valid.json": "4fad0c1ecdfe7b0708226eac429bafc369622a596e9d82a439f7f356f4159185",
+    "commands.json": "7012854231b98d216a93a70fc4b6c9b16e4af67b24adb0cf835e1ac5a0320f7b",
+    "events.invalid.json": "c9fbbc2be594f30d3a4a80ff077ef6a2e6efcf1aaa2250bc77a01530fad32eb3",
+    "events.valid.json": "0bc03cb963e49fc0dd9670efd14daf2aef375b673b56b89926e66b7f22bba805",
+    "methods.invalid.json": "494ae4f89f29358d7c07cf5340e1f9f47a12352908ba5364a0412b1f73f0c02e",
+    "methods.valid.json": "7d3597d912289fdeed7466322efeed4fd603a2eb08a07888fedd2d9648bae80d",
     "results.failures.json": "39bab801b9896e10cf71a036312f71ebc7a2484456aa4612557efd9deb3355af"
   },
   "fixture_version": 1,
@@ -75,5 +76,5 @@
     "shutdown"
   ],
   "product_version": "1.3.0",
-  "protocol_version": 3
+  "protocol_version": 4
 }

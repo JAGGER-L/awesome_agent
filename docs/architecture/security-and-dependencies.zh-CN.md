@@ -89,6 +89,11 @@ Welcome、status line 和 `/doctor` 中，但不会让其他原本有效的配�
 三种 permission mode 按[工具与变更](tools-and-changes.zh-CN.md)中的规则管理已知
 built-in capability。即使在 Full access 中，MCP 和未知 capability 也始终逐次询问。
 
+`network.read` 同样会在每种 mode 下首次使用时 ASK。其审批只适用于一次或当前 Thread；
+选择其他 Thread、重建 runtime、更改 permission mode、运行 `/web revoke` 或 `/web off`，
+以及 shutdown 都会清除 Thread grant。Headless `--allow-network` 只能把当前活动 Turn 的
+精确 prompt 解析为 allow-once，不能绕过硬拒绝。
+
 审批会绑定到发起请求的 authority：
 
 - Tool approval：Thread + Turn + Operation + interaction generation；
@@ -154,6 +159,20 @@ stdout/stderr drain 都有边界。
 进程所有权解决孤儿清理问题。进程运行时，它不限制文件系统、网络、设备、credential
 store 或 child-process 访问。有意 daemonize 的 POSIX 进程可以离开受管 group。
 
+## Web 网络边界
+
+Web 由用户启用且默认关闭。只有有效 `TAVILY_API_KEY` 与 `web.enabled: true` 才会发布
+`web_search`；Workspace config 不能启用它或选择 credential。提供商中立 handler 使用一个
+可复用 Tavily adapter 和显式 `httpx.AsyncClient`，设置 `trust_env=False`、禁用 redirect、
+限制 response，且不进行不透明 retry。环境 proxy 变量会被忽略，只接受经过校验的
+`AWESOME_WEB_PROXY_URL` 或其已选择的 Awesome secret。
+
+Destination 固定为 `https://api.tavily.com/search`；query 与 blocked-domain list 会离开
+进程发送给 Tavily。启用和首次审批会披露 [Tavily 隐私政策](https://www.tavily.com/privacy)
+与[平台条款](https://www.tavily.com/terms)。诊断 allowlist 绝不包含 query、URL、response 或
+credential 正文。严格 HTTPS citation 仍是不受信 display data；只有 ID 匹配当前 Turn
+经过校验的 source catalog 时才会成为链接。
+
 ## 扩展与上下文边界
 
 工作区指令、Skills、Memory、MCP description/result、显式文件和 provider text 都是给
@@ -211,6 +230,7 @@ import permission。
 | 外部框架 | 允许的所有者 |
 | --- | --- |
 | `jsonschema` | Extensions/MCP |
+| `httpx` | Web/Tavily adapter |
 | `mcp` SDK | Extensions |
 | `openai` SDK | 具体 Providers |
 | `sqlite3` | Storage |
@@ -226,6 +246,7 @@ Awesome 保持一组精简且显式的生产依赖：
 | 依赖 | 所属用途 |
 | --- | --- |
 | `pydantic` | 跨边界类型化模型与校验；严格程度由具体契约决定 |
+| `httpx` | 唯一有界 async Tavily Search client，并显式拥有 proxy 配置 |
 | `langgraph`、`langgraph-checkpoint-sqlite` | 唯一 Agent graph 及其 checkpoint saver |
 | `openai` | 适配器背后的 DeepSeek/Kimi 兼容 provider client |
 | `mcp` | Extensions 背后的 stdio MCP client |

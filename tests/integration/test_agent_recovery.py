@@ -4,6 +4,7 @@ import hashlib
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -41,6 +42,7 @@ from awesome_agent.core.tools import (
     ToolSpec,
     ToolStatus,
 )
+from awesome_agent.core.tools.context import CapabilityQuotaLedger
 from awesome_agent.core.tools.registry import ToolRegistry, ToolReplaySafety
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -283,9 +285,17 @@ def _graph_runtime(
     async def tool_context_factory(
         state: AgentState,
         request: ToolRequest,
-    ) -> Any:
-        del state, request
-        return None
+    ) -> ToolExecutionContext:
+        del request
+        return cast(
+            ToolExecutionContext,
+            SimpleNamespace(
+                capability_quotas=CapabilityQuotaLedger(
+                    {"network.read": 8},
+                    used_counts={"network.read": state["web_requests"]},
+                )
+            ),
+        )
 
     return AgentRuntimeContext(
         gateway=cast(Any, gateway),

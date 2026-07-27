@@ -24,20 +24,37 @@ const clientMessageIdentifierSchema = identifierSchema.regex(
 );
 
 export const initializeParamsSchema = z.strictObject({
-  protocol_version: z.literal(3),
+  protocol_version: z.literal(4),
   client_name: z.literal("awesome"),
   client_version: boundedText(1, 64),
 });
 
-export const initializeResultSchema = z.strictObject({
-  product_version: boundedText(1, 64),
-  protocol_version: z.literal(3),
-  status: z.enum(["ready", "trust_required", "state_reset_required"]),
-  session_id: identifierSchema,
-  interaction_id: identifierSchema.optional(),
-  workspace: workspacePresentationSchema,
-  capabilities: z.array(z.string()),
-});
+export const initializeResultSchema = z
+  .strictObject({
+    product_version: boundedText(1, 64),
+    protocol_version: z.literal(4),
+    status: z.enum(["ready", "trust_required", "state_reset_required"]),
+    session_id: identifierSchema,
+    interaction_id: identifierSchema.optional(),
+    workspace: workspacePresentationSchema,
+    capabilities: z.array(boundedText(1, 128)),
+  })
+  .superRefine(({ capabilities }, context) => {
+    const values = new Set(capabilities);
+    if (values.size !== capabilities.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Capabilities must be unique",
+      });
+    }
+    for (const required of ["web", "citations"] as const) {
+      if (values.has(required)) continue;
+      context.addIssue({
+        code: "custom",
+        message: `Missing required ${required} capability`,
+      });
+    }
+  });
 
 const threadListParamsSchema = z.strictObject({
   cursor: boundedText(1, 1_024).optional(),

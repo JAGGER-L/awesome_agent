@@ -67,7 +67,7 @@ function page(): MethodValue["thread.read"] {
           sequence: 2,
           kind: "assistant_message",
           content: "durable answer",
-          metadata: {},
+          metadata: { citations: [] },
           created_at: now,
         },
       ],

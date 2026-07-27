@@ -22,7 +22,9 @@ Awesome 目前提供：
 - 彼此独立且可选的本地 Memory 与 Mem0 Cloud；
 - Bundled、User 和受信任 Workspace 三类 Skills；
 - 使用经过校验且绑定 generation 的 catalog 的 MCP stdio 服务器；
-- Python Core 与 Ink TUI 之间有版本的 Protocol v3 边界；
+- 通过同一 Registry、Policy 与 Executor 提供可选的结构化 Tavily Web Search，并具有
+  每 Turn 预算、Thread 范围的联网同意和可持久引用；
+- Python Core 与 Ink TUI 之间有版本的 Protocol v4 边界；
 - 从本目录生成、支持搜索的 GitHub Pages 文档站。
 
 [架构总览](../ARCHITECTURE.zh-CN.md)定义当前组件边界。本页其余部分讨论可能增加的能力。
@@ -73,12 +75,17 @@ foreground-operation 模型应如何演进。
 
 ### 搜索工具
 
-**用户需要：** 编程工作经常需要 Workspace 中不存在的最新 Web 或文档事实。
+**当前基础：** 可选的 Tavily Web Search 已经使用参考文档所述的通用工具、权限、预算、
+恢复和引用契约。
 
-**不变量：** Web Search 与 Web Fetch 应与所有其他工具一样进入同一 Registry、Policy、
-Executor、结果、事件、超时和审批路径。远程内容始终是不受信任的上下文。
+**基础之上的用户需要：** 当真实编码与文档工作流暴露具体缺口时，搜索质量与来源选择
+可能需要继续演进。
 
-**待决策：** 提供商选择、网络 allowlist、引用保留、隐私、缓存、输出限制和不确定结果处理。
+**不变量：** 后续搜索改进必须保留提供商中立的工具结果、明确的联网同意、有界且不受信任
+的内容，以及端到端引用，不能创建另一条执行链路。
+
+**待决策：** 只有当前 basic Search 出现可测量缺口时才改变设计；Awesome 不会仅为扩宽
+抽象而增加推测性的 backend 或透明 retry。
 
 ## 后续方向
 

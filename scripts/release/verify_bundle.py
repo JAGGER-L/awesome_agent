@@ -339,7 +339,7 @@ def _verify_core_protocol_handshake(
             identifier=1,
             method="initialize",
             params={
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": expected_version,
             },
@@ -348,7 +348,7 @@ def _verify_core_protocol_handshake(
             _protocol_response(frames, identifier=1)
         )
         if (
-            initialized.get("protocol_version") != 3
+            initialized.get("protocol_version") != 4
             or initialized.get("product_version") != expected_version
             or initialized.get("status") != "trust_required"
         ):

@@ -16,6 +16,7 @@ from awesome_agent.config.models import (
     ThreadConfigState,
     TurnConfig,
     UserBudgetConfig,
+    WebConfig,
 )
 
 _PROVIDER_DEFAULTS = {
@@ -37,14 +38,14 @@ def resolve_application_config(sources: LoadedConfigSources) -> ApplicationConfi
     project = sources.workspace
     project_budgets = project.budgets if project is not None else None
     budgets = _restrict_budgets(user.budgets, project_budgets)
+    web = _restrict_web(
+        user.web,
+        project.web.blocked_domains if project is not None else (),
+    )
     return ApplicationConfig(
         providers=user.providers,
         budgets=budgets,
-        web_requests=_minimum(
-            user.budgets.web_requests,
-            project_budgets.web_requests if project_budgets is not None else None,
-        ),
-        web=user.web,
+        web=web,
         memory=user.memory,
         user_skills=tuple(
             SkillSourceConfig(name=name, enabled=False) for name in user.skills.disabled
@@ -122,11 +123,31 @@ def _restrict_budgets(
             user.total_context_tokens,
             project.total_context_tokens,
         ),
+        web_requests=_minimum(user.web_requests, project.web_requests),
     )
 
 
 def _minimum(user: int, project: int | None) -> int:
     return user if project is None else min(user, project)
+
+
+def _restrict_web(
+    user: WebConfig,
+    project_blocked_domains: tuple[str, ...],
+) -> WebConfig:
+    blocked_domains = tuple(
+        dict.fromkeys((*user.blocked_domains, *project_blocked_domains))
+    )
+    if len(blocked_domains) > 128:
+        raise ConfigurationResolutionError(
+            "configuration_invalid",
+            "Effective Web blocked domains exceed the 128-domain limit.",
+        )
+    return WebConfig(
+        enabled=user.enabled,
+        provider=user.provider,
+        blocked_domains=blocked_domains,
+    )
 
 
 def _select_model(
