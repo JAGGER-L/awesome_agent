@@ -399,8 +399,75 @@ describe("connectSurface", () => {
     await waitFor(() => connected.store.getState().fatal);
     expect(connected.store.getState()).toMatchObject({
       connection: "fatal",
+      fatal: { code: "thread_retry_identity_mismatch" },
+    });
+    await connected.close();
+  });
+
+  it("rejects a post-response buffered retry Event with a different client identity", async () => {
+    const connected = await connectSurface(
+      await options({
+        AWESOME_FAKE_CORE_THREAD: "1",
+        AWESOME_FAKE_CORE_RETRY_EVENTS: "client_mismatch_after",
+      }),
+    );
+    await hydrateCurrentThread(connected);
+    const response = await connected.request("command.execute", {
+      name: "retry",
+    });
+    if (
+      !response.ok ||
+      response.value.kind !== "result" ||
+      response.value.payload.kind !== "thread_retry"
+    ) {
+      throw new Error("Fake Core did not return a Thread retry");
+    }
+    const payload = response.value.payload;
+    const replacement = applyThreadTransition({
+      store: connected.store,
+      transition: payload.transition,
+      expectedGeneration: 0,
+      effects: { resetCurrentFrame: () => undefined },
+    });
+    if (replacement.kind !== "replaced") {
+      throw new Error("Retry transition was unexpectedly stale");
+    }
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    expect(connected.store.getState().fatal).toBeUndefined();
+    expect(() =>
+      connected.activateThreadRetry?.(
+        payload.operation,
+        replacement.generation,
+      ),
+    ).toThrow("Buffered retry Event identity");
+
+    expect(connected.store.getState()).toMatchObject({
+      connection: "fatal",
+      fatal: { code: "thread_retry_identity_mismatch" },
+    });
+    await connected.close();
+  });
+
+  it("keeps ordinary Event stream faults classified as protocol_desynchronized", async () => {
+    const connected = await connectSurface(
+      await options({ AWESOME_FAKE_CORE_TERMINAL: "1" }),
+    );
+    await connected.request("operation.cancel", {
+      operation_id: "operation_first",
+    });
+    await waitFor(() => connected.store.getState().committed_transcript);
+
+    const repeatedSequence = connected
+      .request("operation.cancel", { operation_id: "operation_second" })
+      .catch(() => undefined);
+    await waitFor(() => connected.store.getState().fatal);
+
+    expect(connected.store.getState()).toMatchObject({
+      connection: "fatal",
       fatal: { code: "protocol_desynchronized" },
     });
+    await repeatedSequence;
     await connected.close();
   });
 

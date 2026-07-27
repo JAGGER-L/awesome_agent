@@ -49,6 +49,11 @@ interface ThreadRetryGate {
   expected?: ThreadRetryOperation;
 }
 
+interface EventAcceptanceFailure {
+  readonly code: "protocol_desynchronized" | "thread_retry_identity_mismatch";
+  readonly fault: ProtocolDesynchronized;
+}
+
 const THREAD_RETRY_EVENT_LIMIT = 1_024;
 const THREAD_RETRY_BYTE_LIMIT = 4 * 1_024 * 1_024;
 
@@ -188,7 +193,7 @@ export async function connectSurface(
 
   const acceptEvent = (
     event: EventEnvelope,
-  ): ProtocolDesynchronized | undefined => {
+  ): EventAcceptanceFailure | undefined => {
     if (
       activeRetryBinding &&
       ((event.operation_id !== undefined &&
@@ -200,12 +205,15 @@ export async function connectSurface(
         (event.client_message_id !== undefined &&
           event.client_message_id !== activeRetryBinding.client_message_id))
     ) {
-      return new ProtocolDesynchronized(
-        "Retry Event identity does not match its accepted Operation",
-      );
+      return {
+        code: "thread_retry_identity_mismatch",
+        fault: new ProtocolDesynchronized(
+          "Retry Event identity does not match its accepted Operation",
+        ),
+      };
     }
     const fault = batcher.accept(event);
-    if (fault) return fault;
+    if (fault) return { code: "protocol_desynchronized", fault };
     if (
       event.event_type === "operation.completed" ||
       event.event_type === "operation.failed" ||
@@ -293,11 +301,11 @@ export async function connectSurface(
       activeRetryBinding = expected;
     }
     for (const event of buffered) {
-      const fault = acceptEvent(event);
-      if (!fault) continue;
+      const failure = acceptEvent(event);
+      if (!failure) continue;
       activeRetryBinding = undefined;
-      failProtocol("protocol_desynchronized", fault);
-      throw fault;
+      failProtocol(failure.code, failure.fault);
+      throw failure.fault;
     }
   };
 
@@ -312,10 +320,10 @@ export async function connectSurface(
         }
         continue;
       }
-      const fault = acceptEvent(event);
-      if (fault) {
-        failProtocol("protocol_desynchronized", fault);
-        await session.rpc.close(fault);
+      const failure = acceptEvent(event);
+      if (failure) {
+        failProtocol(failure.code, failure.fault);
+        await session.rpc.close(failure.fault);
         break;
       }
     }
