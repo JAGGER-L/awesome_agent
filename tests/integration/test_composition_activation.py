@@ -77,7 +77,12 @@ from awesome_agent.storage import (
     StatePreflight,
 )
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
-from awesome_agent.web import WebSearchRequest, WebSearchResponse
+from awesome_agent.web import (
+    WebFetchRequest,
+    WebFetchResponse,
+    WebSearchRequest,
+    WebSearchResponse,
+)
 
 
 async def _trust_workspaces(home: Path, *workspaces: Path) -> None:
@@ -1388,7 +1393,7 @@ async def test_injected_gateway_and_mem0_resources_are_borrowed(
 
 
 @pytest.mark.asyncio
-async def test_web_runtime_registers_and_retires_managed_search_client(
+async def test_web_runtime_registers_both_tools_and_retires_managed_client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1404,21 +1409,24 @@ async def test_web_runtime_registers_and_retires_managed_search_client(
     await _trust_workspaces(home, workspace)
     closed: list[str] = []
 
-    class FakeSearchProvider:
+    class FakeWebProvider:
         async def search(self, request: WebSearchRequest) -> WebSearchResponse:
             del request
             return WebSearchResponse(results=())
 
+        async def fetch(self, request: WebFetchRequest) -> WebFetchResponse:
+            return WebFetchResponse(url=request.url, content="content")
+
     @asynccontextmanager
     async def web_resources(*_: object, **__: object) -> AsyncIterator[Any]:
         try:
-            yield FakeSearchProvider()
+            yield FakeWebProvider()
         finally:
             closed.append("web")
 
     monkeypatch.setattr(
         composition,
-        "managed_tavily_search_client",
+        "managed_tavily_web_client",
         web_resources,
     )
     application = await composition.compose_local_application(
@@ -1434,7 +1442,21 @@ async def test_web_runtime_registers_and_retires_managed_search_client(
     assert first_runtime is not None
     assert first_runtime.web_available is True
     assert first_runtime.web_diagnostic_code is None
-    assert first_runtime.tool_registry.resolve("web_search") is not None
+    web_fetch = first_runtime.tool_registry.resolve("web_fetch")
+    web_search = first_runtime.tool_registry.resolve("web_search")
+    assert web_fetch is not None
+    assert web_search is not None
+    for missing_tool in ("web_fetch", "web_search"):
+        first_runtime.tool_registry.unregister(missing_tool)
+        with pytest.raises(
+            RuntimeError,
+            match="Workspace runtime Web availability is inconsistent",
+        ):
+            backend._validate_workspace_runtime(first_runtime)
+        first_runtime.tool_registry.replace_exact_set(
+            ("web_fetch", "web_search"),
+            (web_fetch, web_search),
+        )
     backend._permission_session.grant_thread_network("thread_test")
 
     status = await application.execute_command(
@@ -1457,6 +1479,7 @@ async def test_web_runtime_registers_and_retires_managed_search_client(
     assert disabled.value.payload.available is False
     assert backend._runtime is not first_runtime
     assert backend._runtime is not None
+    assert backend._runtime.tool_registry.resolve("web_fetch") is None
     assert backend._runtime.tool_registry.resolve("web_search") is None
     assert backend._permission_session.thread_granted_capabilities == frozenset()
     for _ in range(20):

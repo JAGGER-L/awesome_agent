@@ -98,17 +98,17 @@ def tool_approval_choices(capability: str) -> tuple[InteractionChoice, ...]:
             InteractionChoice(
                 decision=InteractionDecision.DENY,
                 label="Deny",
-                description="Do not send this search query to Tavily.",
+                description="Do not send this search query or URL to Tavily.",
             ),
             InteractionChoice(
                 decision=InteractionDecision.ALLOW_ONCE,
                 label="Allow once",
-                description="Send this search query to Tavily once.",
+                description="Send this search query or URL to Tavily once.",
             ),
             InteractionChoice(
                 decision=InteractionDecision.ALLOW_THREAD_NETWORK,
                 label="Allow for this Thread",
-                description="Allow Web search requests for this Thread.",
+                description="Allow Web search and fetch requests for this Thread.",
             ),
         )
     choices = [InteractionChoice(decision=InteractionDecision.ALLOW_ONCE, label="Yes")]

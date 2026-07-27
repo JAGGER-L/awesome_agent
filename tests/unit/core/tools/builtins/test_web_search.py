@@ -18,6 +18,8 @@ from awesome_agent.core.tools.contracts import ToolErrorCode
 from awesome_agent.core.tools.errors import ExpectedToolFailure
 from awesome_agent.core.tools.registry import ToolReplaySafety
 from awesome_agent.web import (
+    WebFetchRequest,
+    WebFetchResponse,
     WebProviderError,
     WebProviderErrorCode,
     WebSearchRequest,
@@ -41,6 +43,10 @@ class StubSearchProvider:
         if self.error is not None:
             raise self.error
         return self.response
+
+    async def fetch(self, request: WebFetchRequest) -> WebFetchResponse:
+        del request
+        return WebFetchResponse(url="https://example.com", content="content")
 
 
 @dataclass
@@ -149,6 +155,8 @@ async def test_handler_returns_bounded_structured_provider_neutral_output() -> N
     assert description.approval_operation == "send a search query to Tavily"
     assert "Tavily Privacy Policy" in description.approval_target
     assert "Platform Terms" in description.approval_target
+    assert "https://www.tavily.com/privacy" in description.approval_target
+    assert "https://www.tavily.com/terms" in description.approval_target
     assert "current" not in description.approval_target
 
 

@@ -62,7 +62,7 @@ approval can be requested, Core performs:
 
 `network.read` is an explicit matrix exception: without a current Thread grant,
 it returns `ask` in all three modes. A permission mode cannot silently authorize
-transmission of a search query to Tavily.
+transmission of a Search query or requested Fetch URL to Tavily.
 
 After admission, but before the effect, the handler applies backend-specific
 checks. Filesystem handlers resolve containment, link/reparse state, object
@@ -111,8 +111,8 @@ and interaction generation. The choices are:
 
 For `network.read`, the safe first/default choice is **Deny** (`deny`), followed
 by **Allow once** (`allow_once`) and **Allow for this Thread**
-(`allow_thread_network`). The Thread choice covers later Web searches only; it
-does not grant another network capability.
+(`allow_thread_network`). The Thread choice covers later Web Search and Fetch
+calls only; it does not grant another network capability.
 
 The “all edits” label does not include delete, shell, MCP, or an unknown
 capability. Core rejects any attempt to apply that decision to a non-write
@@ -130,11 +130,13 @@ separate decisions.
 
 ## Web network reads
 
-An enabled `web_search` sends its query to Tavily. The approval describes that
-transfer, and the data is processed under the [Tavily Privacy
+An enabled `web_search` sends its query to Tavily; `web_fetch` sends one public
+HTTPS URL so Tavily's cloud service can extract that page without Awesome Core
+connecting to the target. The approval describes the transfer, and the query or
+URL is processed under the [Tavily Privacy
 Policy](https://www.tavily.com/privacy) and [Tavily Platform
-Terms](https://www.tavily.com/terms). Search results remain untrusted model
-context; approval does not make their content authoritative.
+Terms](https://www.tavily.com/terms). Search results and extracted content
+remain untrusted model context; approval does not make them authoritative.
 
 In headless mode, `--allow-network` resolves only the active headless Turn's
 matching `network.read` interaction as `allow_once`. It cannot enable Web,

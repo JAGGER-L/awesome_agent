@@ -139,10 +139,12 @@ Provider 重试不会导致非幂等工具重复执行。
 | `blocked_domains` | 最多 128 个唯一、规范化的 ASCII hostname | `[]` | 作为 Tavily `exclude_domains` 发送；Workspace 可增加限制，但不能启用 Web。 |
 
 `enabled` 为 true 且 Tavily credential 与显式 proxy 有效时，runtime construction 会注册
-`web_search`；否则 `/web status` 会报告有界 diagnostic，且工具不存在。Enablement 绝不
+`web_search` 与 `web_fetch`；否则 `/web status` 会报告有界 diagnostic，且两个工具都不存在。
+Enablement 绝不
 grant `network.read`：在每种 permission mode 下首次使用仍会 ASK。`/web on|off` 执行受支持的
 原子 user-config 写入与 runtime rebuild，`/web revoke` 清除当前 Thread grant。HTTP client
-使用 `trust_env=False`，忽略环境 proxy 变量。
+使用 `trust_env=False`，忽略环境 proxy 变量。Search query 与请求的 Fetch URL 会发送给
+Tavily；Fetch extraction 在 Tavily 云端执行，Awesome Core 不会连接目标 URL。
 
 ### `memory`
 

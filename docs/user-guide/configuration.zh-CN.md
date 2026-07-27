@@ -92,12 +92,13 @@ curated model ID 包括：
 
 Kimi region 为 `cn` 或 `global`。在 [Kimi 中国区控制台](https://platform.kimi.com/console/api-keys)创建的密钥使用 `cn`；在 [Kimi 全球区控制台](https://platform.kimi.ai/console/api-keys)创建的密钥使用 `global`。DeepSeek 密钥来自 [DeepSeek API Key 页面](https://platform.deepseek.com/api_keys)。账户、密钥可用性、计费和网络访问仍是 Provider 侧前提。请求会把组装后的模型上下文发送给所选 Provider，因此请查看其当前条款、隐私政策和组织数据控制。Provider adapter、凭据变量和完整文档示例维护在[配置参考](../reference/configuration.zh-CN.md)中。
 
-Web search 与 model Provider 相互独立。它默认关闭，Tavily credential 始终来自
+Web 能力与 model Provider 相互独立。它默认关闭，Tavily credential 始终来自
 `TAVILY_API_KEY`；async HTTP client 使用 `trust_env=False`，所以会忽略环境 proxy 变量。
 只有需要显式代理时才设置 `AWESOME_WEB_PROXY_URL`（或其已选择的 Awesome secret），并使用
-`/web on|off|status|revoke` 管理；不要尝试通过 Workspace config 启用。Search query 会依据
-Tavily 的[隐私政策](https://www.tavily.com/privacy)与
-[平台条款](https://www.tavily.com/terms)发送给 Tavily。
+`/web on|off|status|revoke` 管理；不要尝试通过 Workspace config 启用。Search query 与请求的
+Fetch URL 会依据 Tavily 的[隐私政策](https://www.tavily.com/privacy)与
+[平台条款](https://www.tavily.com/terms)发送给 Tavily。Fetch extraction 由 Tavily 云服务执行；
+Awesome Core 不连接请求的目标。
 
 Memory、Skill 与 MCP 示例分别见聚焦指南：[Memory](../extensions/memory.zh-CN.md)、[Skills](../extensions/skills.zh-CN.md) 和 [MCP](../extensions/mcp.zh-CN.md)。
 

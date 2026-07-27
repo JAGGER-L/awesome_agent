@@ -28,7 +28,8 @@ from awesome_agent.core.cancellation import (
 from awesome_agent.core.tools.permissions import PermissionSession
 
 TAVILY_DISCLOSURE = (
-    "Web search sends the query to Tavily. Tavily processes that data under "
+    "Web search sends the query, and Web fetch sends the requested URL, to "
+    "Tavily. Tavily processes that data under "
     "https://www.tavily.com/privacy "
     "and https://www.tavily.com/terms."
 )

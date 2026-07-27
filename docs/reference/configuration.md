@@ -155,12 +155,14 @@ retries do not make non-idempotent tools repeat.
 | `blocked_domains` | up to 128 unique normalized ASCII hostnames | `[]` | Domains sent as Tavily `exclude_domains`; the Workspace may add restrictions but cannot enable Web. |
 
 When `enabled` is true and the Tavily credential and explicit proxy are valid,
-runtime construction registers `web_search`; otherwise `/web status` reports a
-bounded diagnostic and the tool is absent. Enablement never grants
+runtime construction registers `web_search` and `web_fetch`; otherwise `/web
+status` reports a bounded diagnostic and both tools are absent. Enablement never grants
 `network.read`: first use still asks in every permission mode. `/web on|off`
 performs the supported atomic user-config write and runtime rebuild, while
 `/web revoke` clears the active Thread grant. The HTTP client uses
-`trust_env=False`; ambient proxy variables are ignored.
+`trust_env=False`; ambient proxy variables are ignored. Search queries and
+requested Fetch URLs are sent to Tavily; Fetch extraction happens in Tavily's
+cloud rather than through a connection from Awesome Core to the target URL.
 
 ### `memory`
 

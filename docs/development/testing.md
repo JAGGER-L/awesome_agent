@@ -104,9 +104,11 @@ If the intentional contract changed, regenerate without `--check`, inspect all
 fixture and manifest changes, update strict TypeScript schemas/presenters, then
 rerun Python and TUI fixture tests. Do not hand-edit generated JSON.
 
-For Web changes, use the fake Tavily transport/provider suites to cover strict
-request bounds, `trust_env=False`, explicit proxy selection, every stable HTTP
-failure, no automatic retry, permission choices and grant revocation, the
+For Web changes, use the fake Tavily transport/provider suites to cover Search
+and Extract request/response bounds, public-HTTPS and blocked-domain admission,
+24,000-character Fetch truncation, Tavily-cloud rather than local target
+access, `trust_env=False`, explicit proxy selection, every stable HTTP failure,
+no automatic retry, permission choices and grant revocation, the shared
 eight-request hard budget, non-replayable recovery, citation finalization, and
 Python/TypeScript round trips. A live Tavily request is an explicit release
 gate only; ordinary tests must not require network access or a real key.

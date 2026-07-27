@@ -24,7 +24,7 @@ Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中
 | `/tools` | 无参数 | 列出有效 catalog，以及当前模式下是否需要审批。 |
 | `/skills [auto\|off\|name]` | 零或一个 mode/name | 检查或设置当前 Thread 的 Skill mode。 |
 | `/mcp [status [id]\|enable <id>\|disable <id>\|restart <id>]` | 如左所示 | 检查或管理 MCP 服务器。 |
-| `/web [on\|off\|status\|revoke]` | 零或一个 action | 检查或原子启用/关闭 Tavily search，或清除当前 Thread network grant。 |
+| `/web [on\|off\|status\|revoke]` | 零或一个 action | 检查或原子启用/关闭 Tavily Web 工具，或清除当前 Thread network grant。 |
 | `/memory [local ...\|mem0 ...]` | 见下文 | 检查、启用、搜索或修改 Memory。 |
 | `/status` | 无参数 | 显示已选择 Thread 和 runtime 状态快照。 |
 | `/usage` | 无参数 | 显示已选择 Thread 累计观察到的 usage。 |
@@ -92,11 +92,12 @@ User 服务器只能通过 User YAML 启用；对它们执行 `enable` 和 `disa
 | --- | --- |
 | `/web`、`/web status` | 显示 enablement/runtime availability、Tavily credential 与显式 proxy 是否存在、当前 Thread authorization、请求 budget、diagnostic code 和披露。 |
 | `/web on` | 要求 `TAVILY_API_KEY`，校验显式 proxy，原子持久化 `web.enabled: true`，并在报告成功前重建 runtime。 |
-| `/web off` | 原子持久化 `web.enabled: false`，重建不含 `web_search` 的 runtime，并清除全部 Thread network grant。 |
+| `/web off` | 原子持久化 `web.enabled: false`，重建不含 `web_search` 或 `web_fetch` 的 runtime，并清除全部 Thread network grant。 |
 | `/web revoke` | 清除选中 Thread 的 `network.read` grant，但不关闭 Web。 |
 
-启用 Web 会披露 search query 将依据 Tavily 的[隐私政策](https://www.tavily.com/privacy)与
-[平台条款](https://www.tavily.com/terms)发送给 Tavily。Apply 失败会回滚 user config；如果
+启用 Web 会披露 Search query 与请求的 Fetch URL 将依据 Tavily 的
+[隐私政策](https://www.tavily.com/privacy)与[平台条款](https://www.tavily.com/terms)
+发送给 Tavily。Apply 失败会回滚 user config；如果
 无法证明已安全恢复，后续 Web mutation 会被 `web_configuration_recovery_required` 隔离。
 
 ## Ink 本地命令

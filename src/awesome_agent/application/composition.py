@@ -174,6 +174,7 @@ from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
 )
+from awesome_agent.core.tools.builtins.web_fetch import create_web_fetch_registration
 from awesome_agent.core.tools.builtins.web_search import (
     create_web_search_registration,
 )
@@ -258,8 +259,8 @@ from awesome_agent.storage.pagination import (
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 from awesome_agent.version import PRODUCT_VERSION
 from awesome_agent.web import (
-    WebSearchProvider,
-    managed_tavily_search_client,
+    WebProvider,
+    managed_tavily_web_client,
     validate_web_proxy_url,
 )
 
@@ -307,7 +308,7 @@ async def compose_local_application(
     gateway_factory: GatewayFactory | None = None,
     mcp_client_factory: McpClientFactory | None = None,
     mem0_client: object | None = None,
-    web_search_provider: WebSearchProvider | None = None,
+    web_provider: WebProvider | None = None,
     credential_validator: CredentialValidator | None = None,
 ) -> LocalApplication:
     paths = AwesomePaths.from_home(home)
@@ -330,7 +331,7 @@ async def compose_local_application(
             gateway_factory=gateway_factory,
             mcp_client_factory=mcp_client_factory,
             mem0_client=mem0_client,
-            web_search_provider=web_search_provider,
+            web_provider=web_provider,
             credential_validator=credential_validator,
         )
         middleware = (
@@ -448,7 +449,7 @@ class _LocalApplicationBackend:
         gateway_factory: GatewayFactory | None,
         mcp_client_factory: McpClientFactory | None,
         mem0_client: object | None,
-        web_search_provider: WebSearchProvider | None,
+        web_provider: WebProvider | None,
         credential_validator: CredentialValidator | None,
     ) -> None:
         self._paths = paths
@@ -458,7 +459,7 @@ class _LocalApplicationBackend:
         self._injected_gateway_factory = gateway_factory
         self._mcp_client_factory = mcp_client_factory
         self._injected_mem0_client = mem0_client
-        self._injected_web_search_provider = web_search_provider
+        self._injected_web_provider = web_provider
         self._credential_validator = (
             credential_validator or ProviderCredentialValidator()
         )
@@ -2167,19 +2168,25 @@ class _LocalApplicationBackend:
                         web_diagnostic_code = "web_proxy_invalid"
                     else:
                         try:
-                            web_provider = self._injected_web_search_provider
+                            web_provider = self._injected_web_provider
                             if web_provider is None:
                                 web_provider = (
                                     await runtime_resources.enter_async_context(
-                                        managed_tavily_search_client(
+                                        managed_tavily_web_client(
                                             api_key=tavily_key,
                                             proxy_url=sources.secrets.web_proxy_url,
                                         )
                                     )
                                 )
                             registry.replace_exact_set(
-                                ("web_search",),
+                                ("web_fetch", "web_search"),
                                 (
+                                    create_web_fetch_registration(
+                                        web_provider,
+                                        blocked_domains=(
+                                            application_config.web.blocked_domains
+                                        ),
+                                    ),
                                     create_web_search_registration(
                                         web_provider,
                                         blocked_domains=(
@@ -2646,10 +2653,14 @@ class _LocalApplicationBackend:
         expected_catalog = ModelCatalog.from_application(candidate.application_config)
         if candidate.model_catalog != expected_catalog:
             raise RuntimeError("Workspace runtime Model Catalog is inconsistent.")
-        web_search_registered = (
-            candidate.tool_registry.resolve("web_search") is not None
+        web_tools_registered = (
+            candidate.tool_registry.resolve("web_fetch") is not None,
+            candidate.tool_registry.resolve("web_search") is not None,
         )
-        if web_search_registered is not candidate.web_available:
+        if web_tools_registered != (
+            candidate.web_available,
+            candidate.web_available,
+        ):
             raise RuntimeError("Workspace runtime Web availability is inconsistent.")
 
     def _require_runtime_publication_idle(self) -> None:

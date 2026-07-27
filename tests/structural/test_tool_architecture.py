@@ -121,6 +121,20 @@ def test_production_tool_registrations_declare_replay_safety() -> None:
         / "tools"
         / "builtins"
         / "__init__.py",
+        repository
+        / "src"
+        / "awesome_agent"
+        / "core"
+        / "tools"
+        / "builtins"
+        / "web_fetch.py",
+        repository
+        / "src"
+        / "awesome_agent"
+        / "core"
+        / "tools"
+        / "builtins"
+        / "web_search.py",
         repository / "src" / "awesome_agent" / "extensions" / "skills" / "tools.py",
         repository / "src" / "awesome_agent" / "extensions" / "mcp" / "adapter.py",
         repository / "src" / "awesome_agent" / "memory" / "tools.py",

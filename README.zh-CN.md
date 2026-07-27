@@ -25,18 +25,18 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 - 以确定性的文本或 JSON 输出非交互运行一个 Agent Turn；
 - 在 Request approval、Accept edits 和 Thread 范围的 Full access 之间切换；
 - 使用 Skills、MCP 工具、本地 Memory 和 Mem0 Cloud 扩展能力；
-- 通过可选且带引用的 Tavily 集成搜索公共 Web；
+- 通过可选且带引用的 Tavily 集成搜索和提取公共 Web 内容；
 - 使用 DeepSeek 和 Kimi 模型。
 
 Awesome 最开始提供 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、
 `glob`、`grep` 和 `execute`。扩展可以继续增加工具，Awesome 不限制为八个工具。
 Local memory 与 Mem0 Cloud 相互独立，二者默认关闭。
 
-Web search 同样默认关闭。设置 `TAVILY_API_KEY`，通过 `/web on` 启用，并批准每个 Thread
-第一次 `network.read` 请求。Query 会依据 Tavily 的[隐私政策](https://www.tavily.com/privacy)
-与[平台条款](https://www.tavily.com/terms)发送给 Tavily；Awesome 会分配稳定的 `S1...`
-来源，并将其带入最终回答。使用 `/web off` 可关闭集成，使用 `/web revoke` 可清除当前
-Thread grant。
+Web 工具同样默认关闭。设置 `TAVILY_API_KEY`，通过 `/web on` 启用，并批准每个 Thread
+第一次 `network.read` 请求。Search query 与 Fetch URL 会依据 Tavily 的
+[隐私政策](https://www.tavily.com/privacy)和[平台条款](https://www.tavily.com/terms)
+发送给 Tavily；Awesome 会分配稳定的 `S1...` 来源，并将其带入最终回答。使用 `/web off`
+可关闭集成，使用 `/web revoke` 可清除当前 Thread grant。
 
 ## 安装
 
@@ -137,6 +137,8 @@ awesome --help
 修改操作会拒绝有歧义或 hard-link 别名；有界的进程树清理会减少遗留子进程，
 但不会隔离宿主机执行。进程环境变量和
 `<AWESOME_HOME>/.env` 仍是高级配置方式；不要把凭据写入项目文件。
-可选 Web search 会把 query 发送给 Tavily。Awesome 不会在本机直接抓取任意目标网站、继承
-环境中的代理变量，也不会在结构化诊断中记录 query 或 URL 正文；只有明确需要代理时才使用
-`AWESOME_WEB_PROXY_URL`。
+可选 Web Search 会把 query 发送给 Tavily。`web_fetch` 会把一个公共 HTTPS URL 发送给
+Tavily，由 Tavily 云服务远程获取并提取页面；Awesome Core 本身不连接目标网站。两个工具都
+不会继承环境中的代理变量，也不会在结构化诊断中记录 query、URL 或结果正文；只有明确需要
+代理时才使用 `AWESOME_WEB_PROXY_URL`。Web Fetch 不是浏览器，不支持 Cookie、登录、
+JavaScript、PDF、二进制、本地 Fetch、缓存或 backend fallback。

@@ -197,19 +197,26 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 
 ## 扩展
 
-### Web search 不可用或失败
+### Web Search 或 Fetch 不可用或失败
 
 运行 `/web status`。`enabled: false` 表示需要运行 `/web on`；credential 缺失时需设置非空
 `TAVILY_API_KEY`。`web_proxy_invalid` 表示显式 `AWESOME_WEB_PROXY_URL` 不是有界、不含凭据的
 `http` 或 `https` URL。Web client 使用 `trust_env=False`，因此会有意忽略环境中的
 `HTTP_PROXY`/`HTTPS_PROXY`。
 
+对于 `web_fetch`，`invalid_arguments` 表示请求值不是一个公共绝对 HTTPS URL、host 属于
+私有/特殊用途、包含不支持的用户信息/fragment 语法，或看起来指向 PDF 或其他已识别二进制
+格式。`web_request_rejected` 表示 Web 配置阻止该 host，或 Tavily 拒绝了其它方面已准入的
+请求。被准入的目标由 Tavily 云服务连接，而不是 Awesome Core。
+
 即使 Full access 下仍出现 prompt 也是预期行为：`network.read` 在每种 permission mode 下
 首次使用都会 ASK。可选择 once 或当前 Thread，headless 单 Turn 可使用 `--allow-network`。
-`web_rate_limited`、`web_quota_exhausted`、`web_timeout`、`web_connection_failed` 与
+`web_request_budget_exhausted` 表示 Search 与 Fetch 已耗尽当前 Turn 共享的请求预算；它与
+provider account 的 `web_quota_exhausted` 不同。`web_rate_limited`、`web_quota_exhausted`、
+`web_timeout`、`web_connection_failed` 与
 `web_provider_unavailable` 是稳定 provider-boundary failure；Awesome 不会透明重试。
 `web_malformed_response` 表示有界 Tavily response 不满足严格契约。结构化日志会有意省略
-query 和 result URL。
+query、result URL、请求的 Fetch URL 与提取正文。
 
 ### Skill 缺失或无效
 

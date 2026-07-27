@@ -25,7 +25,7 @@ a model conversation message.
 | `/tools` | no arguments | List the effective catalog and approval requirement under the current mode. |
 | `/skills [auto\|off\|name]` | zero or one mode/name | Inspect or set the current Thread's Skill mode. |
 | `/mcp [status [id]\|enable <id>\|disable <id>\|restart <id>]` | as shown | Inspect or manage MCP servers. |
-| `/web [on\|off\|status\|revoke]` | zero or one action | Inspect or atomically enable/disable Tavily search, or clear the active Thread's network grant. |
+| `/web [on\|off\|status\|revoke]` | zero or one action | Inspect or atomically enable/disable Tavily Web tools, or clear the active Thread's network grant. |
 | `/memory [local ...\|mem0 ...]` | see below | Inspect, enable, search, or mutate Memory. |
 | `/status` | no arguments | Show the selected Thread and runtime status snapshot. |
 | `/usage` | no arguments | Show cumulative observed usage for the selected Thread. |
@@ -104,10 +104,11 @@ User servers are enabled only by user YAML; `enable` and `disable` return
 | --- | --- |
 | `/web`, `/web status` | Show enabled/runtime availability, Tavily credential and explicit proxy presence, active Thread authorization, request budget, diagnostic code, and disclosure. |
 | `/web on` | Require `TAVILY_API_KEY`, validate the explicit proxy, atomically persist `web.enabled: true`, and rebuild the runtime before reporting success. |
-| `/web off` | Atomically persist `web.enabled: false`, rebuild without `web_search`, and clear every Thread network grant. |
+| `/web off` | Atomically persist `web.enabled: false`, rebuild without `web_search` or `web_fetch`, and clear every Thread network grant. |
 | `/web revoke` | Clear the selected Thread's `network.read` grant without disabling Web. |
 
-Enabling Web discloses that search queries are sent to Tavily under its
+Enabling Web discloses that Search queries and requested Fetch URLs are sent to
+Tavily under its
 [Privacy Policy](https://www.tavily.com/privacy) and
 [Platform Terms](https://www.tavily.com/terms). A failed apply rolls the user
 configuration back; if safe recovery cannot be proven, later Web mutations are

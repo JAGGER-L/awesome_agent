@@ -245,30 +245,34 @@ capability grants cannot override hard admission.
 
 Core's provider-neutral `Citation(id, title, url)` value follows successful
 tool data from `ToolOutput.citations` into `ToolResult.citations`. Text bounding
-does not remove that tuple. Agent then serializes the complete result into
-`AgentState.tool_results`, which preserves citations in the checkpoint without
-adding a second top-level citations channel. Agent now derives the ordered
-`AgentState.citations` snapshot, and Conversation records, Protocol v4, TUI,
-and headless output carry the same sources without a v3 compatibility adapter.
+does not remove that tuple. Agent serializes the complete result into
+`AgentState.tool_results` and derives the ordered `AgentState.citations`
+snapshot, so both survive checkpoint recovery. Conversation records, Protocol
+v4, TUI, and headless output carry the same sources without a compatibility
+adapter.
 
-Optional Web search is one ordinary registered tool, not a second execution
-framework. It appears only when user configuration has `web.enabled: true`
-and `TAVILY_API_KEY` resolves. The provider-neutral `web_search` handler sends
-a bounded basic search (at most ten results) through a reusable
-`TavilySearchClient` to `POST https://api.tavily.com/search`. Its explicit
-`httpx.AsyncClient` uses `trust_env=False`, no redirects or opaque retries, and
-only `AWESOME_WEB_PROXY_URL` when configured. Stable redacted failures cover
+Optional Web access consists of two ordinary registered tools, not a second
+execution framework. They appear only when user configuration has
+`web.enabled: true` and `TAVILY_API_KEY` resolves. The provider-neutral
+`web_search` handler sends a bounded basic search with at most ten results to
+`POST https://api.tavily.com/search`. `web_fetch` accepts one public HTTPS URL
+and requests basic Markdown extraction from `POST
+https://api.tavily.com/extract`, bounded to 24,000 model-visible characters.
+Tavily's cloud service connects to the target; Awesome Core never opens a
+connection to that URL. The shared explicit `httpx.AsyncClient` uses
+`trust_env=False`, no redirects or opaque retries, and only
+`AWESOME_WEB_PROXY_URL` when configured. Stable redacted failures cover
 credentials, rate/usage limits, timeout, connection, provider availability,
-and malformed responses. The registration is `non_replayable`.
+and malformed responses. Both registrations are `non_replayable`.
 
 `network.read` asks on first use in every permission mode and offers deny,
 allow once, or allow for the current Thread. Thread grants are cleared by
 Thread selection, runtime rebuild, permission-mode change, `/web revoke`,
 `/web off`, and shutdown. A Turn owns a frozen `web_requests` budget of at most
 eight; approval occurs before the quota is consumed and before HTTP begins.
-Queries leave the machine for Tavily under its published privacy policy and
-platform terms, while structured diagnostics omit query, URL, response, and
-secret text.
+Search queries and Fetch URLs leave the machine for Tavily under its published
+privacy policy and platform terms, while structured diagnostics omit query,
+URL, response, and secret text.
 
 File-changing built-ins write through the Change Journal and shared
 identity-bound filesystem primitives. Lexical containment is only admission:

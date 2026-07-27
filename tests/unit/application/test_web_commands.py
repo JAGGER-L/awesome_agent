@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from awesome_agent.application.command_results import CommandError, CommandResult
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.web_commands import (
+    TAVILY_DISCLOSURE,
     WebCommandService,
     WebRuntimeStatus,
 )
@@ -107,6 +108,13 @@ def _error(outcome: object) -> CommandError:
 def _result(outcome: object) -> CommandResult:
     assert isinstance(outcome, CommandResult)
     return outcome
+
+
+def test_tavily_disclosure_covers_search_fetch_and_policy_links() -> None:
+    assert "Web search sends the query" in TAVILY_DISCLOSURE
+    assert "Web fetch sends the requested URL" in TAVILY_DISCLOSURE
+    assert "https://www.tavily.com/privacy" in TAVILY_DISCLOSURE
+    assert "https://www.tavily.com/terms" in TAVILY_DISCLOSURE
 
 
 @pytest.mark.asyncio

@@ -48,7 +48,7 @@ capability 仍然逐次询问，因为 Core 无法推断它们的外部权限或
 5. 结果为 `ask` 时，创建一个与 Tool call 绑定的 interaction。
 
 `network.read` 是显式的矩阵例外：如果当前没有 Thread grant，它在三种模式下都返回
-`ask`。Permission mode 不能静默授权把搜索 query 发送给 Tavily。
+`ask`。Permission mode 不能静默授权把 Search query 或请求的 Fetch URL 发送给 Tavily。
 
 准入后、产生效果前，handler 会应用特定后端的检查。Filesystem handler 解析包含关系、
 link/reparse 状态、对象身份、敏感名称和受保护删除目标。`execute` 解析其实际 working
@@ -93,7 +93,7 @@ handler safety checks ------------> EFFECT or DENY
 
 对 `network.read`，安全的第一项/默认项是 **Deny**（`deny`），随后是 **Allow once**
 （`allow_once`）与 **Allow for this Thread**（`allow_thread_network`）。Thread 选项只覆盖
-后续 Web Search，不会授予其他网络 capability。
+后续 Web Search 与 Fetch 调用，不会授予其他网络 capability。
 
 “all edits”标签不包括 delete、shell、MCP 或未知 capability。Core 会把任何尝试将该决定
 用于非 write capability 的行为作为不变量违规而拒绝。
@@ -108,10 +108,11 @@ Runtime 重建、`/web revoke`、`/web off` 或 shutdown 也会清除网络 gran
 
 ## Web 网络读取
 
-启用的 `web_search` 会把 query 发送给 Tavily。审批会说明这项传输，数据按照
-[Tavily 隐私政策](https://www.tavily.com/privacy)与
-[Tavily 平台条款](https://www.tavily.com/terms)处理。搜索结果仍是不受信任的模型上下文；
-审批不会让其内容自动成为权威事实。
+启用的 `web_search` 会把 query 发送给 Tavily；`web_fetch` 会发送一个公共 HTTPS URL，
+由 Tavily 云服务提取页面，Awesome Core 不连接目标。审批会说明这项传输，query 或 URL
+按照 [Tavily 隐私政策](https://www.tavily.com/privacy)与
+[Tavily 平台条款](https://www.tavily.com/terms)处理。搜索结果和提取正文仍是不受信任的模型
+上下文；审批不会让其内容自动成为权威事实。
 
 Headless 模式下，`--allow-network` 只会把当前 headless Turn 中匹配的 `network.read`
 interaction 解析为 `allow_once`。它不能启用 Web、创建 Thread grant、批准其他 interaction，

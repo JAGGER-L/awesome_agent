@@ -41,7 +41,7 @@ it:
 | startup, Turns, direct commands, interactions, cancellation, and shutdown | [Request lifecycles](request-lifecycles.md) |
 | why Application and Agent are separate and where LangGraph belongs | [Application and Agent](application-and-agent.md) |
 | prompt sources, budgets, model adapters, Skills, Memory, and MCP | [Context, model, and extensions](context-model-and-extensions.md) |
-| tool registration, Web search/citations, approval, shell execution, and reversible changes | [Tools and changes](tools-and-changes.md) |
+| tool registration, Web Search/Fetch citations, approval, shell execution, and reversible changes | [Tools and changes](tools-and-changes.md) |
 | SQLite ownership, checkpoints, leases, reset, and crash convergence | [Storage and recovery](storage-and-recovery.md) |
 | Protocol v4, stdio bounds, Ink state, input modes, and reconciliation | [Protocol and TUI](protocol-and-tui.md) |
 | threat model, trust, isolation limits, and enforced dependency direction | [Security and dependencies](security-and-dependencies.md) |

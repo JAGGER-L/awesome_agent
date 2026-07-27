@@ -97,10 +97,12 @@ uv run python scripts/generate_protocol_fixtures.py --check
 严格 TypeScript schema/presenter，然后重新运行 Python 与 TUI fixture 测试。不要手工编辑
 生成的 JSON。
 
-Web 变更使用 fake Tavily transport/provider suite，覆盖严格请求边界、`trust_env=False`、
-显式 proxy 选择、每种稳定 HTTP failure、不自动 retry、permission choice 与 grant 撤销、
-八次请求硬 budget、non-replayable recovery、citation finalization，以及 Python/TypeScript
-round trip。Live Tavily 请求只作为显式 release gate；普通测试不得要求网络访问或真实 key。
+Web 变更使用 fake Tavily transport/provider suite，覆盖 Search/Extract 请求与 response 边界、
+公共 HTTPS 与 blocked-domain admission、24,000 字符 Fetch truncation、由 Tavily 云端而不是
+本机访问目标、`trust_env=False`、显式 proxy 选择、每种稳定 HTTP failure、不自动 retry、
+permission choice 与 grant 撤销、共享的八次请求硬 budget、non-replayable recovery、citation
+finalization，以及 Python/TypeScript round trip。Live Tavily 请求只作为显式 release gate；
+普通测试不得要求网络访问或真实 key。
 
 ### 7. 文档站
 

@@ -967,7 +967,19 @@ def _valid_command_results() -> dict[str, object]:
                     "description": "Read file contents",
                     "read_only": True,
                     "approval_required": False,
-                }
+                },
+                {
+                    "name": "web_fetch",
+                    "description": "Fetch readable content from one public HTTPS URL",
+                    "read_only": True,
+                    "approval_required": True,
+                },
+                {
+                    "name": "web_search",
+                    "description": "Search the public web for current information",
+                    "read_only": True,
+                    "approval_required": True,
+                },
             ],
         },
         _model(

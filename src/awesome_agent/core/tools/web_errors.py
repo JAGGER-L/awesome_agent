@@ -19,47 +19,47 @@ class WebProviderErrorCode(StrEnum):
 
 _ERROR_FACTS: dict[WebProviderErrorCode, tuple[str, bool]] = {
     WebProviderErrorCode.INVALID_REQUEST: (
-        "The web search provider rejected the request.",
+        "The web provider rejected the request.",
         False,
     ),
     WebProviderErrorCode.AUTHENTICATION_FAILED: (
-        "The web search credential was rejected.",
+        "The web credential was rejected.",
         False,
     ),
     WebProviderErrorCode.ACCESS_DENIED: (
-        "The web search provider denied access.",
+        "The web provider denied access.",
         False,
     ),
     WebProviderErrorCode.RATE_LIMITED: (
-        "The web search provider is temporarily rate limited.",
+        "The web provider is temporarily rate limited.",
         True,
     ),
     WebProviderErrorCode.USAGE_LIMIT_EXCEEDED: (
-        "The web search usage limit was reached.",
+        "The web usage limit was reached.",
         False,
     ),
     WebProviderErrorCode.PAYG_LIMIT_EXCEEDED: (
-        "The web search pay-as-you-go limit was reached.",
+        "The web pay-as-you-go limit was reached.",
         False,
     ),
     WebProviderErrorCode.REQUEST_REJECTED: (
-        "The web search provider rejected the request.",
+        "The web provider rejected the request.",
         False,
     ),
     WebProviderErrorCode.PROVIDER_UNAVAILABLE: (
-        "The web search provider is unavailable.",
+        "The web provider is unavailable.",
         True,
     ),
     WebProviderErrorCode.TIMEOUT: (
-        "The web search request timed out.",
+        "The web request timed out.",
         True,
     ),
     WebProviderErrorCode.CONNECTION_FAILED: (
-        "The web search provider could not be reached.",
+        "The web provider could not be reached.",
         True,
     ),
     WebProviderErrorCode.MALFORMED_RESPONSE: (
-        "The web search provider returned an invalid response.",
+        "The web provider returned an invalid response.",
         False,
     ),
 }

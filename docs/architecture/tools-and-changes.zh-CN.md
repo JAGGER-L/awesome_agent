@@ -38,7 +38,7 @@ Built-in 基线如下：
 | `write_file`、`edit_file` | `workspace.write` | 记入 journal |
 | `delete` | `workspace.delete` | 记入 journal |
 | `execute` | `shell.execute` | 仅 observation |
-| `web_search`（启用且配置有效时） | `network.read` | 无；外部且不可重放 |
+| `web_search`、`web_fetch`（启用且配置有效时） | `network.read` | 无；外部且不可重放 |
 
 Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式替换，名称形如
 `mcp.<server>.<tool>`。
@@ -52,8 +52,10 @@ Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式
 后，Executor 会严格重建每条 citation 与 output，再把 citations 原样复制到规范化 result。
 对文本 `content` 设限或截断不会丢弃这些 citations。
 
-`web_search` 会在一个 Turn 内分配稳定、按 URL 去重的 `S1...Sn` identity。Agent 序列化
-完整 result，并派生有序的 `AgentState.citations` 快照，使两者都能经过 checkpoint recovery。
+`web_search` 与 `web_fetch` 会在一个 Turn 内分配稳定、按 URL 去重的 `S1...Sn` identity。
+Fetch hard admission 只接受一个公共 HTTPS URL，拒绝配置的 blocked hostname 及其子域，
+随后把目标连接委托给 Tavily，而不是由 Core 打开。Agent 序列化完整 result，并派生有序的
+`AgentState.citations` 快照，使两者都能经过 checkpoint recovery。
 Finalization 校验模型使用的 `[[S1]]` marker：未知 ID 会产生 warning 且不生成链接；使用 Web
 但没有有效引用时，会附加有界且确定性的 Sources 区域并记录 warning。Conversation 将同一
 来源随 assistant entry 持久化，Protocol v4 再把它们传给 TUI、headless JSON v2 与后续导出。
@@ -98,8 +100,8 @@ admission 与 capability policy 回答不同问题：admission 判断这一项�
 
 Replay safety 是注册 metadata，而不是由恢复流程推断的属性。只有受管本地语义能够证明
 重复调用安全的 built-in 才可标记为 replayable。MCP 调用以及其它外部或未分类作用均为
-non-replayable。`web_search` 被明确标为 non-replayable，因此 dispatch 后崩溃会默认 Abort，
-不会重复一次可能计费或已被外部观察到的请求。恢复会在当前 Runtime Registry 中查找同名工具，并消费该注册项的
+non-replayable。`web_search` 与 `web_fetch` 都被明确标为 non-replayable，因此 dispatch 后
+崩溃会默认 Abort，不会重复一次可能计费或已被外部观察到的请求。恢复会在当前 Runtime Registry 中查找同名工具，并消费该注册项的
 metadata。Replayable 工作可以继续；non-replayable、metadata 缺失或未知时会 fail closed，
 进入恢复 interaction，绝不自动重试。用户可以显式选择 Retry，而不是默认的 Abort。因此，
 同名工具的契约变更必须按 checkpoint compatibility 变更管理。Executor 与恢复流程都不

@@ -29,7 +29,7 @@ registered model validation -> lexical hard checks -> permission policy
 Catalog 始终包含四个读取工具和两个 Skill 支持工具。正常本地 composition 还包含文件修改和
 shell 工具。只有启用 Local Memory 时才会出现 Local Memory 工具，有效 MCP catalog 会添加
 namespaced tool。动态 MCP 行为在 [MCP](../extensions/mcp.zh-CN.md)中单独说明。只有 user Web
-config 已启用且存在有效 `TAVILY_API_KEY` 时，才会出现 `web_search`。
+config 已启用且存在有效 `TAVILY_API_KEY` 时，才会出现 `web_search` 与 `web_fetch`。
 
 ## 通用请求与结果契约
 
@@ -55,15 +55,15 @@ JSON Schema，而不是这一静态 model 基类。
 稳定的内置 error code 为 `invalid_arguments`、`not_found`、`workspace_not_trusted`、
 `workspace_escape`、`permission_denied`、`conflict`、`timeout`、`state_unavailable`、
 `execution_failed`、`uncertain_outcome`、`memory_disabled`、`memory_conflict`、
-`memory_rejected` 和 `cancelled`。Web search 还使用 `web_request_rejected`、
-`web_credential_rejected`、`web_rate_limited`、`web_quota_exhausted`、
-`web_provider_unavailable`、`web_timeout`、`web_connection_failed` 与
-`web_malformed_response`。当另一进程持有 Local Memory mutation 锁时，
+`memory_rejected` 和 `cancelled`。Web 工具还使用 `web_request_rejected`、
+`web_request_budget_exhausted`、`web_credential_rejected`、`web_rate_limited`、
+`web_quota_exhausted`、`web_provider_unavailable`、`web_timeout`、
+`web_connection_failed` 与 `web_malformed_response`。当另一进程持有 Local Memory mutation 锁时，
 `timeout` 可重试；`state_unavailable` 表示无法安全使用 lock sidecar 或平台锁边界，
 不可重试。`uncertain_outcome` 主要用于 MCP 边界：它表示外部副作用可能已经发生，
 绝不能自动重放。
 
-普通 handler 的外层期限是 30 秒。`execute` 提供下面说明的动态期限；`web_search` 使用
+普通 handler 的外层期限是 30 秒。`execute` 提供下面说明的动态期限；两个 Web 工具都使用
 20 秒 tool deadline，内部 HTTP client timeout 为 15 秒。有界清理后会继续传播取消；取消
 不会转换为普通错误结果。
 
@@ -255,11 +255,14 @@ Execute observation 会在 runner 启动前立即记录。参数错误、policy 
 不会生成 observation；spawn/backend failure、timeout 和取消则会保守记录不可逆尝试可能
 已经开始。每次调用仍然最多生成一个 terminal tool event 和一条 ToolActivity。
 
-## 公共 Web search：`web_search`
+## 公共 Web 工具
 
 Web 默认关闭。设置 `TAVILY_API_KEY`、保持 provider 为 `tavily`，再运行 `/web on`；
 Workspace config 可以降低每 Turn budget 或添加 blocked domain，但不能启用 Web 或选择凭据。
-该工具只使用 Tavily Search API：
+
+### `web_search`
+
+该工具向 Tavily 提交 basic Search：
 
 ```text
 POST https://api.tavily.com/search
@@ -275,22 +278,50 @@ raw content、image 或 favicon。Response 限制为 1 MiB 和最多十条严格
 JSON 限制为 28,000 个字符。不跟随 redirect，也没有不透明 automatic retry。HTTP 429、5xx、
 timeout、连接失败、凭据失败、用量限制与 malformed body 都映射成上文稳定且脱敏的 error code。
 
+### `web_fetch`
+
+该工具要求 Tavily 云服务从一个 URL 提取可读内容：
+
+```text
+POST https://api.tavily.com/extract
+```
+
+| 参数 | 类型 | 默认值 | 限制/语义 |
+| --- | --- | --- | --- |
+| `url` | string | 必填 | 一个绝对公共 HTTPS URL，最多 8,000 个字符；不得包含用户信息、fragment、特殊用途/私有 host，path 也不能指向 PDF 或其他已识别二进制格式 |
+
+Awesome 把该 URL 发送给 Tavily，并选择 basic Markdown extraction。由 Tavily 而不是
+Awesome Core 连接目标网站。规范化 response 包含一个严格的公共 HTTPS URL 和最多 24,000 个
+字符的提取正文。工具返回包含 `source_id`、`url`、`content`、`truncated` 的 JSON，以及
+`content_chars`、`truncated` metadata 和一条标题为
+`Fetched content from <lowercase-hostname>` 的 citation。配置的
+`blocked_domains` 会在审批前拒绝完全匹配的 URL hostname 及其子域。
+
+它有意不成为浏览器或通用下载器：不提供 Cookie、登录、JavaScript、PDF、任意二进制、
+本地 Fetch、持久缓存或 backend fallback。Awesome 不会在本机跟随目标站 redirect，也不会
+静默重试结果不确定的请求。
+
+### 共享网络、权限与引用契约
+
 可复用 async HTTP client 设置 `trust_env=False`，使用 Awesome 显式 User-Agent，并忽略环境
 proxy 变量。可选代理只能通过 `AWESOME_WEB_PROXY_URL`（或对应 Awesome secret）配置；只接受
 不嵌入凭据的 `http`/`https` proxy URL。
 
 `network.read` 在每种 permission mode 下首次使用都会 ASK。用户可以选择默认 deny、allow
-once 或当前 Thread allow。审批完成后，请求才会消耗冻结 `web_requests` budget 的一个单位；
-默认值与硬上限均为每 Turn 八次，Workspace config 只能降低它。切换 Thread、重建 runtime、
-更改 permission mode、运行 `/web revoke` 或 `/web off`，以及退出时都会清除 Thread grant。
-`web_search` 是 `non_replayable`，因此不确定崩溃后的 recovery 默认 Abort。
+once 或当前 Thread allow。审批完成后，任一工具才会消耗同一份冻结 `web_requests` budget
+的一个单位；Search 与 Fetch 共享默认值/硬上限均为每 Turn 八次的预算，Workspace config
+只能降低它。切换 Thread、重建 runtime、更改 permission mode、运行 `/web revoke` 或
+`/web off`，以及退出时都会清除 Thread grant。两个工具都是 `non_replayable`，因此不确定
+崩溃后的 recovery 默认 Abort。
 
-每条结果获得稳定的 Turn-local source ID（`S1`、`S2`……），并按 URL 去重。模型使用
-`[[S1]]` 引用。未知 ID 只显示为文本而不生成链接，并产生 warning。Web 返回来源但最终回答
-没有使用任何来源时，finalization 会附加有界 Sources 区域并发出 warning。同一 citations
-会贯穿 ToolResult、Agent state/checkpoint、Conversation、Protocol v4、TUI 与 headless JSON v2。
+每条 Search result 和 Fetch response 都会获得稳定的 Turn-local source ID（`S1`、`S2`……），
+并按 URL 去重。模型使用 `[[S1]]` 引用。未知 ID 只显示为文本而不生成链接，并产生 warning。
+Web 返回来源但最终回答没有使用任何来源时，finalization 会附加有界 Sources 区域并发出
+warning。同一 citations 会贯穿 ToolResult、Agent state/checkpoint、Conversation、Protocol
+v4、TUI 与 headless JSON v2。
 
-Search query 会发送给 Tavily，并依据 [Tavily 隐私政策](https://www.tavily.com/privacy)与
+Search query 或请求的 Fetch URL 会发送给 Tavily，并依据
+[Tavily 隐私政策](https://www.tavily.com/privacy)与
 [Tavily 平台条款](https://www.tavily.com/terms)处理。结构化诊断不会记录 query、result URL、
 result body 或凭据。
 

@@ -10,12 +10,17 @@ import httpx
 from pydantic import SecretStr, ValidationError
 
 from awesome_agent.core.tools.web_contracts import (
+    MAX_WEB_FETCH_CONTENT_CHARACTERS,
+    WebFetchRequest,
+    WebFetchResponse,
     WebSearchRequest,
     WebSearchResponse,
     WebSearchResult,
+    web_fetch_urls_equivalent,
 )
 from awesome_agent.core.tools.web_errors import WebProviderError, WebProviderErrorCode
 
+TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 MAX_TAVILY_RESPONSE_BYTES = 1024 * 1024
 DEFAULT_TAVILY_TIMEOUT_SECONDS = 15.0
@@ -24,8 +29,8 @@ DEFAULT_WEB_USER_AGENT = "awesome-agent"
 type HttpClientFactory = Callable[..., httpx.AsyncClient]
 
 
-class TavilySearchClient:
-    """A narrow Tavily Search adapter with a provider-neutral result contract."""
+class TavilyWebClient:
+    """A narrow Tavily Web adapter with provider-neutral result contracts."""
 
     def __init__(
         self,
@@ -103,16 +108,32 @@ class TavilySearchClient:
             "auto_parameters": False,
             "exclude_domains": list(request.blocked_domains),
         }
+        body = await self._post_json(TAVILY_SEARCH_URL, payload)
+        return _parse_search_response(body, requested=request.max_results)
+
+    async def fetch(self, request: WebFetchRequest) -> WebFetchResponse:
+        payload: dict[str, object] = {
+            "urls": request.url,
+            "extract_depth": "basic",
+            "format": "markdown",
+            "include_images": False,
+            "include_favicon": False,
+            "include_usage": False,
+        }
+        body = await self._post_json(TAVILY_EXTRACT_URL, payload)
+        return _parse_extract_response(body, request=request)
+
+    async def _post_json(self, url: str, payload: dict[str, object]) -> bytes:
         try:
             async with self._client.stream(
                 "POST",
-                TAVILY_SEARCH_URL,
+                url,
                 json=payload,
                 follow_redirects=False,
             ) as response:
                 if response.status_code != 200:
                     raise _status_error(response.status_code)
-                body = await _read_bounded_json_body(response)
+                return await _read_bounded_json_body(response)
         except WebProviderError:
             raise
         except httpx.TimeoutException:
@@ -123,8 +144,6 @@ class TavilySearchClient:
             raise WebProviderError(WebProviderErrorCode.CONNECTION_FAILED) from None
         except Exception:
             raise WebProviderError(WebProviderErrorCode.PROVIDER_UNAVAILABLE) from None
-
-        return _parse_search_response(body, requested=request.max_results)
 
     async def aclose(self) -> None:
         if self._closed or not self._owns_client:
@@ -139,15 +158,15 @@ class TavilySearchClient:
 
 
 @asynccontextmanager
-async def managed_tavily_search_client(
+async def managed_tavily_web_client(
     *,
     api_key: SecretStr,
     proxy_url: SecretStr | None = None,
     timeout_seconds: float = DEFAULT_TAVILY_TIMEOUT_SECONDS,
     user_agent: str = DEFAULT_WEB_USER_AGENT,
     client_factory: HttpClientFactory = httpx.AsyncClient,
-) -> AsyncIterator[TavilySearchClient]:
-    client = TavilySearchClient(
+) -> AsyncIterator[TavilyWebClient]:
+    client = TavilyWebClient(
         api_key=api_key,
         proxy_url=proxy_url,
         timeout_seconds=timeout_seconds,
@@ -274,11 +293,72 @@ def _parse_search_response(body: bytes, *, requested: int) -> WebSearchResponse:
         raise WebProviderError(WebProviderErrorCode.MALFORMED_RESPONSE) from None
 
 
+def _parse_extract_response(
+    body: bytes,
+    *,
+    request: WebFetchRequest,
+) -> WebFetchResponse:
+    try:
+        decoded = body.decode("utf-8", errors="strict")
+        payload: Any = json.loads(decoded)
+        if not isinstance(payload, dict):
+            raise TypeError
+        raw_results = payload.get("results")
+        failed_results = payload.get("failed_results")
+        if not isinstance(raw_results, list) or not isinstance(failed_results, list):
+            raise TypeError
+
+        if not raw_results:
+            if len(failed_results) != 1:
+                raise TypeError
+            failed = failed_results[0]
+            if not isinstance(failed, dict):
+                raise TypeError
+            failed_url = failed.get("url")
+            failed_error = failed.get("error")
+            if (
+                not isinstance(failed_url, str)
+                or not isinstance(failed_error, str)
+                or not web_fetch_urls_equivalent(request.url, failed_url)
+            ):
+                raise TypeError
+            try:
+                failed_error.encode("utf-8", errors="strict")
+            except UnicodeEncodeError as error:
+                raise TypeError from error
+            raise WebProviderError(WebProviderErrorCode.REQUEST_REJECTED)
+
+        if len(raw_results) != 1 or failed_results:
+            raise TypeError
+        raw_result = raw_results[0]
+        if not isinstance(raw_result, dict):
+            raise TypeError
+        result_url = raw_result.get("url")
+        raw_content = raw_result.get("raw_content")
+        if (
+            not isinstance(result_url, str)
+            or not isinstance(raw_content, str)
+            or not web_fetch_urls_equivalent(request.url, result_url)
+        ):
+            raise TypeError
+        truncated = len(raw_content) > MAX_WEB_FETCH_CONTENT_CHARACTERS
+        return WebFetchResponse(
+            url=request.url,
+            content=raw_content[:MAX_WEB_FETCH_CONTENT_CHARACTERS],
+            truncated=truncated,
+        )
+    except WebProviderError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValidationError):
+        raise WebProviderError(WebProviderErrorCode.MALFORMED_RESPONSE) from None
+
+
 __all__ = [
     "DEFAULT_TAVILY_TIMEOUT_SECONDS",
     "MAX_TAVILY_RESPONSE_BYTES",
+    "TAVILY_EXTRACT_URL",
     "TAVILY_SEARCH_URL",
-    "TavilySearchClient",
-    "managed_tavily_search_client",
+    "TavilyWebClient",
+    "managed_tavily_web_client",
     "validate_web_proxy_url",
 ]

@@ -228,24 +228,26 @@ probe。Executor 对所有工具统一应用这一条顺序，不按具体工具
 
 Core 中提供商中立的 `Citation(id, title, url)` 值会沿成功工具数据从
 `ToolOutput.citations` 进入 `ToolResult.citations`；文本设限不会移除这个 tuple。Agent
-随后把完整 result 序列化到 `AgentState.tool_results`，从而在 checkpoint 中保留 citations，
-而不新增第二个顶层 citations channel。Agent 现在派生有序的 `AgentState.citations` 快照，
-Conversation record、Protocol v4、TUI 与 headless output 会携带同一来源，不提供 v3
-compatibility adapter。
+把完整 result 序列化到 `AgentState.tool_results`，并派生有序的 `AgentState.citations`
+快照，因此两者都能经过 checkpoint recovery。Conversation record、Protocol v4、TUI 与
+headless output 会携带同一来源，不提供 compatibility adapter。
 
-可选 Web search 是普通 registered tool，不是第二套执行框架。只有 user config 设置
-`web.enabled: true` 且能解析 `TAVILY_API_KEY` 时，它才会出现。提供商中立的 `web_search`
-handler 通过可复用 `TavilySearchClient` 向 `POST https://api.tavily.com/search` 发送有界
-basic search（最多十条结果）。显式 `httpx.AsyncClient` 使用 `trust_env=False`，不跟随
-redirect，也不进行不透明 retry；只有配置后才使用 `AWESOME_WEB_PROXY_URL`。凭据、频率/
-用量限制、timeout、连接、provider availability 与 malformed response 都映射成稳定且脱敏的
-failure。该注册项是 `non_replayable`。
+可选 Web 能力由两个普通 registered tool 组成，不是第二套执行框架。只有 user config 设置
+`web.enabled: true` 且能解析 `TAVILY_API_KEY` 时，它们才会出现。提供商中立的 `web_search`
+handler 向 `POST https://api.tavily.com/search` 发送有界 basic Search，最多返回十条结果。
+`web_fetch` 接受一个公共 HTTPS URL，通过 `POST https://api.tavily.com/extract` 请求 basic
+Markdown extraction，并把模型可见正文限制为 24,000 个字符。由 Tavily 云服务连接目标；
+Awesome Core 绝不打开到该 URL 的连接。共享的显式 `httpx.AsyncClient` 使用
+`trust_env=False`，不跟随 redirect，也不进行不透明 retry；只有配置后才使用
+`AWESOME_WEB_PROXY_URL`。凭据、频率/用量限制、timeout、连接、provider availability 与
+malformed response 都映射成稳定且脱敏的 failure。两个注册项都是 `non_replayable`。
 
 `network.read` 在每种 permission mode 下首次使用都会 ASK，并提供 deny、allow once 或当前
 Thread allow。选择其他 Thread、重建 runtime、更改 permission mode、运行 `/web revoke` 或
 `/web off`，以及 shutdown 都会清除 Thread grant。每个 Turn 冻结最多八次的
-`web_requests` budget；先完成审批，再消耗 quota 并开始 HTTP。Query 会依据 Tavily 公布的
-隐私政策与平台条款离开本机，而结构化诊断不会记录 query、URL、response 或 secret 正文。
+`web_requests` budget；先完成审批，再消耗 quota 并开始 HTTP。Search query 与 Fetch URL
+会依据 Tavily 公布的隐私政策与平台条款离开本机，而结构化诊断不会记录 query、URL、
+response 或 secret 正文。
 
 改变文件的 built-in 会通过 Change Journal 和共享的 identity-bound filesystem primitive
 写入。词法包含只负责准入：实际 mutation 会固定 workspace 与 parent directory chain，

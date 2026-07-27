@@ -199,20 +199,24 @@ running. A deliberately daemonized POSIX process can leave the owned group.
 ## Web network boundary
 
 Web is user-enabled and defaults off. Only a valid `TAVILY_API_KEY` plus
-`web.enabled: true` publishes `web_search`; Workspace configuration cannot turn
-it on or select credentials. The provider-neutral handler uses one reusable
+`web.enabled: true` publishes `web_search` and `web_fetch`; Workspace
+configuration cannot turn it on or select credentials. The provider-neutral handlers use one reusable
 Tavily adapter and an explicit `httpx.AsyncClient` with `trust_env=False`,
 redirects disabled, a bounded response, and no opaque retry. Ambient proxy
 variables are ignored; only validated `AWESOME_WEB_PROXY_URL` or its selected
 Awesome secret is accepted.
 
-The destination is fixed at `https://api.tavily.com/search`; the query and
-blocked-domain list leave the process for Tavily. Enabling and first approval
-disclose the [Tavily Privacy Policy](https://www.tavily.com/privacy) and
-[Platform Terms](https://www.tavily.com/terms). The diagnostics allowlist never
-includes query, URL, response, or credential text. Strict HTTPS citations are
-untrusted display data and become links only when their ID matches the Turn's
-validated source catalog.
+Awesome contacts only Tavily's fixed `https://api.tavily.com/search` and
+`https://api.tavily.com/extract` endpoints. Search sends its query and exclusion
+list; Fetch sends one strictly validated public HTTPS URL. Tavily's cloud
+service connects to that target and returns basic Markdown, while Awesome Core
+never connects to it. Fetch has no browser, Cookie, login, JavaScript, PDF,
+binary, local-fetch, cache, or backend-fallback surface. Enabling and first
+approval disclose the [Tavily Privacy Policy](https://www.tavily.com/privacy)
+and [Platform Terms](https://www.tavily.com/terms). The diagnostics allowlist
+never includes query, URL, response, or credential text. Strict HTTPS citations
+are untrusted display data and become links only when their ID matches the
+Turn's validated source catalog.
 
 ## Extension and context boundary
 
@@ -304,7 +308,7 @@ Awesome keeps a small explicit production set:
 | Dependency | Owned use |
 | --- | --- |
 | `pydantic` | typed cross-boundary models and validation; strictness is contract-specific |
-| `httpx` | one bounded async Tavily Search client with explicit proxy ownership |
+| `httpx` | one bounded async Tavily Web client with explicit proxy ownership |
 | `langgraph`, `langgraph-checkpoint-sqlite` | one Agent graph and its checkpoint saver |
 | `openai` | DeepSeek/Kimi-compatible provider clients behind adapters |
 | `mcp` | stdio MCP client behind Extensions |

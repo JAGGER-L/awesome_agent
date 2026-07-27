@@ -5,14 +5,15 @@ small supported configuration surface. It emphasizes safe workflows and
 precedence; the complete schema, defaults, and field constraints live in the
 [configuration reference](../reference/configuration.md).
 
-Web search is independent from the model Provider. It defaults off, always
+Web access is independent from the model Provider. It defaults off, always
 reads the Tavily credential from `TAVILY_API_KEY`, and ignores ambient proxy
 variables because its async HTTP client uses `trust_env=False`. Set an explicit
 proxy only with `AWESOME_WEB_PROXY_URL` (or its selected Awesome secret), then
 use `/web on|off|status|revoke`; do not hand-edit Workspace config to enable
-it. Search queries are sent to Tavily under its
+it. Search queries and requested Fetch URLs are sent to Tavily under its
 [Privacy Policy](https://www.tavily.com/privacy) and
-[Platform Terms](https://www.tavily.com/terms).
+[Platform Terms](https://www.tavily.com/terms). Tavily's cloud service performs
+Fetch extraction; Awesome Core does not connect to the requested target.
 
 ## Prefer Commands for Interactive Choices
 

@@ -46,7 +46,7 @@ The built-in baseline is:
 | `write_file`, `edit_file` | `workspace.write` | journaled |
 | `delete` | `workspace.delete` | journaled |
 | `execute` | `shell.execute` | observation only |
-| `web_search` (when enabled and configured) | `network.read` | none; external and non-replayable |
+| `web_search`, `web_fetch` (when enabled and configured) | `network.read` | none; external and non-replayable |
 
 The registry is extensible; eight is not a fixed maximum. MCP namespaces are
 replaced atomically with names such as `mcp.<server>.<tool>`.
@@ -63,8 +63,11 @@ empty. On a successful handler return, the Executor strictly reconstructs each
 citation and the output, then copies the citations into the normalized result.
 Bounding or truncating the textual `content` does not discard those citations.
 
-`web_search` allocates stable, URL-deduplicated `S1...Sn` identities within a
-Turn. Agent serializes the complete result and derives the ordered
+`web_search` and `web_fetch` allocate stable, URL-deduplicated `S1...Sn`
+identities within a Turn. Fetch hard admission accepts one public HTTPS URL,
+rejects configured blocked hostnames and their subdomains, and then delegates
+the target connection to Tavily rather than opening it from Core. Agent
+serializes the complete result and derives the ordered
 `AgentState.citations` snapshot, so both survive checkpoint recovery.
 Finalization validates model markers written as `[[S1]]`: unknown IDs produce
 a warning and are not linked; when Web was used but no valid source is cited,
@@ -120,9 +123,9 @@ summaries retain argument names, not raw argument values.
 Replay safety is registration metadata, not a property inferred by recovery.
 Only a built-in whose managed local semantics prove that a repeated call is
 safe may be marked replayable. MCP calls and other external or unclassified
-effects are non-replayable. `web_search` is explicitly non-replayable, so a
-crash after dispatch defaults to Abort instead of repeating a paid or
-externally observed request. Recovery looks up the same name in the current
+effects are non-replayable. Both `web_search` and `web_fetch` are explicitly
+non-replayable, so a crash after dispatch defaults to Abort instead of
+repeating a paid or externally observed request. Recovery looks up the same name in the current
 Runtime Registry and consumes that registration's metadata. Replayable work may
 resume; non-replayable, missing, or unknown metadata fails closed into a
 recovery interaction and is never retried automatically. The user may

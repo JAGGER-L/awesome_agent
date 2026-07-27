@@ -25,9 +25,9 @@ Awesome currently provides:
 - independently optional local Memory and Mem0 Cloud;
 - bundled, user, and trusted Workspace Skills;
 - configured MCP stdio servers with validated, generation-bound catalogs;
-- opt-in structured Tavily Web search through the same Registry, Policy, and
-  Executor, with per-Turn budgets, Thread-scoped network consent, and durable
-  citations;
+- opt-in structured Tavily Web Search and Fetch through the same Registry,
+  Policy, and Executor, with per-Turn budgets, Thread-scoped network consent,
+  and durable citations;
 - a versioned Protocol v4 boundary between Python Core and the Ink TUI;
 - a searchable GitHub Pages documentation site generated from this directory.
 
@@ -93,9 +93,10 @@ capability negotiation, context limits, and credential validation.
 
 ### Search tools
 
-**Current baseline:** opt-in Tavily Web search already uses the common tool,
-permission, budget, recovery, and citation contracts described in the reference
-documentation.
+**Current baseline:** opt-in Tavily Web Search and Fetch already use the common
+tool, permission, budget, recovery, and citation contracts described in the
+reference documentation. Fetch is deliberately limited to Tavily-cloud basic
+Markdown extraction for one public HTTPS URL.
 
 **User need beyond the baseline:** search quality and source selection may need
 to evolve as real coding and documentation workflows expose concrete gaps.

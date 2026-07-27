@@ -10,32 +10,40 @@ import pytest
 from pydantic import SecretStr
 
 from awesome_agent.web import (
-    TavilySearchClient,
+    MAX_WEB_FETCH_CONTENT_CHARACTERS,
+    TavilyWebClient,
+    WebFetchRequest,
     WebProviderError,
     WebProviderErrorCode,
     WebSearchRequest,
-    managed_tavily_search_client,
+    managed_tavily_web_client,
 )
 from awesome_agent.web.tavily import (
     MAX_TAVILY_RESPONSE_BYTES,
+    TAVILY_EXTRACT_URL,
     TAVILY_SEARCH_URL,
     validate_web_proxy_url,
 )
 
 _KEY = "test-tavily-key"
 _QUERY = "sensitive search query"
+_FETCH_URL = "https://example.com/article"
 _PROXY = "https://proxy-secret.example:8443"
 
 
 def _json_response(payload: object, *, status: int = 200) -> httpx.Response:
-    return httpx.Response(status, json=payload)
+    return httpx.Response(
+        status,
+        content=json.dumps(payload, ensure_ascii=True).encode("ascii"),
+        headers={"content-type": "application/json"},
+    )
 
 
 def _client(
     handler: Callable[[httpx.Request], httpx.Response],
     *,
     proxy: bool = False,
-) -> tuple[TavilySearchClient, dict[str, Any]]:
+) -> tuple[TavilyWebClient, dict[str, Any]]:
     captured: dict[str, Any] = {}
 
     def factory(**kwargs: Any) -> httpx.AsyncClient:
@@ -45,7 +53,7 @@ def _client(
         kwargs["transport"] = httpx.MockTransport(handler)
         return httpx.AsyncClient(**kwargs)
 
-    adapter = TavilySearchClient(
+    adapter = TavilyWebClient(
         api_key=SecretStr(_KEY),
         proxy_url=SecretStr(_PROXY) if proxy else None,
         user_agent="awesome-agent/test",
@@ -126,6 +134,199 @@ async def test_search_uses_fixed_bounded_basic_request_and_explicit_client() -> 
         },
     ]
     assert response.truncated is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_uses_fixed_bounded_extract_request() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _json_response(
+            {
+                "results": [
+                    {
+                        "url": _FETCH_URL,
+                        "raw_content": "# Extracted\n\nProvider-neutral content.",
+                        "images": [],
+                    }
+                ],
+                "failed_results": [],
+                "request_id": "provider-only-id",
+            }
+        )
+
+    adapter, captured = _client(handler, proxy=True)
+    response = await adapter.fetch(WebFetchRequest(url=_FETCH_URL))
+    await adapter.aclose()
+
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == TAVILY_EXTRACT_URL
+    assert json.loads(request.content) == {
+        "urls": _FETCH_URL,
+        "extract_depth": "basic",
+        "format": "markdown",
+        "include_images": False,
+        "include_favicon": False,
+        "include_usage": False,
+    }
+    assert captured["trust_env"] is False
+    assert captured["follow_redirects"] is False
+    assert response.model_dump() == {
+        "url": _FETCH_URL,
+        "content": "# Extracted\n\nProvider-neutral content.",
+        "truncated": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_and_fetch_share_one_http_client() -> None:
+    factory_calls = 0
+    requested_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if str(request.url) == TAVILY_SEARCH_URL:
+            return _json_response({"results": []})
+        return _json_response(
+            {
+                "results": [{"url": _FETCH_URL, "raw_content": "content"}],
+                "failed_results": [],
+            }
+        )
+
+    def factory(**kwargs: Any) -> httpx.AsyncClient:
+        nonlocal factory_calls
+        factory_calls += 1
+        kwargs = dict(kwargs)
+        kwargs.pop("proxy", None)
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return httpx.AsyncClient(**kwargs)
+
+    client = TavilyWebClient(
+        api_key=SecretStr(_KEY),
+        client_factory=factory,
+    )
+    await client.search(WebSearchRequest(query="query"))
+    await client.fetch(WebFetchRequest(url=_FETCH_URL))
+    await client.aclose()
+
+    assert factory_calls == 1
+    assert requested_urls == [TAVILY_SEARCH_URL, TAVILY_EXTRACT_URL]
+
+
+@pytest.mark.asyncio
+async def test_fetch_requires_equivalent_result_url_and_truncates_content() -> None:
+    requested_url = "https://EXAMPLE.com:443/%7earticle"
+    content = "x" * (MAX_WEB_FETCH_CONTENT_CHARACTERS + 1)
+    adapter, _ = _client(
+        lambda request: _json_response(
+            {
+                "results": [
+                    {
+                        "url": "https://example.com/~article",
+                        "raw_content": content,
+                    }
+                ],
+                "failed_results": [],
+            }
+        )
+    )
+
+    response = await adapter.fetch(WebFetchRequest(url=requested_url))
+    await adapter.aclose()
+
+    assert response.url == requested_url
+    assert response.content == content[:MAX_WEB_FETCH_CONTENT_CHARACTERS]
+    assert response.truncated is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_failed_only_response_maps_to_redacted_rejection() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _json_response(
+            {
+                "results": [],
+                "failed_results": [
+                    {
+                        "url": _FETCH_URL,
+                        "error": f"failed {_FETCH_URL} {_KEY} {_PROXY}",
+                    }
+                ],
+            }
+        )
+
+    adapter, _ = _client(handler, proxy=True)
+    with pytest.raises(WebProviderError) as captured:
+        await adapter.fetch(WebFetchRequest(url=_FETCH_URL))
+    await adapter.aclose()
+
+    assert calls == 1
+    assert captured.value.code is WebProviderErrorCode.REQUEST_REJECTED
+    _assert_redacted(captured.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"results": [], "failed_results": []},
+        {
+            "results": [{"url": _FETCH_URL, "raw_content": "content"}],
+            "failed_results": [{"url": _FETCH_URL, "error": "failed"}],
+        },
+        {
+            "results": [
+                {"url": _FETCH_URL, "raw_content": "one"},
+                {"url": _FETCH_URL, "raw_content": "two"},
+            ],
+            "failed_results": [],
+        },
+        {
+            "results": [{"url": "https://other.example.com", "raw_content": "content"}],
+            "failed_results": [],
+        },
+        {
+            "results": [{"url": _FETCH_URL, "raw_content": 42}],
+            "failed_results": [],
+        },
+        {
+            "results": [{"url": _FETCH_URL, "raw_content": "   "}],
+            "failed_results": [],
+        },
+        {
+            "results": [{"url": _FETCH_URL, "raw_content": "\ud800"}],
+            "failed_results": [],
+        },
+        {
+            "results": [],
+            "failed_results": [{"url": _FETCH_URL, "error": 42}],
+        },
+        {
+            "results": [],
+            "failed_results": [{"url": _FETCH_URL, "error": "\ud800"}],
+        },
+        {
+            "results": [],
+            "failed_results": [{"url": "https://other.example.com", "error": "failed"}],
+        },
+    ],
+)
+async def test_fetch_malformed_responses_are_rejected(payload: object) -> None:
+    adapter, _ = _client(lambda request: _json_response(payload))
+
+    with pytest.raises(WebProviderError) as captured:
+        await adapter.fetch(WebFetchRequest(url=_FETCH_URL))
+    await adapter.aclose()
+
+    assert captured.value.code is WebProviderErrorCode.MALFORMED_RESPONSE
+    _assert_redacted(captured.value)
 
 
 @pytest.mark.asyncio
@@ -283,11 +484,11 @@ async def test_result_count_is_capped_even_if_provider_returns_more() -> None:
 
 def test_invalid_secrets_fail_without_echoing_values() -> None:
     with pytest.raises(ValueError) as captured:
-        TavilySearchClient(api_key=SecretStr(f" {_KEY}"))
+        TavilyWebClient(api_key=SecretStr(f" {_KEY}"))
     assert _KEY not in str(captured.value)
 
     with pytest.raises(ValueError) as captured:
-        TavilySearchClient(
+        TavilyWebClient(
             api_key=SecretStr(_KEY),
             proxy_url=SecretStr(f" {_PROXY}"),
         )
@@ -297,12 +498,19 @@ def test_invalid_secrets_fail_without_echoing_values() -> None:
         raise RuntimeError(f"{_KEY} {_PROXY} {kwargs!r}")
 
     with pytest.raises(ValueError) as captured:
-        TavilySearchClient(
+        TavilyWebClient(
             api_key=SecretStr(_KEY),
             proxy_url=SecretStr(_PROXY),
             client_factory=failing_factory,
         )
     _assert_redacted(captured.value)
+
+
+def test_search_only_client_names_are_not_exported() -> None:
+    import awesome_agent.web as web
+
+    assert not hasattr(web, "TavilySearchClient")
+    assert not hasattr(web, "managed_tavily_search_client")
 
 
 def test_only_transient_provider_errors_are_retryable() -> None:
@@ -316,6 +524,10 @@ def test_only_transient_provider_errors_are_retryable() -> None:
     assert {
         code for code in WebProviderErrorCode if WebProviderError(code).retryable
     } == retryable
+    assert all(
+        "web search" not in WebProviderError(code).message.lower()
+        for code in WebProviderErrorCode
+    )
 
 
 @pytest.mark.parametrize(
@@ -351,7 +563,7 @@ async def test_managed_client_closes_its_http_resource_exactly_once() -> None:
         kwargs["transport"] = transport
         return httpx.AsyncClient(**kwargs)
 
-    async with managed_tavily_search_client(
+    async with managed_tavily_web_client(
         api_key=SecretStr(_KEY),
         client_factory=factory,
     ) as client:
@@ -365,7 +577,14 @@ async def test_managed_client_closes_its_http_resource_exactly_once() -> None:
 
 def _assert_redacted(error: BaseException) -> None:
     rendered = "".join(traceback.format_exception(error))
-    for secret in (_QUERY, _KEY, _PROXY, TAVILY_SEARCH_URL):
+    for secret in (
+        _QUERY,
+        _FETCH_URL,
+        _KEY,
+        _PROXY,
+        TAVILY_EXTRACT_URL,
+        TAVILY_SEARCH_URL,
+    ):
         assert secret not in rendered
 
 

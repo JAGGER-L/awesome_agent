@@ -345,6 +345,18 @@
               "description": "Read file contents",
               "name": "read_file",
               "read_only": true
+            },
+            {
+              "approval_required": true,
+              "description": "Fetch readable content from one public HTTPS URL",
+              "name": "web_fetch",
+              "read_only": true
+            },
+            {
+              "approval_required": true,
+              "description": "Search the public web for current information",
+              "name": "web_search",
+              "read_only": true
             }
           ]
         }
@@ -357,7 +369,7 @@
         "payload": {
           "available": true,
           "credential_configured": true,
-          "disclosure": "Web search sends the query to Tavily. Tavily processes that data under https://www.tavily.com/privacy and https://www.tavily.com/terms.",
+          "disclosure": "Web search sends the query, and Web fetch sends the requested URL, to Tavily. Tavily processes that data under https://www.tavily.com/privacy and https://www.tavily.com/terms.",
           "enabled": true,
           "kind": "web_status",
           "provider": "tavily",

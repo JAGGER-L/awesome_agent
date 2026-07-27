@@ -22,8 +22,8 @@ Awesome 目前提供：
 - 彼此独立且可选的本地 Memory 与 Mem0 Cloud；
 - Bundled、User 和受信任 Workspace 三类 Skills；
 - 使用经过校验且绑定 generation 的 catalog 的 MCP stdio 服务器；
-- 通过同一 Registry、Policy 与 Executor 提供可选的结构化 Tavily Web Search，并具有
-  每 Turn 预算、Thread 范围的联网同意和可持久引用；
+- 通过同一 Registry、Policy 与 Executor 提供可选的结构化 Tavily Web Search 与 Fetch，
+  并具有每 Turn 预算、Thread 范围的联网同意和可持久引用；
 - Python Core 与 Ink TUI 之间有版本的 Protocol v4 边界；
 - 从本目录生成、支持搜索的 GitHub Pages 文档站。
 
@@ -75,8 +75,9 @@ foreground-operation 模型应如何演进。
 
 ### 搜索工具
 
-**当前基础：** 可选的 Tavily Web Search 已经使用参考文档所述的通用工具、权限、预算、
-恢复和引用契约。
+**当前基础：** 可选的 Tavily Web Search 与 Fetch 已经使用参考文档所述的通用工具、权限、
+预算、恢复和引用契约。Fetch 有意只支持 Tavily 云端对一个公共 HTTPS URL 进行 basic
+Markdown extraction。
 
 **基础之上的用户需要：** 当真实编码与文档工作流暴露具体缺口时，搜索质量与来源选择
 可能需要继续演进。

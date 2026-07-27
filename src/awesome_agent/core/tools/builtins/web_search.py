@@ -6,16 +6,15 @@ from typing import cast
 from pydantic import BaseModel, Field, field_validator
 
 from awesome_agent.core.citations import Citation
+from awesome_agent.core.tools.builtins._web import web_provider_failure
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
     ToolArguments,
-    ToolErrorCode,
     ToolInvocationDescription,
     ToolOutput,
     ToolPresentation,
     ToolSpec,
 )
-from awesome_agent.core.tools.errors import ExpectedToolFailure
 from awesome_agent.core.tools.registry import (
     RegisteredTool,
     ToolReplaySafety,
@@ -28,7 +27,6 @@ from awesome_agent.core.tools.web_contracts import (
 )
 from awesome_agent.core.tools.web_errors import (
     WebProviderError,
-    WebProviderErrorCode,
 )
 
 MAX_WEB_SEARCH_OUTPUT_CHARS = 28_000
@@ -69,7 +67,7 @@ def create_web_search_handler(
         try:
             response = await provider.search(request)
         except WebProviderError as error:
-            raise _tool_failure(error) from None
+            raise web_provider_failure(error) from None
 
         selected, output_truncated = _select_results(response)
         allocated = [
@@ -139,7 +137,8 @@ def _describe_web_search(arguments: BaseModel) -> ToolInvocationDescription:
         approval_operation="send a search query to Tavily",
         approval_target=(
             "Tavily; the query is sent under the Tavily Privacy Policy "
-            "and Platform Terms"
+            "(https://www.tavily.com/privacy) and Platform Terms "
+            "(https://www.tavily.com/terms)"
         ),
     )
 
@@ -207,41 +206,6 @@ def _render_response(
         },
         ensure_ascii=False,
         separators=(",", ":"),
-    )
-
-
-def _tool_failure(error: WebProviderError) -> ExpectedToolFailure:
-    if error.code in {
-        WebProviderErrorCode.INVALID_REQUEST,
-        WebProviderErrorCode.REQUEST_REJECTED,
-    }:
-        tool_code = ToolErrorCode("web_request_rejected")
-    elif error.code in {
-        WebProviderErrorCode.AUTHENTICATION_FAILED,
-        WebProviderErrorCode.ACCESS_DENIED,
-    }:
-        tool_code = ToolErrorCode("web_credential_rejected")
-    elif error.code is WebProviderErrorCode.RATE_LIMITED:
-        tool_code = ToolErrorCode("web_rate_limited")
-    elif error.code in {
-        WebProviderErrorCode.USAGE_LIMIT_EXCEEDED,
-        WebProviderErrorCode.PAYG_LIMIT_EXCEEDED,
-    }:
-        tool_code = ToolErrorCode("web_quota_exhausted")
-    elif error.code is WebProviderErrorCode.PROVIDER_UNAVAILABLE:
-        tool_code = ToolErrorCode("web_provider_unavailable")
-    elif error.code is WebProviderErrorCode.TIMEOUT:
-        tool_code = ToolErrorCode("web_timeout")
-    elif error.code is WebProviderErrorCode.CONNECTION_FAILED:
-        tool_code = ToolErrorCode("web_connection_failed")
-    elif error.code is WebProviderErrorCode.MALFORMED_RESPONSE:
-        tool_code = ToolErrorCode("web_malformed_response")
-    else:
-        raise RuntimeError("Unhandled web provider error code")
-    return ExpectedToolFailure(
-        tool_code,
-        error.message,
-        retryable=error.retryable,
     )
 
 
