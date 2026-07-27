@@ -184,13 +184,14 @@ Verifier 检查：
 
 ## 4. 收集可选 live 证据
 
-使用全新凭据和稳定网络，运行显式 gate 的 DeepSeek、Kimi 与 Mem0 检查：
+使用全新凭据和稳定网络，运行显式 gate 的 DeepSeek、Kimi、Mem0 与 Tavily Search/Fetch 检查：
 
 ```powershell
 $env:AWESOME_RUN_EXTERNAL = "1"
 uv run --extra memory pytest -q tests/external/test_release_services.py
 Remove-Item Env:AWESOME_RUN_EXTERNAL, Env:DEEPSEEK_API_KEY, `
-  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY -ErrorAction SilentlyContinue
+  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY, Env:TAVILY_API_KEY `
+  -ErrorAction SilentlyContinue
 ```
 
 只记录 service、status、duration 和脱敏 diagnostic code。Live 证据补充确定性 adapter

@@ -220,13 +220,14 @@ each format.
 ## 4. Collect optional live evidence
 
 With fresh credentials and a stable network, run the explicitly gated DeepSeek,
-Kimi, and Mem0 checks:
+Kimi, Mem0, and Tavily Search/Fetch checks:
 
 ```powershell
 $env:AWESOME_RUN_EXTERNAL = "1"
 uv run --extra memory pytest -q tests/external/test_release_services.py
 Remove-Item Env:AWESOME_RUN_EXTERNAL, Env:DEEPSEEK_API_KEY, `
-  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY -ErrorAction SilentlyContinue
+  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY, Env:TAVILY_API_KEY `
+  -ErrorAction SilentlyContinue
 ```
 
 Record only service, status, duration, and redacted diagnostic code. Live

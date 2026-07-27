@@ -114,8 +114,8 @@
     {
       "english_source": "docs/development/release.md",
       "chinese_source": "docs/development/release.zh-CN.md",
-      "english_sha256": "43ce5c88917f9ad096e91fa9058fcfc4e6c849f6fa93dc6d70b543d5b1a0bbe1",
-      "chinese_sha256": "3edf8c1535f038d1f180b594efa63e21e492252be17d851747f8f3434934bb3e"
+      "english_sha256": "c2e0010993c3777282f0aeadcd74915d1b0867577f34e307f2c15b1d15a793de",
+      "chinese_sha256": "8774aec4012b5fd003cbef7def01c2369b6c4ecd91adc66f3ae7a02f9d9dfb96"
     },
     {
       "english_source": "docs/development/setup.md",
@@ -126,8 +126,8 @@
     {
       "english_source": "docs/development/testing.md",
       "chinese_source": "docs/development/testing.zh-CN.md",
-      "english_sha256": "5c7544332cd45769b6f900662076c28748164f405ff2f496a3d71688d96c43fb",
-      "chinese_sha256": "d479e23dd18924a9e697eb9092e61b33141dc0ad6eecdebb0ade6e5ff0f49c66"
+      "english_sha256": "18d2440722314f90e8cc251fbbcd6ed8e62021d52b370610bdd1f0d7b13cb305",
+      "chinese_sha256": "96928303d0eeabbd862fb8b671c5570c148381391c1d6c09fa0ada2ccee2c8f3"
     },
     {
       "english_source": "docs/extensions/README.md",

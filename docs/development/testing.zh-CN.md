@@ -307,7 +307,8 @@ npm pack ./tui --dry-run
 $env:AWESOME_RUN_EXTERNAL = "1"
 uv run --extra memory pytest -q tests/external/test_release_services.py
 Remove-Item Env:AWESOME_RUN_EXTERNAL, Env:DEEPSEEK_API_KEY, `
-  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY -ErrorAction SilentlyContinue
+  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY, Env:TAVILY_API_KEY `
+  -ErrorAction SilentlyContinue
 ```
 
 只记录 provider/service、status、duration 和脱敏诊断码。如果凭据、网络或平台不可用，

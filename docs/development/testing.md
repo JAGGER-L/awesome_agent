@@ -341,7 +341,8 @@ With fresh credentials in a temporary environment:
 $env:AWESOME_RUN_EXTERNAL = "1"
 uv run --extra memory pytest -q tests/external/test_release_services.py
 Remove-Item Env:AWESOME_RUN_EXTERNAL, Env:DEEPSEEK_API_KEY, `
-  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY -ErrorAction SilentlyContinue
+  Env:MOONSHOT_API_KEY, Env:MEM0_API_KEY, Env:TAVILY_API_KEY `
+  -ErrorAction SilentlyContinue
 ```
 
 Record provider/service, status, duration, and redacted diagnostic code only.
