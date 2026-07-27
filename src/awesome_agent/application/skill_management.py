@@ -77,9 +77,7 @@ class SkillManagementService:
 
     async def remove(self, request: SkillRemoveRequest) -> SkillRemoveResult:
         try:
-            mutation = await _run_blocking(
-                lambda: self._manager.remove(request.name)
-            )
+            mutation = await _run_blocking(lambda: self._manager.remove(request.name))
         except SkillPackageError as error:
             _raise_package_failure(error, operation="remove")
         if mutation.restart_required is not True:

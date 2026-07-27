@@ -102,9 +102,7 @@ class Facade:
         self.calls.append(("skill.list", None))
         return ApplicationResult.success(
             SkillListResult(
-                skills=(
-                    SkillPackageSummary(name="review", description="Review code"),
-                )
+                skills=(SkillPackageSummary(name="review", description="Review code"),)
             )
         )
 

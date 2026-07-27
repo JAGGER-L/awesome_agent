@@ -974,9 +974,7 @@ async def test_auto_skill_catalog_is_mandatory_bounded_and_deterministic(
     user_skills = tmp_path / "user-skills"
     oversized = user_skills / "a-oversized"
     oversized.mkdir(parents=True)
-    oversized_tools = ", ".join(
-        f"tool.{index:03d}.{'x' * 180}" for index in range(128)
-    )
+    oversized_tools = ", ".join(f"tool.{index:03d}.{'x' * 180}" for index in range(128))
     (oversized / "SKILL.md").write_text(
         "---\n"
         "name: a-oversized\n"
@@ -1206,9 +1204,7 @@ async def test_named_and_off_skill_modes_freeze_distinct_context_shapes(
         turn=legacy_named_turn,
         view=named_view,
     )
-    rebuilt_legacy_named = await context_service._build_from_frozen(
-        legacy_named_state
-    )
+    rebuilt_legacy_named = await context_service._build_from_frozen(legacy_named_state)
     assert any(
         "frozen review instructions" in item.content
         for item in rebuilt_legacy_named.messages

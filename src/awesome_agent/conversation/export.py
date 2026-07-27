@@ -18,6 +18,7 @@ from awesome_agent.core.citations import Citation
 
 type ThreadExportFormat = Literal["markdown", "json"]
 
+
 def render_thread_export(view: ThreadView, *, format: ThreadExportFormat) -> str:
     if format == "json":
         return _render_json(view)

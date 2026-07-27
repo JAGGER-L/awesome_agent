@@ -47,11 +47,14 @@ def test_thread_search_cursor_is_deterministic_and_scope_bound() -> None:
         query="  Needle  ",
     )
 
-    assert decode_thread_search_cursor(
-        encoded,
-        workspace_key="workspace_1",
-        query="Needle",
-    ) == cursor
+    assert (
+        decode_thread_search_cursor(
+            encoded,
+            workspace_key="workspace_1",
+            query="Needle",
+        )
+        == cursor
+    )
     assert encoded == encode_thread_search_cursor(
         cursor,
         workspace_key="workspace_1",

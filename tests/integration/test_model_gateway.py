@@ -92,11 +92,7 @@ async def test_managed_factory_routes_both_configured_providers_without_network(
 
     def construct_client(**kwargs: object) -> AsyncOpenAI:
         constructed.append(dict(kwargs))
-        return (
-            deepseek_client
-            if "deepseek" in str(kwargs["base_url"])
-            else kimi_client
-        )
+        return deepseek_client if "deepseek" in str(kwargs["base_url"]) else kimi_client
 
     request = ModelRequest(
         messages=(UserMessage(content="hello"),),

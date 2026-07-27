@@ -154,9 +154,7 @@ def parse_contract_versions(content: bytes) -> ContractVersions:
         CONTRACT_KEYS | {"schema", "version"},
         "contract catalog",
     )
-    if catalog["schema"] != _CATALOG_SCHEMA or catalog["version"] != (
-        _CATALOG_VERSION
-    ):
+    if catalog["schema"] != _CATALOG_SCHEMA or catalog["version"] != (_CATALOG_VERSION):
         raise ContractVersionsError("contract catalog identity is invalid")
     contracts = parse_contract_versions_payload(
         {key: catalog[key] for key in CONTRACT_KEYS}
@@ -228,8 +226,7 @@ def render_typescript_binding(contracts: ContractVersions) -> bytes:
         ),
     )
     declarations = "\n".join(
-        f"export const {name} = {json.dumps(value)} as const;"
-        for name, value in values
+        f"export const {name} = {json.dumps(value)} as const;" for name, value in values
     )
     return (
         "// Generated from contract-versions.json; do not edit by hand.\n\n"
@@ -256,9 +253,7 @@ def write_generated_bindings(root: Path, contracts: ContractVersions) -> None:
     for relative, content in _generated_bindings(contracts):
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(
-            f".{destination.name}.{os.getpid()}.tmp"
-        )
+        temporary = destination.with_name(f".{destination.name}.{os.getpid()}.tmp")
         try:
             temporary.write_bytes(content)
             os.replace(temporary, destination)

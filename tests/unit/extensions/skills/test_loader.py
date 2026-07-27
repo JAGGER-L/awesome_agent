@@ -564,10 +564,10 @@ def test_workspace_resource_rejects_parent_aba_through_directory_link(
             try:
                 return original_open(
                     path,
-                        parent=parent,
-                        name=name,
-                        expected_identity=expected_identity,
-                        establish_mount_boundary=establish_mount_boundary,
+                    parent=parent,
+                    name=name,
+                    expected_identity=expected_identity,
+                    establish_mount_boundary=establish_mount_boundary,
                 )
             finally:
                 _remove_directory_link(nested)

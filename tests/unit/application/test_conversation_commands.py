@@ -165,9 +165,7 @@ class RetryTurnStub:
         source_turn_id: str | None,
         *,
         before_start: Callable[[], None],
-        started: Callable[
-            [RetryPreparation, OperationAccepted], Awaitable[Any]
-        ],
+        started: Callable[[RetryPreparation, OperationAccepted], Awaitable[Any]],
     ) -> Any:
         self.calls.append((source_thread_id, source_turn_id))
         if self.error is not None:

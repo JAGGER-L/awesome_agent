@@ -365,9 +365,7 @@ class LocalApplication:
                         code=ProductErrorCode.OPERATION_BUSY,
                         message="A pre-initialize operation is in progress.",
                         retryable=True,
-                        data={
-                            "diagnostic_code": "preinitialize_operation_in_progress"
-                        },
+                        data={"diagnostic_code": "preinitialize_operation_in_progress"},
                     )
                 )
             self._closing = True

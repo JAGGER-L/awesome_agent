@@ -252,8 +252,7 @@ def test_protocol_version_has_one_catalog_and_generated_bindings() -> None:
             or (
                 isinstance(node, ast.Assign)
                 and any(
-                    isinstance(target, ast.Name)
-                    and target.id == "PROTOCOL_VERSION"
+                    isinstance(target, ast.Name) and target.id == "PROTOCOL_VERSION"
                     for target in node.targets
                 )
             )
@@ -283,10 +282,13 @@ def test_protocol_version_has_one_catalog_and_generated_bindings() -> None:
             REPOSITORY_ROOT / "scripts" / "generate_protocol_fixtures.py",
         )
     )
-    assert re.search(
-        r'(?:protocol_version\s*=\s*4|["\']protocol_version["\']\s*:\s*4)',
-        python_consumers,
-    ) is None
+    assert (
+        re.search(
+            r'(?:protocol_version\s*=\s*4|["\']protocol_version["\']\s*:\s*4)',
+            python_consumers,
+        )
+        is None
+    )
 
     tui_protocol_version = TUI_ROOT / "src" / "protocol" / "version.ts"
     assert tui_protocol_version.read_text(encoding="utf-8") == (
@@ -296,17 +298,12 @@ def test_protocol_version_has_one_catalog_and_generated_bindings() -> None:
         encoding="utf-8"
     )
     assert "export const PROTOCOL_VERSION = 4 as const;" in tui_contracts
-    methods = (TUI_ROOT / "src" / "protocol" / "methods.ts").read_text(
-        encoding="utf-8"
-    )
-    startup = (TUI_ROOT / "src" / "surface" / "startup.ts").read_text(
-        encoding="utf-8"
-    )
+    methods = (TUI_ROOT / "src" / "protocol" / "methods.ts").read_text(encoding="utf-8")
+    startup = (TUI_ROOT / "src" / "surface" / "startup.ts").read_text(encoding="utf-8")
     assert methods.count("z.literal(PROTOCOL_VERSION)") == 2
     assert "protocol_version: PROTOCOL_VERSION" in startup
     tui_production = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (TUI_ROOT / "src").rglob("*.ts")
+        path.read_text(encoding="utf-8") for path in (TUI_ROOT / "src").rglob("*.ts")
     )
     assert re.search(r"\bprotocol_version\s*:\s*4\b", tui_production) is None
 

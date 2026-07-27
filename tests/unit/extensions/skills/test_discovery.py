@@ -377,10 +377,10 @@ def test_workspace_discovery_rejects_package_check_open_aba(
             try:
                 return original_open(
                     path,
-                        parent=parent,
-                        name=name,
-                        expected_identity=expected_identity,
-                        establish_mount_boundary=establish_mount_boundary,
+                    parent=parent,
+                    name=name,
+                    expected_identity=expected_identity,
+                    establish_mount_boundary=establish_mount_boundary,
                 )
             finally:
                 _remove_directory_link(package)

@@ -284,9 +284,7 @@ async def test_skill_hard_admission_fails_before_description_or_handler(
     describe_calls = _track_description(registry, tool_name)
     name = cast(str, arguments["name"])
     grant = (
-        _skill_grant(catalog, name)
-        if name == "review"
-        else _forged_skill_grant(name)
+        _skill_grant(catalog, name) if name == "review" else _forged_skill_grant(name)
     )
     context, sink, writer, approvals = _execution_context(
         tmp_path / "workspace",
@@ -512,9 +510,7 @@ async def test_named_skill_mode_can_only_read_its_frozen_resource(
     context, _, _, approvals = _execution_context(
         tmp_path / "workspace",
         skill_mode="review",
-        resource_grants=(
-            _skill_grant(catalog, "review", operations=("read",)),
-        ),
+        resource_grants=(_skill_grant(catalog, "review", operations=("read",)),),
     )
 
     result = await ToolExecutor(registry).execute(

@@ -116,8 +116,9 @@ async def test_close_failure_runs_remaining_callbacks_and_is_stable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_close_timeout_cancels_hung_callback_and_runs_remaining_callbacks(
-) -> None:
+async def test_close_timeout_cancels_hung_callback_and_runs_remaining_callbacks() -> (
+    None
+):
     resources = RuntimeResources(close_timeout_seconds=0.01)
     closed: list[str] = []
     hanging_cancelled = False

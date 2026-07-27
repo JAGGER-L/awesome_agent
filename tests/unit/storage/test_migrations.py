@@ -152,8 +152,7 @@ async def test_production_schema_seven_migrates_lineage_without_data_loss(
                 "SELECT thread_id, title, lineage_json FROM threads"
             ).fetchone() == ("thread_existing", "Preserved", None)
             assert {
-                str(row[1])
-                for row in connection.execute("PRAGMA table_info(threads)")
+                str(row[1]) for row in connection.execute("PRAGMA table_info(threads)")
             } >= {"thread_id", "lineage_json"}
     finally:
         lease.close()
@@ -191,8 +190,7 @@ async def test_schema_seven_to_eight_failure_rolls_back_column_and_data(
                 "SELECT thread_id, title FROM threads"
             ).fetchone() == ("thread_existing", "Preserved")
             assert "lineage_json" not in {
-                str(row[1])
-                for row in connection.execute("PRAGMA table_info(threads)")
+                str(row[1]) for row in connection.execute("PRAGMA table_info(threads)")
             }
     finally:
         lease.close()

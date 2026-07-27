@@ -141,8 +141,7 @@ def test_thread_export_preserves_materialized_lineage() -> None:
         "source_turn_id": "turn_source",
     }
     assert (
-        "- Lineage: `fork` from Thread `thread_source`, Turn `turn_source`"
-        in markdown
+        "- Lineage: `fork` from Thread `thread_source`, Turn `turn_source`" in markdown
     )
 
 

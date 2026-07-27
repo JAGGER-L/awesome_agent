@@ -120,11 +120,7 @@ class ThreadRetryCommandPayload(_CommandModel):
             raise ValueError("Retry transition and Operation identities must match.")
         view = self.transition.thread.view
         turn = next(
-            (
-                item
-                for item in view.turns
-                if item.id == operation.turn_id
-            ),
+            (item for item in view.turns if item.id == operation.turn_id),
             None,
         )
         if turn is None or turn.thread_id != thread_id:

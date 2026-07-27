@@ -86,9 +86,7 @@ class _WebHarness:
         if self.apply_hook is not None:
             return await self.apply_hook(snapshot)
         self.snapshot = snapshot
-        self.runtime_status = WebRuntimeStatus(
-            available=snapshot[0].user.web.enabled
-        )
+        self.runtime_status = WebRuntimeStatus(available=snapshot[0].user.web.enabled)
         return self.runtime_status
 
     def validate_proxy(self, proxy: SecretStr | None) -> None:
@@ -168,9 +166,7 @@ async def test_on_and_off_preserve_unrelated_config_and_revoke_network_grants(
     harness.writer.update(
         lambda document: document.model_copy(
             update={
-                "memory": document.memory.model_copy(
-                    update={"local_file_memory": True}
-                )
+                "memory": document.memory.model_copy(update={"local_file_memory": True})
             }
         )
     )

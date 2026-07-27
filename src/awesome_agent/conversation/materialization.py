@@ -232,9 +232,8 @@ def build_thread_materialization(
     target_boundary = _turn_boundary_sequence(target, entry_by_id)
     for turn in source_turns:
         boundary = _turn_boundary_sequence(turn, entry_by_id)
-        if (
-            (include_target and boundary > target_boundary)
-            or (not include_target and boundary >= target_user_sequence)
+        if (include_target and boundary > target_boundary) or (
+            not include_target and boundary >= target_user_sequence
         ):
             raise ConversationConflict(
                 "Terminal Turn content crosses the materialized prefix boundary."
@@ -242,14 +241,9 @@ def build_thread_materialization(
     included_entry_ids: set[str] = set()
     for turn in source_turns:
         included_entry_ids.add(turn.user_entry_id)
-        if (
-            turn.status is TurnStatus.COMPLETED
-            and turn.assistant_entry_id is not None
-        ):
+        if turn.status is TurnStatus.COMPLETED and turn.assistant_entry_id is not None:
             included_entry_ids.add(turn.assistant_entry_id)
-    direct_boundary = (
-        target_boundary if include_target else target_user_sequence - 1
-    )
+    direct_boundary = target_boundary if include_target else target_user_sequence - 1
     source_entries = tuple(
         entry
         for entry in sorted(

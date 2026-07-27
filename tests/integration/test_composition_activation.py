@@ -1208,9 +1208,7 @@ async def test_cancelled_skill_discovery_is_reused_and_drained(
         with pytest.raises(asyncio.CancelledError):
             await first
 
-        second = asyncio.create_task(
-            backend._session_skill_catalog(application_config)
-        )
+        second = asyncio.create_task(backend._session_skill_catalog(application_config))
         await asyncio.sleep(0.05)
         assert calls == 1
         assert max_active == 1
@@ -1723,9 +1721,7 @@ async def test_failed_web_recovery_fences_current_and_future_runtimes(
         await release.wait()
         return status
 
-    original_runtime.web_commands._apply_configuration = (
-        fail_recovery_after_publication
-    )
+    original_runtime.web_commands._apply_configuration = fail_recovery_after_publication
     running = asyncio.create_task(
         application.execute_command(
             CommandIntent(name=CommandName.WEB, arguments=("on",))

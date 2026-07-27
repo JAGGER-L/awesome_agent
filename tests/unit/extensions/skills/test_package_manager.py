@@ -797,9 +797,7 @@ def test_published_marker_fsync_failure_never_rolls_back_inline(
 
     assert raised.value.code == "transaction_failed"
     assert injected is True
-    assert json.loads(marker_path.read_text(encoding="utf-8"))["phase"] == (
-        "published"
-    )
+    assert json.loads(marker_path.read_text(encoding="utf-8"))["phase"] == ("published")
     quarantines = tuple(
         path
         for path in skills_root.iterdir()
@@ -807,9 +805,9 @@ def test_published_marker_fsync_failure_never_rolls_back_inline(
     )
     assert len(quarantines) == 1
     if operation == "replace":
-        assert "description: New" in (
-            skills_root / "review" / "SKILL.md"
-        ).read_text(encoding="utf-8")
+        assert "description: New" in (skills_root / "review" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
     else:
         assert not (skills_root / "review").exists()
 
@@ -831,9 +829,7 @@ def test_recover_removes_exact_orphan_stage_and_fixed_marker_temporary(
     manager = _manager(tmp_path)
     manager.list()
     home = tmp_path / "home"
-    stage = _skill_directory(
-        home / "skills" / (".skill-stage-" + "a" * 32)
-    )
+    stage = _skill_directory(home / "skills" / (".skill-stage-" + "a" * 32))
     marker_temporary = home / ".skills-transaction.tmp"
     marker_temporary.write_text("partial marker", encoding="utf-8")
 

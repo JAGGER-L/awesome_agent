@@ -158,9 +158,9 @@ def _validate_contract_catalog_documentation(
         reference_en = (root / "docs" / "reference" / "README.md").read_text(
             encoding="utf-8"
         )
-        reference_zh = (
-            root / "docs" / "reference" / "README.zh-CN.md"
-        ).read_text(encoding="utf-8")
+        reference_zh = (root / "docs" / "reference" / "README.zh-CN.md").read_text(
+            encoding="utf-8"
+        )
     except (OSError, UnicodeDecodeError) as error:
         raise ReleaseIdentityError(
             "contract catalog documentation is missing or invalid"
@@ -195,8 +195,7 @@ def _validate_contract_catalog_documentation(
         ),
         (
             reference_zh,
-            "私有 Core/TUI Protocol 版本 "
-            f"`{contracts.protocol_version}`{zh_semicolon}",
+            f"私有 Core/TUI Protocol 版本 `{contracts.protocol_version}`{zh_semicolon}",
             f"event envelope 版本 `{contracts.event_envelope_version}`{zh_semicolon}",
             "Application diagnostic log record 版本 "
             f"`{contracts.application_log_version}`{zh_semicolon}",
@@ -243,12 +242,7 @@ def _validate_protocol_fixtures(
     product_version: str,
     contracts: ContractVersions,
 ) -> None:
-    directory = (
-        root
-        / "protocol"
-        / "fixtures"
-        / f"v{contracts.protocol_version}"
-    )
+    directory = root / "protocol" / "fixtures" / f"v{contracts.protocol_version}"
     manifest_path = directory / "manifest.json"
     try:
         manifest_content = _read_bounded_fixture(

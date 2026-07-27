@@ -26,8 +26,7 @@ def test_conversation_exposes_one_aggregate_repository_port() -> None:
         for node in tree.body
         if isinstance(node, ast.ClassDef)
         and any(
-            isinstance(base, ast.Name) and base.id == "Protocol"
-            for base in node.bases
+            isinstance(base, ast.Name) and base.id == "Protocol" for base in node.bases
         )
     }
 

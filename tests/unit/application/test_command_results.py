@@ -224,9 +224,7 @@ def test_thread_transition_reason_requires_matching_lineage() -> None:
         ThreadTransitionCommandPayload(transition=transition("fork", retry))
 
 
-def test_thread_retry_payload_requires_one_matching_transition_operation_turn() -> (
-    None
-):
+def test_thread_retry_payload_requires_one_matching_transition_operation_turn() -> None:
     now = datetime.now(UTC)
     thread = Thread(
         id="thread_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

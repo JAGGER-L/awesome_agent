@@ -351,9 +351,7 @@ async def test_network_usage_and_citations_survive_the_agent_loop() -> None:
         ),
         consume_network=True,
     )
-    gateway = FakeGateway(
-        ((_completed("", tool_calls=calls),), (_completed("done"),))
-    )
+    gateway = FakeGateway(((_completed("", tool_calls=calls),), (_completed("done"),)))
 
     result = await _invoke(_runtime(gateway, executor))
 

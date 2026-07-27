@@ -1361,9 +1361,7 @@ def _invalid_command_results() -> dict[str, object]:
     )
     retry_outcome = next(
         case["outcome"]
-        for case in cast(
-            list[dict[str, Any]], _valid_command_results()["cases"]
-        )
+        for case in cast(list[dict[str, Any]], _valid_command_results()["cases"])
         if case["name"] == "result.thread_retry"
     )
     retry_payload = cast(dict[str, Any], retry_outcome["payload"])
@@ -1377,9 +1375,7 @@ def _invalid_command_results() -> dict[str, object]:
     retry_operation = cast(dict[str, Any], retry_payload["operation"])
     fork_outcome = next(
         case["outcome"]
-        for case in cast(
-            list[dict[str, Any]], _valid_command_results()["cases"]
-        )
+        for case in cast(list[dict[str, Any]], _valid_command_results()["cases"])
         if case["name"] == "result.thread_transition.fork"
     )
     fork_payload = cast(dict[str, Any], fork_outcome["payload"])

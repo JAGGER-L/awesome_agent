@@ -215,9 +215,7 @@ def _entry_content_exceeds_limit(entries: tuple[ThreadEntry, ...]) -> bool:
         )
         total += sum(len(value.encode("utf-8")) for value in exported_values)
         if entry.kind is ThreadEntryKind.ASSISTANT_MESSAGE:
-            citations = AssistantEntryMetadata.model_validate(
-                entry.metadata
-            ).citations
+            citations = AssistantEntryMetadata.model_validate(entry.metadata).citations
             total += sum(
                 len(value.encode("utf-8"))
                 for citation in citations

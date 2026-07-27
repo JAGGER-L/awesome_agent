@@ -1050,9 +1050,12 @@ class TurnCoordinator:
             and assistant is not None
             and assistant.kind is ThreadEntryKind.ASSISTANT_MESSAGE
             and assistant.content == answer
-            and assistant.metadata == {"citations": [
-                citation.model_dump(mode="json") for citation in facts.citations
-            ]}
+            and assistant.metadata
+            == {
+                "citations": [
+                    citation.model_dump(mode="json") for citation in facts.citations
+                ]
+            }
             and observed.usage == facts.usage
             and observed.termination_reason == reason
             and observed.context_manifest == expected_manifest
@@ -1403,9 +1406,7 @@ def _checkpoint_identity_is_valid(
 def _checkpoint_budget_state_is_valid(state: AgentState, turn: Turn) -> bool:
     try:
         ModelUsage.model_validate(state["usage"])
-        citations = tuple(
-            Citation.model_validate(item) for item in state["citations"]
-        )
+        citations = tuple(Citation.model_validate(item) for item in state["citations"])
         CitationAllocator(citations)
     except ValueError:
         return False

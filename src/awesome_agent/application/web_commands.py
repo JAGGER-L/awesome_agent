@@ -87,9 +87,7 @@ class WebCommandService:
         self._permission_session = permission_session
         self._current_thread_id = current_thread_id
         self._validate_proxy = validate_proxy
-        self._configuration_control = (
-            configuration_control or WebConfigurationControl()
-        )
+        self._configuration_control = configuration_control or WebConfigurationControl()
 
     async def web(self, intent: CommandIntent) -> CommandOutcome:
         arguments = intent.arguments
@@ -228,9 +226,7 @@ class WebCommandService:
         def transform(current: UserConfigDocument) -> UserConfigDocument:
             candidate = UserConfigDocument.model_validate(
                 current.model_copy(
-                    update={
-                        "web": current.web.model_copy(update={"enabled": enabled})
-                    }
+                    update={"web": current.web.model_copy(update={"enabled": enabled})}
                 ).model_dump(mode="python")
             )
             captured.append(current)

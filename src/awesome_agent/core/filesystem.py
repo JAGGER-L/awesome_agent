@@ -109,12 +109,16 @@ class DirectoryPin:
             raise MutationTargetChanged(
                 "A workspace directory changed after path validation."
             )
-        if self.mount_identity is not None and _path_mount_identity(
-            self.path,
-            parent=self.parent,
-            name=self.name,
-            status=info,
-        ) != self.mount_identity:
+        if (
+            self.mount_identity is not None
+            and _path_mount_identity(
+                self.path,
+                parent=self.parent,
+                name=self.name,
+                status=info,
+            )
+            != self.mount_identity
+        ):
             raise UnsafeWorkspacePath(
                 "A workspace path crossed its filesystem mount boundary."
             )
@@ -404,12 +408,16 @@ def open_regular_file(
         raise UnsafeWorkspacePath("A workspace path is not a regular file.")
     if int(before.st_nlink) != 1:
         raise UnsafeWorkspacePath("Hard-linked files cannot be opened safely.")
-    if parent.mount_identity is not None and _path_mount_identity(
-        parent.path / name,
-        parent=parent,
-        name=name,
-        status=before,
-    ) != parent.mount_identity:
+    if (
+        parent.mount_identity is not None
+        and _path_mount_identity(
+            parent.path / name,
+            parent=parent,
+            name=name,
+            status=before,
+        )
+        != parent.mount_identity
+    ):
         raise UnsafeWorkspacePath(
             "A workspace path crossed its filesystem mount boundary."
         )
@@ -819,12 +827,16 @@ def assert_child_identity(
         raise MutationTargetChanged("A workspace file changed before mutation.")
     if is_link_or_reparse(current) and not allow_reparse:
         raise MutationTargetChanged("A workspace file changed before mutation.")
-    if parent.mount_identity is not None and _path_mount_identity(
-        parent.path / name,
-        parent=parent,
-        name=name,
-        status=current,
-    ) != parent.mount_identity:
+    if (
+        parent.mount_identity is not None
+        and _path_mount_identity(
+            parent.path / name,
+            parent=parent,
+            name=name,
+            status=current,
+        )
+        != parent.mount_identity
+    ):
         raise UnsafeWorkspacePath(
             "A workspace path crossed its filesystem mount boundary."
         )

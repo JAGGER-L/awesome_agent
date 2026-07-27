@@ -146,9 +146,7 @@ async def test_partial_construction_preserves_primary_when_cleanup_fails() -> No
 
 @pytest.mark.asyncio
 async def test_unconfigured_candidate_creates_no_provider_clients() -> None:
-    application = _application().model_copy(
-        update={"secret_status": SecretStatus()}
-    )
+    application = _application().model_copy(update={"secret_status": SecretStatus()})
     calls = 0
 
     def construct(**_: object) -> AsyncOpenAI:

@@ -134,9 +134,7 @@ class Thread(BaseModel):
 class AssistantEntryMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    citations: tuple[Citation, ...] = Field(
-        default=(), strict=False, max_length=128
-    )
+    citations: tuple[Citation, ...] = Field(default=(), strict=False, max_length=128)
 
     @model_validator(mode="after")
     def validate_citation_sequence(self) -> Self:

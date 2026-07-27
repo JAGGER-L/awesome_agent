@@ -79,9 +79,7 @@ class PinnedPlainDirectory:
         self._parts = tuple(part for part in relative.parts if part != ".")
         self._expected_identities = expected_identities
         self._mount_boundary = (
-            lexical_absolute(mount_boundary)
-            if mount_boundary is not None
-            else None
+            lexical_absolute(mount_boundary) if mount_boundary is not None else None
         )
         if self._mount_boundary is not None:
             try:

@@ -1178,9 +1178,7 @@ async def test_capability_quota_is_checked_before_approval_and_consumed_once(
 
     def admit(arguments: BaseModel, context: ToolExecutionContext) -> None:
         assert isinstance(arguments, EchoArguments)
-        context.capability_quotas.require_remaining(
-            ToolCapability.NETWORK_READ.value
-        )
+        context.capability_quotas.require_remaining(ToolCapability.NETWORK_READ.value)
 
     async def web_handler(
         arguments: BaseModel,
@@ -1214,9 +1212,7 @@ async def test_capability_quota_is_checked_before_approval_and_consumed_once(
     context = replace(
         context,
         approval_resolver=approve,
-        capability_quotas=CapabilityQuotaLedger(
-            {ToolCapability.NETWORK_READ.value: 1}
-        ),
+        capability_quotas=CapabilityQuotaLedger({ToolCapability.NETWORK_READ.value: 1}),
     )
     executor = ToolExecutor(registry)
 

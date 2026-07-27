@@ -76,9 +76,7 @@ def test_registration_is_strict_network_read_and_non_replayable() -> None:
     assert registration.replay_safety is ToolReplaySafety.NON_REPLAYABLE
     assert registration.timeout_resolver is not None
     assert (
-        registration.timeout_resolver(
-            WebFetchArguments(url="https://example.com/page")
-        )
+        registration.timeout_resolver(WebFetchArguments(url="https://example.com/page"))
         == 20.0
     )
     assert registration.spec.input_schema["additionalProperties"] is False
@@ -173,10 +171,13 @@ async def test_handler_rejects_unrelated_provider_url_before_citation() -> None:
     assert "requested" not in captured.value.message
     assert "unrelated" not in captured.value.message
     assert context.capability_quotas.used("network.read") == 1
-    assert context.citation_allocator.allocate(
-        title="subsequent citation",
-        url="https://example.com/subsequent",
-    ).id == "S1"
+    assert (
+        context.citation_allocator.allocate(
+            title="subsequent citation",
+            url="https://example.com/subsequent",
+        ).id
+        == "S1"
+    )
 
 
 @pytest.mark.asyncio
@@ -185,9 +186,7 @@ async def test_handler_keeps_escaped_json_within_executor_limit() -> None:
         :MAX_WEB_FETCH_CONTENT_CHARS
     ]
     requested_url = "https://example.com/page"
-    provider = StubWebProvider(
-        WebFetchResponse(url=requested_url, content=body)
-    )
+    provider = StubWebProvider(WebFetchResponse(url=requested_url, content=body))
     registration = create_web_fetch_registration(provider)
 
     output = await registration.handler(
@@ -256,9 +255,7 @@ def test_blocked_domain_rejects_idna_equivalent_unicode_host() -> None:
 @pytest.mark.asyncio
 async def test_similar_domain_is_not_blocked_and_consumes_after_admission() -> None:
     requested_url = "https://notblocked.example.com/page"
-    provider = StubWebProvider(
-        WebFetchResponse(url=requested_url, content="content")
-    )
+    provider = StubWebProvider(WebFetchResponse(url=requested_url, content="content"))
     registration = create_web_fetch_registration(
         provider,
         blocked_domains=("blocked.example.com",),

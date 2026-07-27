@@ -643,9 +643,7 @@ class _LocalApplicationBackend:
         self._web_configuration_control = WebConfigurationControl()
         self._skill_catalog: SkillCatalog | None = None
         self._skill_catalog_task: asyncio.Task[SkillCatalog] | None = None
-        self._process_resources.push_async_callback(
-            self._drain_skill_catalog_discovery
-        )
+        self._process_resources.push_async_callback(self._drain_skill_catalog_discovery)
         self._bootstrap_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
 
@@ -2565,9 +2563,7 @@ class _LocalApplicationBackend:
                         approval_resolver=resolve_tool_interaction,
                         capability_quotas=CapabilityQuotaLedger(
                             {"network.read": budgets.web_requests},
-                            used_counts={
-                                "network.read": agent_state["web_requests"]
-                            },
+                            used_counts={"network.read": agent_state["web_requests"]},
                         ),
                         citation_allocator=CitationAllocator(
                             tuple(

@@ -178,8 +178,9 @@ async def test_close_failure_is_logged_without_replacing_validation(
 
 
 @pytest.mark.asyncio
-async def test_second_cancellation_during_close_preserves_primary_cancellation(
-) -> None:
+async def test_second_cancellation_during_close_preserves_primary_cancellation() -> (
+    None
+):
     class BlockingCloseClient(FakeClient):
         def __init__(self) -> None:
             super().__init__(asyncio.CancelledError("primary-cancellation"))

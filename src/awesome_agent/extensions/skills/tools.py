@@ -205,12 +205,8 @@ def _expected_skill_identity(
     operation: str,
 ) -> str:
     mode = context.skill_mode
-    mode_allows_operation = (
-        mode == "auto" and operation in {"load", "read"}
-    ) or (
-        mode not in {"auto", "off", "direct"}
-        and operation == "read"
-        and name == mode
+    mode_allows_operation = (mode == "auto" and operation in {"load", "read"}) or (
+        mode not in {"auto", "off", "direct"} and operation == "read" and name == mode
     )
     if context.origin is not ToolExecutionOrigin.AGENT or not mode_allows_operation:
         _raise_skill_scope_denied()

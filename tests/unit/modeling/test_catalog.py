@@ -54,9 +54,7 @@ def test_provider_descriptors_publish_credentials_regions_and_models() -> None:
 
 
 def test_each_provider_has_one_catalog_derived_default() -> None:
-    assert MODEL_CATALOG.default_for("deepseek") == (
-        "deepseek/deepseek-v4-flash"
-    )
+    assert MODEL_CATALOG.default_for("deepseek") == ("deepseek/deepseek-v4-flash")
     assert MODEL_CATALOG.default_for("kimi") == "kimi/kimi-k2.6"
 
 

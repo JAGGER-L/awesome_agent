@@ -94,9 +94,7 @@ class Backend:
     async def list_skill_packages(self) -> SkillListResult:
         self.calls.append(("skill.list", None))
         return SkillListResult(
-            skills=(
-                SkillPackageSummary(name="review", description="Review code"),
-            )
+            skills=(SkillPackageSummary(name="review", description="Review code"),)
         )
 
     async def install_skill_package(

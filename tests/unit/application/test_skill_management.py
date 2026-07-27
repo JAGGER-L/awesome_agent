@@ -63,9 +63,7 @@ class _Manager:
         return SkillPackageMutation(
             name="review",
             action=(
-                SkillPackageAction.REPLACED
-                if replace
-                else SkillPackageAction.INSTALLED
+                SkillPackageAction.REPLACED if replace else SkillPackageAction.INSTALLED
             ),
         )
 
@@ -198,9 +196,7 @@ async def test_service_preserves_cancellation_until_blocking_transaction_finishe
 
 def test_skill_management_contracts_are_strict_bounded_and_ordered() -> None:
     with pytest.raises(ValidationError):
-        SkillInstallRequest.model_validate(
-            {"source_path": "review", "replace": 1}
-        )
+        SkillInstallRequest.model_validate({"source_path": "review", "replace": 1})
     with pytest.raises(ValidationError):
         SkillInstallRequest(source_path=" review ")
     with pytest.raises(ValidationError):

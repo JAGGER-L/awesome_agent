@@ -308,9 +308,7 @@ def test_workspace_web_domains_only_add_restrictions() -> None:
             )
         ),
         workspace=WorkspaceConfigDocument(
-            web=ProjectWebConfig(
-                blocked_domains=("workspace.example", "user.example")
-            )
+            web=ProjectWebConfig(blocked_domains=("workspace.example", "user.example"))
         ),
         secrets=SecretValues(),
         secret_status=SecretStatus(),
@@ -328,9 +326,7 @@ def test_workspace_web_domains_only_add_restrictions() -> None:
 
 def test_effective_web_domain_restrictions_remain_bounded() -> None:
     sources = LoadedConfigSources(
-        user=UserConfigDocument(
-            web=WebConfig(blocked_domains=("user.example",))
-        ),
+        user=UserConfigDocument(web=WebConfig(blocked_domains=("user.example",))),
         workspace=WorkspaceConfigDocument(
             web=ProjectWebConfig(
                 blocked_domains=tuple(

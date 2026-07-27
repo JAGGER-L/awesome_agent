@@ -33,11 +33,7 @@ def _skill_directory(
 ) -> Path:
     root.mkdir(parents=True)
     (root / "SKILL.md").write_text(
-        "---\n"
-        "name: review\n"
-        f"description: {description}\n"
-        "---\n"
-        "Review carefully.\n",
+        f"---\nname: review\ndescription: {description}\n---\nReview carefully.\n",
         encoding="utf-8",
     )
     return root

@@ -78,11 +78,7 @@ class LangGraphCheckpointStore:
                 for key in unexpected
             ):
                 raise ValueError("checkpoint contains an unknown public channel")
-            projected = {
-                key: values[key]
-                for key in _AGENT_STATE_KEYS
-                if key in values
-            }
+            projected = {key: values[key] for key in _AGENT_STATE_KEYS if key in values}
             projected.setdefault("citations", [])
             projected.setdefault("web_requests", 0)
             return validate_agent_state(projected)

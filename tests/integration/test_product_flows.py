@@ -378,9 +378,7 @@ async def test_thread_search_selection_revalidates_before_resume_and_export(
     async def capped_search(*_args: object, **_kwargs: object) -> ThreadListPage:
         return ThreadListPage(
             threads=tuple(
-                template.model_copy(
-                    update={"id": f"fixture_thread_{index:02d}"}
-                )
+                template.model_copy(update={"id": f"fixture_thread_{index:02d}"})
                 for index in range(50)
             ),
             has_more=True,

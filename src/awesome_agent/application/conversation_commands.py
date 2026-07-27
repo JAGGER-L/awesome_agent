@@ -280,9 +280,7 @@ class ConversationCommandService:
             ThreadReadQuery(thread_id=thread.id, limit=100)
         )
         application = await self._application_snapshot()
-        application = application.model_copy(
-            update={"current_thread_id": thread.id}
-        )
+        application = application.model_copy(update={"current_thread_id": thread.id})
         return ThreadTransitionSnapshot(
             reason=reason,
             application=application,
@@ -300,9 +298,10 @@ class ConversationCommandService:
         if self._current_thread_id is None:
             return error("thread_not_found", "Select a Thread first.")
         source_turn_id = intent.arguments[0] if intent.arguments else None
-        if source_turn_id is not None and re.fullmatch(
-            r"turn_[a-f0-9]{8,32}", source_turn_id
-        ) is None:
+        if (
+            source_turn_id is not None
+            and re.fullmatch(r"turn_[a-f0-9]{8,32}", source_turn_id) is None
+        ):
             return error(
                 "invalid_arguments",
                 f"Usage: /{command} [turn_id]",

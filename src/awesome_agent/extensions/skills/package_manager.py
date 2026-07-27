@@ -746,9 +746,7 @@ class SkillPackageManager:
             if _STAGE_NAME_PATTERN.fullmatch(name):
                 orphan_stages.append(name)
                 continue
-            if _QUARANTINE_NAME_PATTERN.fullmatch(name) or name.startswith(
-                ".skill-"
-            ):
+            if _QUARANTINE_NAME_PATTERN.fullmatch(name) or name.startswith(".skill-"):
                 raise _transaction_failed()
             ordinary_count += 1
         if ordinary_count > _MAX_ENTRIES:
@@ -1051,8 +1049,7 @@ def _transaction_pins(
                 parent=current,
                 name=component,
                 establish_mount_boundary=(
-                    _same_path(child_path, home)
-                    or _same_path(child_path, skills_root)
+                    _same_path(child_path, home) or _same_path(child_path, skills_root)
                 ),
             )
             opened.append(current)
@@ -1456,9 +1453,10 @@ def _preflight_zip_archive(raw: bytes) -> int:
     central_end = eocd_offset
     observed_entries = 0
     while cursor < central_end:
-        if cursor + _ZIP_CENTRAL_HEADER_BYTES > central_end or raw[
-            cursor : cursor + 4
-        ] != _ZIP_CENTRAL_SIGNATURE:
+        if (
+            cursor + _ZIP_CENTRAL_HEADER_BYTES > central_end
+            or raw[cursor : cursor + 4] != _ZIP_CENTRAL_SIGNATURE
+        ):
             raise _invalid_package("Skill package ZIP directory is invalid.")
         name_length, extra_length, comment_length, entry_disk = struct.unpack_from(
             "<4H",
@@ -1468,10 +1466,7 @@ def _preflight_zip_archive(raw: bytes) -> int:
         if entry_disk != 0:
             raise _invalid_package("Multi-disk ZIP packages are not supported.")
         cursor += (
-            _ZIP_CENTRAL_HEADER_BYTES
-            + name_length
-            + extra_length
-            + comment_length
+            _ZIP_CENTRAL_HEADER_BYTES + name_length + extra_length + comment_length
         )
         if cursor > central_end:
             raise _invalid_package("Skill package ZIP directory is invalid.")

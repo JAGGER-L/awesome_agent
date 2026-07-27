@@ -340,7 +340,9 @@ class ConversationService:
             sequence=_next_sequence(view),
             kind=ThreadEntryKind.ASSISTANT_MESSAGE,
             content=assistant_content,
-            metadata=AssistantEntryMetadata(citations=citations).model_dump(mode="json"),
+            metadata=AssistantEntryMetadata(citations=citations).model_dump(
+                mode="json"
+            ),
             created_at=now,
         )
         completed = current.model_copy(

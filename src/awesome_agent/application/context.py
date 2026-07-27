@@ -159,9 +159,7 @@ def _auto_skill_catalog_source(loader: SkillLoader | None) -> ContextSource:
         descriptors: dict[str, SkillDescriptor] = {}
         catalog_size = 0
     else:
-        snapshots = loader.identity_snapshots(
-            limit=_AUTO_SKILL_CATALOG_MAX_CANDIDATES
-        )
+        snapshots = loader.identity_snapshots(limit=_AUTO_SKILL_CATALOG_MAX_CANDIDATES)
         descriptors = {
             descriptor.name: descriptor
             for descriptor in loader.descriptors(
