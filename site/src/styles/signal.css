@@ -143,6 +143,12 @@ site-search button[data-open-modal] {
   text-transform: uppercase;
 }
 
+html:lang(zh-CN) .sidebar-content .top-level > li > details > summary {
+  font-family: var(--sl-font);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .sidebar-content a {
   transition:
     color 160ms ease,
@@ -168,7 +174,7 @@ site-search button[data-open-modal] {
 .right-sidebar-panel starlight-toc h2 {
   margin-bottom: 0.75rem;
   color: var(--sl-color-white);
-  font-size: 0.72rem;
+  font-size: var(--sl-text-sm);
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -181,7 +187,7 @@ site-search button[data-open-modal] {
   border-radius: 0;
   padding-block: 0.34rem;
   color: var(--sl-color-gray-3);
-  font-size: 0.72rem;
+  font-size: var(--sl-text-xs);
   font-weight: 400;
   line-height: 1.45;
   transition:
