@@ -106,7 +106,7 @@ requires-dist = [
     { name = "langgraph", specifier = ">=0.6" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1.0" },
     { name = "mcp", specifier = ">=1,<2" },
-    { name = "mem0ai", marker = "extra == 'memory'", specifier = ">=2.0.7,<3" },
+    { name = "mem0ai", marker = "extra == 'memory'", specifier = ">=2.0.14,<3" },
     { name = "openai", specifier = ">=1.100" },
     { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "python-dotenv", specifier = ">=1.1,<2" },
@@ -782,9 +782,10 @@ wheels = [
 
 [[package]]
 name = "mem0ai"
-version = "2.0.7"
+version = "2.0.14"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "httpx" },
     { name = "openai" },
     { name = "posthog" },
     { name = "protobuf" },
@@ -793,9 +794,9 @@ dependencies = [
     { name = "qdrant-client" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ad/e8/813101298d681510a000ae5ddb4a994d78a2e20165fc4acf5fa482630502/mem0ai-2.0.7.tar.gz", hash = "sha256:c254c5b851f9bd95dc1f136a2f14f10a980afa607bff381d775b9846442c44ca", size = 229204, upload-time = "2026-06-17T16:26:19.253Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/b2/3d731191e435d8df262da7b1014c5eb872569a99d4c12431b7567832c918/mem0ai-2.0.14.tar.gz", hash = "sha256:e999f23503cc2514fec2439017d9b539edc3f67fbce79d84781e6a93d0352ddb", size = 246753, upload-time = "2026-07-25T12:25:45.347Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a4/db/b4492c154e7b7bbde5d763ad53675a1735095681a4c1890f0017880d8819/mem0ai-2.0.7-py3-none-any.whl", hash = "sha256:02bfef7932297d77a8a13ddb4f2232a781a8f827004026586c947b7e3ae0ff24", size = 319881, upload-time = "2026-06-17T16:26:17.709Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/c8/d1f23dbeefaba3f9eabaa0f3fb2c44763a052a3cc9a6ad96e6a37e1d4c84/mem0ai-2.0.14-py3-none-any.whl", hash = "sha256:9c567df69af794278bc051400829d1a2d4f8aa659cae6cd019d88ec66dbf4f3f", size = 342432, upload-time = "2026-07-25T12:25:43.511Z" },
 ]
 
 [[package]]
