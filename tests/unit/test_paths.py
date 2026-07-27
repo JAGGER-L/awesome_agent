@@ -17,6 +17,7 @@ def test_windows_default_home_uses_localappdata(tmp_path: Path) -> None:
     assert paths.env_file == paths.home / ".env"
     assert paths.config_file == paths.home / "config.yaml"
     assert paths.skills_dir == paths.home / "skills"
+    assert paths.logs_dir == paths.home / "logs"
     assert paths.state_dir == paths.home / "state"
     assert paths.change_journal_dir == paths.state_dir / "change-journal"
     assert paths.provider_model_transaction_file == (
@@ -77,6 +78,7 @@ def test_state_databases_have_separate_paths(tmp_path: Path) -> None:
     assert paths.provider_credential_transaction_file.parent != paths.state_dir
     assert paths.ui_file == paths.home / "ui.json"
     assert paths.user_memory_file == paths.memory_dir / "USER.md"
+    assert paths.logs_dir == paths.home / "logs"
     assert paths.workspace_config_file(tmp_path / "workspace") == (
         tmp_path / "workspace" / ".awesome" / "config.yaml"
     )

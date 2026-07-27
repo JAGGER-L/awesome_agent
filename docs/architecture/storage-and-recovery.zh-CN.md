@@ -26,6 +26,13 @@ Awesome 将产品状态保存在解析后的 `AWESOME_HOME` 本地目录。之�
 可重置边界恰好是 `<AWESOME_HOME>/state`。配置、凭据、Memory、Skills、UI 偏好和项目文件
 都位于边界之外。
 
+确定性的 Thread export 属于该可重置边界之外的项目文件。Application 只投影公开
+transcript 字段，通过 identity-bound safe filesystem 路径写入，并为创建或更新的字节记录
+journal 以支持 undo。规范化目标会在 mutation 前按 1–1,000 字符契约检查，渲染在 event
+loop 外执行，输出上限为 5 MiB。字节相同的导出为 unchanged 且没有 ChangeSet；失败且
+reconciliation 后没有 evidence 的尝试不会发布空 ChangeSet。两种导出 format 都不含
+workspace key 或内部 metadata。
+
 ## 为什么使用两个 SQLite 数据库
 
 Application SQLite 存储产品事实：用户接受了一条消息、Turn 正在运行、回答已完成，或
@@ -41,6 +48,22 @@ ChangeSet 已应用。LangGraph 原生 SQLite saver 存储恢复执行所需的�
 Application SQLite 使用 WAL。多查询读取使用 deferred transaction，使一个 Thread
 页面能观察一致快照，同时不预留唯一 writer。Mutation 使用 `BEGIN IMMEDIATE`，在校验
 和改变产品状态前先取得 writer reservation。
+
+一个进程级 `ApplicationSQLite` 持有有界 FIFO worker thread 和一条长期 connection。面向
+Application 的 repository 暴露 async method；同步 transaction callback 在该 worker 中执行，
+并且只能返回已脱离 SQLite 所有权的 domain value，不能返回 connection、cursor 或 row。
+取消的 read 可以停止等待，已准入的读取仍在后台完成；durable write、initialize、reset、
+suspend 和 close 则会等到明确的 worker 结果，再传播 caller 的第一次 cancellation。这样既
+保持 SQLite 所有权和 transaction 状态明确，也让 event loop 能继续处理紧急控制请求。
+若 SQLite 无法确认 rollback，owner 会关闭并 fail 该 worker，而不会继续复用 transaction
+状态未知的 connection。
+
+Thread search 仍是该同一 owner 上的有界 read。它对 title 与持久 entry 内容使用字面
+substring predicate，把每条 query 隔离到一个 Workspace，并按 `updated_at DESC, id DESC`
+排序。每条 query（包括 selection revalidation）都有 5,000,000 SQLite VM-op budget；耗尽
+预算会稳定返回 `result_too_large`，而不是无界占用 owner。不透明 page cursor 通过 hash
+绑定 Workspace 与规范化 query；没有需要恢复的 FTS index、平行搜索 database 或 relevance
+state。
 
 一个重要事务是接受首条消息：
 
@@ -59,9 +82,27 @@ COMMIT
 Application 数据库存储有界 activity summary。未完成执行所需的完整 observation 保留在
 checkpoint 中。
 
+## 物化 Thread lineage
+
+Schema 8 的每个 Thread 都存储 `lineage_json`：根 Thread 使用 SQL `NULL`；fork 或 retry
+产生的 Thread 则存储一条严格的直接父级记录，其中包含 `kind`、`source_thread_id` 与
+`source_turn_id`。这是来源信息，不是共享历史指针：目标会获得全新的 Thread、Entry、
+Turn、client-message 与 checkpoint-key identity。
+
+Fork 与 Retry 都要求来源 Turn 已到终态。Fork 复制至该 Turn（含该 Turn）的持久 transcript
+前缀。Retry 复制该 Turn 之前的前缀，然后追加相同 user input，并以来源 Turn 的 provider、
+model、Thinking、Skill mode 与 budgets 创建一个全新的 in-progress Turn。克隆的终态 Turn
+会保留公开 outcome 与 usage，但清空 context manifest。两者都不会复制 summary、
+ToolActivity、checkpoint 或 ChangeSet；Retry 从不重放旧工具调用，也不撤销其效果。
+
+Conversation 会准备不可变目标，以及覆盖所有会影响物化的来源 Thread、Entry 与 Turn 事实
+的 hash。Storage 在一个 `BEGIN IMMEDIATE` transaction 内重新校验终态目标和来源
+fingerprint，再插入完整目标。因此来源竞态不会发布部分 Thread，而会返回 conflict，要求
+显式重试命令。
+
 ## Schema 身份
 
-Application schema 身份与产品版本相互独立。当前 bootstrap schema 是 Schema 7。只有
+Application schema 身份与产品版本相互独立。当前 bootstrap schema 是 Schema 8。只有
 当所需 table、payload 解释或跨记录不变量无法被当前代码安全读取时，schema 身份才会
 改变，并且只单调递增。
 
@@ -69,8 +110,10 @@ Application schema 身份与产品版本相互独立。当前 bootstrap schema �
 身份以及分离的 before/after node type 遵循这一规则。没有 mutation ID 的旧版已完成
 记录仍可读取；崩溃窗口中语义不明的证据仍保持 pending，供诊断使用。
 
-Awesome 有意不提供通用迁移框架或历史 adapter chain。这会减少隐式兼容行为，却意味着
-旧 schema 必须显式重置，而不能自动迁移。
+Awesome 只提供一个刻意保持精简的前向 migration registry。它只接受相邻的 `N -> N+1`
+step，并要求从支持 floor 到当前 schema 只有一条完整线性路径。生产环境的 floor 是 7，
+当前 identity 是 8。唯一的 `7 -> 8` step 增加可空的 `threads.lineage_json`；既有 Thread
+因此仍是根节点，无需重写产品历史。Schema 1–6 仍然不可迁移。
 
 ## 只读启动预检
 
@@ -81,12 +124,39 @@ Application 数据库分类：
 | --- | --- |
 | new | 在独占 state lease 下创建当前 schema |
 | current | 保留共享 state lease 并继续 |
-| older | 展示 reset-or-exit interaction |
+| migration required | 在独占 state lease 下执行完整的已注册迁移链 |
+| migration unavailable | 展示 reset-or-exit interaction |
 | newer | 停止并要求用户升级 |
 | unknown/corrupt/unreadable/locked | 停止并显示诊断 |
 
-只有旧 schema 提供 reset。若把更新或未知 schema 当作可丢弃内容，可能会破坏当前 binary
-只是尚不能理解的状态。
+只有不可迁移的旧 schema 提供 reset。若把更新、未知或损坏 schema 当作可丢弃内容，可能会
+破坏当前 binary 只是尚不能理解的状态。
+
+## 非破坏性迁移路径
+
+```text
+shared-lease read-only preflight
+  -> acquire exclusive state lease
+  -> recheck compatibility and database identity
+  -> source quick_check
+  -> SQLite Backup API snapshot
+     <AWESOME_HOME>/state/application.db.pre-migration.bak
+  -> independently reopen and validate the backup
+  -> BEGIN IMMEDIATE
+  -> apply the complete adjacent migration chain
+  -> final quick_check -> COMMIT
+  -> downgrade to shared lease
+  -> initialize Application repositories
+```
+
+源路径必须仍是 exclusive lease 所属的私有、regular、无链接数据库。Backup 通过同目录
+temporary file 写入，收紧权限、刷盘并原子替换。SQLite Backup API 会包含已提交的 WAL
+状态；这里不使用 `immutable=1` 捷径。
+
+从发现版本到当前版本的完整链共享一个 transaction。任一步骤失败都会回滚全部 schema
+和数据变更。固定 backup 会保留供手动恢复，包括 migration 失败时；Awesome 绝不会自动
+restore，也不会把 migration failure 转换成自动 reset。无法证明 rollback 结果时，database
+worker 会 fail closed。
 
 ## State lease 与重置
 
@@ -100,7 +170,7 @@ typed state-reset confirmation
   -> acquire exclusive state lease
   -> validate target == <AWESOME_HOME>/state
   -> atomically rename old state directory
-  -> create and validate fresh Schema 7
+  -> create and validate fresh Schema 8
   -> remove replaced state
   -> downgrade to shared lease
   -> continue to workspace trust
@@ -140,7 +210,7 @@ LangGraph checkpoint 以 Turn ID 为 key。可恢复 checkpoint 包含严格 `Ag
 - message role、tool-call/result 顺序和活动尾部索引；
 - 上下文 manifest 形态、内容 hash、token 估算和 transcript 覆盖；
 - final answer 与 termination 字段能否构成合法状态；
-- pending tool 能否表示结果不确定的外部操作。
+- pending tool 能否表示结果不确定的副作用操作。
 
 无效 checkpoint 会以稳定错误码使对应 Turn 失败。系统绝不会通过猜测缺失的图 transition
 来修复它。
@@ -253,22 +323,23 @@ Coordinator 会对未完成 Turn 分类：
 
 - 已完成且有效的图状态：完成产品持久化并删除 checkpoint；
 - 有效未完成状态：提供或执行有界 resume 流程；
-- 不确定的 `execute` 或 MCP 边界：要求显式 Abort/Retry，并把 Abort 放在首位；
+- 不确定的文件修改、`execute`、MCP 或 Web 边界：要求显式 Abort/Retry，并把 Abort 放在
+  首位；
 - 缺失、损坏、不一致或不可恢复状态：以稳定诊断标记失败；
 - 属于已终态 Turn 的 checkpoint：移除残留 checkpoint。
 
-打开 Thread 并不隐含 Retry。重放不确定的 shell 或 MCP 调用可能复制外部作用，因此选择
-必须绑定到该 Thread 和 Turn，并显式作出。
+打开 Thread 并不隐含 Retry。重放不确定的文件修改、shell、MCP 或 Web 调用可能复制副作用，
+因此选择必须绑定到该 Thread 和 Turn，并显式作出。
 
 ## Change Journal 持久性
 
 Change metadata 与 pending intent 位于 Application SQLite；blob 位于
 `state/change-journal`；作用发生在项目文件系统。这三个位置不能共享同一个事务。
 
-Journal 会在发布 blob ID 前写入内容 blob，在 mutation 前持久化 intent，校验结果，
-再记录已提交 change。Undo 和 redo 会在第一次 restore 前持久化所有 intent，并在所有
-restore 成功后提交一次 lifecycle transition。启动校正利用 pending evidence 去完成或
-回滚它能证明的状态。
+Journal 会在发布 blob ID 前写入内容 blob。普通 mutation 随后遵循固定的 durable 顺序：
+提交 pending intent、修改 workspace、提交 ChangeSet 结果，最后提交 pending intent 删除。
+Undo 和 redo 会在第一次 restore 前持久化所有 intent，并在所有 restore 成功后提交一次
+lifecycle transition。启动校正利用 pending evidence 去完成或回滚它能证明的状态。
 
 SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，但数据库、blob
 目录和工作区之间没有共享 directory-fsync 边界。突然断电可能留下保守 pending conflict
@@ -289,14 +360,18 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 | Provider credential journal 为 `COMMITTED` | 目标 `.env` hash 与 source identity | 验证目标文件并向前完成 source |
 | Provider credential 证据无效或无法校正 | journal/backup 保留；runtime 不发布或保持 fenced | 以 `recovery_required` 失败；不加载半状态 |
 | mutation intent 持久化，作用不确定 | PendingMutation + blob | 校验、完成或回滚 |
-| shell/MCP transport 调度后失败 | 保守 observation / 不确定工具状态 | 显式 Abort 或 Retry |
+| materialization 来源在提交前改变 | 没有目标行 | 返回 conflict；显式重试命令 |
+| 副作用工具调度后失败 | 保守 observation / 不确定工具状态 | 显式 Abort 或 Retry |
+| migration step 失败并回滚 | 固定的 migration 前 SQLite backup | 启动失败；保留 backup 供手动恢复 |
+| 无法证明 migration rollback | 固定 backup 与被 fenced 的 database worker | fail closed；需要人工诊断 |
 | state reset 的全新初始化失败 | 已改名的原目录 | 恢复原 namespace |
 
 ## 设计取舍
 
 - 嵌入式 SQLite 消除了服务运维，却使本地文件所有权和锁成为产品契约的一部分。
 - 产品/checkpoint 数据库分离保持边界，但要求严格收敛。
-- 显式破坏性 reset 不如 migration 方便，却避免静默重新解释状态。
+- 对 floor 之前状态执行显式破坏性 reset 不如 migration 方便，却避免静默重新解释不受支持的
+  状态。
 - WAL 与 `synchronous=NORMAL` 偏向交互性能，不宣称在数据库和工作区文件之间具有断电
   原子性。
 - 保守 pending evidence 可能需要人工诊断；删除它会抹去不确定 mutation 的唯一证据。
@@ -304,9 +379,11 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 ## 源代码与测试索引
 
 - 数据库 schema：`storage/database.py`
+- Application SQLite owner：`storage/application_sqlite.py`
 - Conversation 与 trust：`storage/conversations.py`、`storage/trust.py`
 - Checkpoint：`storage/checkpoints.py`
-- 兼容与重置：`storage/compatibility.py`、`storage/state_recovery.py`
+- 兼容、迁移与重置：`storage/compatibility.py`、`storage/migrations.py`、
+  `storage/state_recovery.py`
 - 跨进程 lease：`storage/state_lease.py`
 - 变更持久化：`storage/changes.py`、`core/changes/`
 - Turn 恢复：`application/turns.py`
@@ -314,7 +391,8 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
   `application/provider_configuration.py`
 - Provider credential 事务：`config/credential_transaction.py`、
   `config/credentials.py`、`application/provider_configuration.py`
-- 测试：`tests/unit/storage/`、`tests/integration/test_sqlite_checkpoints.py`、
+- 测试：`tests/unit/storage/test_application_sqlite.py`、
+  `tests/unit/storage/`、`tests/integration/test_sqlite_checkpoints.py`、
   `tests/integration/test_agent_recovery.py`、
   `tests/unit/config/test_model_transaction.py`、
   `tests/unit/config/test_credential_transaction.py`、

@@ -12,16 +12,30 @@ from awesome_agent.storage.database import initialize_application_database
 
 STORAGE_MODULES = {
     "__init__.py",
+    "application_sqlite.py",
     "changes.py",
     "checkpoints.py",
     "compatibility.py",
     "conversations.py",
     "database.py",
+    "health.py",
     "mcp.py",
+    "migrations.py",
     "pagination.py",
     "state_lease.py",
     "state_recovery.py",
     "trust.py",
+}
+APPLICATION_DB_ADAPTERS = {
+    "src/awesome_agent/storage/changes.py",
+    "src/awesome_agent/storage/conversations.py",
+    "src/awesome_agent/storage/mcp.py",
+    "src/awesome_agent/storage/trust.py",
+}
+COMPOSITION_TO_THREAD_TARGETS = {
+    "_git_branch",
+    "discover_skills",
+    "reconcile_provider_credential_transaction",
 }
 APPLICATION_TABLES = {
     "change_sets",
@@ -44,6 +58,24 @@ def _imports(path: Path) -> set[str]:
             result.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             result.add(node.module)
+    return result
+
+
+def _asyncio_to_thread_targets(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    result: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "asyncio"
+            and node.func.attr == "to_thread"
+        ):
+            continue
+        assert node.args, f"asyncio.to_thread() has no target in {path}"
+        result.add(ast.unparse(node.args[0]))
     return result
 
 
@@ -89,6 +121,21 @@ def test_composition_uses_embedded_state_owners() -> None:
         "awesome_agent.memory",
         "langgraph.checkpoint.base",
     } <= imports
+
+
+def test_application_database_adapters_cannot_bypass_the_worker() -> None:
+    for source_path in APPLICATION_DB_ADAPTERS:
+        source = Path(source_path).read_text(encoding="utf-8")
+        assert "application_connection" not in source, source_path
+        assert "asyncio.to_thread" not in source, source_path
+
+
+def test_composition_has_no_application_database_thread_bypass() -> None:
+    path = Path("src/awesome_agent/application/composition.py")
+    source = path.read_text(encoding="utf-8")
+
+    assert "application_connection" not in source
+    assert _asyncio_to_thread_targets(path) == COMPOSITION_TO_THREAD_TARGETS
 
 
 def test_application_database_has_current_tables(tmp_path: Path) -> None:

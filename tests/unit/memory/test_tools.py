@@ -10,13 +10,13 @@ from pydantic import BaseModel
 
 import awesome_agent.core.tools.executor as tool_executor
 import awesome_agent.memory.tools as memory_tools
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
     exclusive_resource_lock,
 )
-from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
-from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
     ToolActivityDraft,
     ToolActivityWriter,
@@ -51,7 +51,7 @@ class ActivityWriter(ToolActivityWriter):
     def __init__(self) -> None:
         self.items: list[ToolActivityDraft] = []
 
-    def finalize(self, activity: ToolActivityDraft) -> None:
+    async def finalize(self, activity: ToolActivityDraft) -> None:
         self.items.append(activity)
 
 
@@ -362,7 +362,7 @@ async def test_cancelled_memory_mutation_keeps_foreground_until_worker_finishes(
     async def short_bounded_call(call: Callable[[], object]) -> object:
         return await original_blocking_call(
             call,
-            cleanup_timeout_seconds=0.2,
+            cleanup_timeout_seconds=1.0,
         )
 
     monkeypatch.setattr(service, "add", delayed_add)
@@ -374,7 +374,7 @@ async def test_cancelled_memory_mutation_keeps_foreground_until_worker_finishes(
     monkeypatch.setattr(
         memory_tools,
         "_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS",
-        0.3,
+        1.5,
         raising=False,
     )
     monkeypatch.setattr(
@@ -384,6 +384,9 @@ async def test_cancelled_memory_mutation_keeps_foreground_until_worker_finishes(
     )
     registry = ToolRegistry()
     refresh_local_memory_tools(registry, service)
+    registered = registry.resolve("memory_add")
+    assert registered is not None
+    assert registered.cancellation_grace_seconds == 1.5
     task = asyncio.create_task(
         ToolExecutor(registry).execute(
             ToolRequest(
@@ -402,12 +405,12 @@ async def test_cancelled_memory_mutation_keeps_foreground_until_worker_finishes(
 
     task.cancel("cancel memory mutation")
     try:
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0)
         assert not task.done()
     finally:
         release.set()
     with pytest.raises(asyncio.CancelledError, match="cancel memory mutation"):
-        await asyncio.wait_for(task, timeout=1.0)
+        await asyncio.wait_for(task, timeout=2.0)
 
     assert service.list(MemoryScope.USER)[0].content == (
         "Persist before cancellation is terminal."

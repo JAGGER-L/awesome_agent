@@ -10,6 +10,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from awesome_agent.contract_versions import (
+    EVENT_ENVELOPE_VERSION,
+    EventEnvelopeVersion,
+)
 from awesome_agent.core.contracts import JsonSafeInteger
 
 _MAX_LIFECYCLE_HISTORY = 4_096
@@ -19,6 +23,7 @@ type InteractionDecisionValue = Literal[
     "reset_state",
     "allow_once",
     "allow_thread_writes",
+    "allow_thread_network",
     "enable_full_access",
     "retry",
     "abort",
@@ -160,6 +165,7 @@ class UsageUpdatedPayload(BaseModel):
     reasoning_tokens: JsonSafeInteger = Field(default=0, ge=0)
     cache_read_tokens: JsonSafeInteger = Field(default=0, ge=0)
     cache_write_tokens: JsonSafeInteger = Field(default=0, ge=0)
+    web_requests: JsonSafeInteger = Field(default=0, ge=0)
 
 
 class MemoryStatusPayload(BaseModel):
@@ -258,7 +264,7 @@ _TURN_TERMINALS = _TURN_TYPES - {EventType.TURN_STARTED}
 class EventEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    version: Literal[1] = 1
+    version: EventEnvelopeVersion = EVENT_ENVELOPE_VERSION
     event_id: str = Field(pattern=r"^event_[A-Za-z0-9]+$", max_length=128)
     sequence: JsonSafeInteger = Field(ge=1)
     session_id: str = Field(min_length=1, max_length=128)

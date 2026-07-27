@@ -3,7 +3,8 @@ import os
 import sqlite3
 import subprocess
 import threading
-from contextlib import closing
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -30,6 +31,7 @@ from awesome_agent.core.workspace import (
     resolve_workspace,
 )
 from awesome_agent.extensions.skills import discover_skills
+from awesome_agent.storage import ApplicationSQLite, application_sqlite
 from awesome_agent.storage.database import initialize_application_database
 from awesome_agent.storage.state_lease import StateLease, StateLeaseMode
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
@@ -68,20 +70,31 @@ def _file_snapshot(root: Path) -> dict[str, bytes]:
     }
 
 
-def test_accept_survives_reopen_and_revoke(tmp_path: Path) -> None:
+@asynccontextmanager
+async def _trust_service(path: Path) -> AsyncIterator[WorkspaceTrustService]:
+    database = ApplicationSQLite(path)
+    await database.initialize()
+    try:
+        yield WorkspaceTrustService(SQLiteWorkspaceTrustStore(database))
+    finally:
+        await database.aclose()
+
+
+@pytest.mark.asyncio
+async def test_accept_survives_reopen_and_revoke(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     database = tmp_path / "home" / "state" / "application.db"
     identity = resolve_workspace(workspace)
 
-    first = WorkspaceTrustService(SQLiteWorkspaceTrustStore(database))
-    assert first.status(identity) is TrustStatus.UNKNOWN
-    first.accept(identity)
+    async with _trust_service(database) as first:
+        assert await first.status(identity) is TrustStatus.UNKNOWN
+        await first.accept(identity)
 
-    reopened = WorkspaceTrustService(SQLiteWorkspaceTrustStore(database))
-    assert reopened.status(identity) is TrustStatus.TRUSTED
-    assert reopened.revoke(identity) is True
-    assert reopened.status(identity) is TrustStatus.UNKNOWN
+    async with _trust_service(database) as reopened:
+        assert await reopened.status(identity) is TrustStatus.TRUSTED
+        assert await reopened.revoke(identity) is True
+        assert await reopened.status(identity) is TrustStatus.UNKNOWN
 
 
 def test_git_branch_probe_never_inherits_application_stdin(
@@ -108,33 +121,36 @@ def test_git_branch_probe_never_inherits_application_stdin(
     assert observed["stdin"] is subprocess.DEVNULL
 
 
-def test_decline_is_represented_by_not_calling_accept(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_decline_is_represented_by_not_calling_accept(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     database = tmp_path / "application.db"
     identity = resolve_workspace(workspace)
 
-    service = WorkspaceTrustService(SQLiteWorkspaceTrustStore(database))
-    assert service.status(identity) is TrustStatus.UNKNOWN
+    async with _trust_service(database) as service:
+        assert await service.status(identity) is TrustStatus.UNKNOWN
 
-    reopened = WorkspaceTrustService(SQLiteWorkspaceTrustStore(database))
-    assert reopened.status(identity) is TrustStatus.UNKNOWN
+    async with _trust_service(database) as reopened:
+        assert await reopened.status(identity) is TrustStatus.UNKNOWN
 
 
-def test_moved_workspace_requires_new_trust(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_moved_workspace_requires_new_trust(tmp_path: Path) -> None:
     original = tmp_path / "original"
     moved = tmp_path / "moved"
     original.mkdir()
     database = tmp_path / "application.db"
-    service = WorkspaceTrustService(SQLiteWorkspaceTrustStore(database))
-    service.accept(resolve_workspace(original))
+    async with _trust_service(database) as service:
+        await service.accept(resolve_workspace(original))
 
-    original.rename(moved)
+        original.rename(moved)
 
-    assert service.status(resolve_workspace(moved)) is TrustStatus.UNKNOWN
+        assert await service.status(resolve_workspace(moved)) is TrustStatus.UNKNOWN
 
 
-def test_link_and_real_path_share_identity_and_trust(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_link_and_real_path_share_identity_and_trust(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     link = tmp_path / "workspace-link"
@@ -159,14 +175,12 @@ def test_link_and_real_path_share_identity_and_trust(tmp_path: Path) -> None:
 
     real_identity = resolve_workspace(workspace)
     link_identity = resolve_workspace(link)
-    service = WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(tmp_path / "application.db")
-    )
-    service.accept(real_identity)
+    async with _trust_service(tmp_path / "application.db") as service:
+        await service.accept(real_identity)
 
-    assert link_identity.key == real_identity.key
-    assert link_identity.root_identity == real_identity.root_identity
-    assert service.status(link_identity) is TrustStatus.TRUSTED
+        assert link_identity.key == real_identity.key
+        assert link_identity.root_identity == real_identity.root_identity
+        assert await service.status(link_identity) is TrustStatus.TRUSTED
 
 
 @pytest.mark.asyncio
@@ -256,12 +270,8 @@ async def test_trust_resolution_event_failure_is_fail_closed_and_not_replayable(
     assert [
         call.kwargs["workspace_trusted"] for call in config_loader.call_args_list
     ] == [False]
-    assert (
-        WorkspaceTrustService(
-            SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-        ).status(resolve_workspace(workspace))
-        is TrustStatus.UNKNOWN
-    )
+    async with _trust_service(home / "state" / "application.db") as trust:
+        assert await trust.status(resolve_workspace(workspace)) is TrustStatus.UNKNOWN
     replay = _unwrap(
         await application.respond_interaction(pending.interaction_id, "trust")
     )
@@ -315,12 +325,8 @@ async def test_trust_response_rejects_workspace_root_replacement_before_activati
     assert [
         call.kwargs["workspace_trusted"] for call in config_loader.call_args_list
     ] == [False]
-    assert (
-        WorkspaceTrustService(
-            SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-        ).status(resolve_workspace(workspace))
-        is TrustStatus.UNKNOWN
-    )
+    async with _trust_service(home / "state" / "application.db") as trust:
+        assert await trust.status(resolve_workspace(workspace)) is TrustStatus.UNKNOWN
     _unwrap(await application.shutdown())
 
 
@@ -332,9 +338,8 @@ async def test_trusted_initialize_rejects_workspace_root_replacement(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    ).accept(resolve_workspace(workspace))
+    async with _trust_service(home / "state" / "application.db") as trust:
+        await trust.accept(resolve_workspace(workspace))
     config_loader = Mock(wraps=load_config_sources)
     monkeypatch.setattr(composition, "load_config_sources", config_loader)
     application = await composition.compose_local_application(
@@ -501,7 +506,7 @@ async def test_confirmed_reset_preserves_nonstate_data_and_continues_to_trust(
     trust = _unwrap(await application.initialize())
     assert trust.status is InitializeStatus.TRUST_REQUIRED
     with closing(sqlite3.connect(database)) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
     assert not (state / "checkpoints.db").exists()
     assert not (state / "change-journal").exists()
     assert config.read_bytes() == b"providers: {}\n"
@@ -531,7 +536,7 @@ async def test_shutdown_waits_for_cancelled_state_reset_worker_before_releasing_
         release.wait(timeout=2)
         finished.set()
 
-    monkeypatch.setattr(composition, "reset_local_state", blocked_reset)
+    monkeypatch.setattr(application_sqlite, "reset_local_state", blocked_reset)
     application = await composition.compose_local_application(
         home=home,
         workspace=workspace,
@@ -680,7 +685,7 @@ async def test_reset_confirmation_rejects_state_that_became_newer(
     pending = _unwrap(await application.initialize())
     assert pending.interaction_id is not None
     with closing(sqlite3.connect(database)) as connection:
-        connection.execute("PRAGMA user_version = 8")
+        connection.execute("PRAGMA user_version = 9")
     before = database.read_bytes()
 
     response = _unwrap(
@@ -705,7 +710,7 @@ async def test_reset_confirmation_rejects_state_that_became_newer(
 @pytest.mark.parametrize(
     ("version", "code"),
     [
-        (8, ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION),
+        (9, ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION),
         (999, ProductErrorCode.STATE_CREATED_BY_NEWER_VERSION),
     ],
 )

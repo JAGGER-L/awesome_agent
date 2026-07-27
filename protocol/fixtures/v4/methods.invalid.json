@@ -1,0 +1,339 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "initialize",
+      "name": "initialize.missing_client_version",
+      "params": {
+        "client_name": "awesome",
+        "protocol_version": 4
+      }
+    },
+    {
+      "expected": {
+        "code": "protocol_version_incompatible",
+        "kind": "product_error"
+      },
+      "method": "initialize",
+      "name": "initialize.protocol_incompatible",
+      "params": {
+        "client_name": "awesome",
+        "client_version": "1.3.0",
+        "protocol_version": 3
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "application.getState",
+      "name": "application.get_state.extra",
+      "params": {
+        "extra": true
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.list",
+      "name": "skill.list.extra",
+      "params": {
+        "extra": true
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.install",
+      "name": "skill.install.missing_source",
+      "params": {}
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.install",
+      "name": "skill.install.replace_type",
+      "params": {
+        "replace": 1,
+        "source_path": "review"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.install",
+      "name": "skill.install.extra",
+      "params": {
+        "extra": true,
+        "source_path": "review"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.remove",
+      "name": "skill.remove.invalid_name",
+      "params": {
+        "name": "../review"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.remove",
+      "name": "skill.remove.extra",
+      "params": {
+        "extra": true,
+        "name": "review"
+      }
+    },
+    {
+      "expected": {
+        "code": -32600,
+        "kind": "jsonrpc_error"
+      },
+      "method": "application.getState",
+      "name": "request_id.unpaired_surrogate",
+      "params": {},
+      "request_id": "\ud800"
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.list",
+      "name": "thread.list.limit",
+      "params": {
+        "limit": 201
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.list",
+      "name": "thread.list.limit_type",
+      "params": {
+        "limit": "50"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.list",
+      "name": "thread.list.explicit_null",
+      "params": {
+        "cursor": null
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.search",
+      "name": "thread.search.blank_query",
+      "params": {
+        "query": "   "
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.search",
+      "name": "thread.search.limit",
+      "params": {
+        "limit": 51,
+        "query": "fixture"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.search",
+      "name": "thread.search.explicit_null",
+      "params": {
+        "cursor": null,
+        "query": "fixture"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.read",
+      "name": "thread.read.before_sequence",
+      "params": {
+        "before_sequence": 0,
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.read",
+      "name": "thread.read.before_sequence_type",
+      "params": {
+        "before_sequence": true,
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.read",
+      "name": "thread.read.before_sequence_unsafe",
+      "params": {
+        "before_sequence": 9007199254740992,
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "turn.submit",
+      "name": "turn.submit.client_message_id_missing",
+      "params": {
+        "content": "Inspect.",
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "turn.submit",
+      "name": "turn.submit.empty",
+      "params": {
+        "client_message_id": "client_44444444444444444444444444444444",
+        "content": "",
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "direct.execute",
+      "name": "direct.execute.empty",
+      "params": {
+        "command": "",
+        "thread_id": "thread_11111111111111111111111111111111"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "provider.credential.set",
+      "name": "provider.credential.allow_unverified_type",
+      "params": {
+        "action": "add",
+        "allow_unverified": "true",
+        "api_key": "fixture-request-secret",
+        "provider": "deepseek"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "provider.credential.set",
+      "name": "provider.credential.explicit_null",
+      "params": {
+        "action": "delete",
+        "api_key": null,
+        "provider": "deepseek"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "command.execute",
+      "name": "command.execute.unknown",
+      "params": {
+        "name": "unknown"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "interaction.respond",
+      "name": "interaction.respond.empty",
+      "params": {
+        "decision": "",
+        "interaction_id": "interaction_1"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "operation.cancel",
+      "name": "operation.cancel.empty",
+      "params": {
+        "operation_id": ""
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "shutdown",
+      "name": "shutdown.extra",
+      "params": {
+        "force": true
+      }
+    },
+    {
+      "expected": {
+        "code": -32601,
+        "kind": "jsonrpc_error"
+      },
+      "method": "debug.dump",
+      "name": "method.unknown",
+      "params": {}
+    }
+  ]
+}

@@ -15,17 +15,16 @@ from uuid import uuid4
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, SecretStr
 
+from awesome_agent.config.credential_catalog import (
+    awesome_secret_names,
+    credential_descriptor,
+)
 from awesome_agent.config.models import CredentialSelectionConfig, CredentialSource
-from awesome_agent.config.resource_lock import exclusive_resource_lock
+from awesome_agent.core.resource_lock import exclusive_resource_lock
 
 type ProviderName = Literal["deepseek", "kimi"]
 type CredentialService = Literal["deepseek", "kimi", "mem0"]
 
-_PROVIDER_ENVIRONMENT_VARIABLES: dict[CredentialService, str] = {
-    "deepseek": "DEEPSEEK_API_KEY",
-    "kimi": "MOONSHOT_API_KEY",
-    "mem0": "MEM0_API_KEY",
-}
 _MAX_SECRET_FILE_BYTES = 1024 * 1024
 
 
@@ -87,7 +86,7 @@ class ProviderCredentialStatuses(BaseModel):
 
 
 def provider_environment_variable(provider: CredentialService) -> str:
-    return _PROVIDER_ENVIRONMENT_VARIABLES[provider]
+    return credential_descriptor(provider).environment_variable
 
 
 def missing_provider_credential_statuses() -> ProviderCredentialStatuses:
@@ -287,7 +286,7 @@ class UserSecretStore:
 
 
 def _validate_name(name: str) -> None:
-    if name not in _PROVIDER_ENVIRONMENT_VARIABLES.values():
+    if name not in awesome_secret_names():
         raise ValueError("Unsupported Provider credential name.")
 
 

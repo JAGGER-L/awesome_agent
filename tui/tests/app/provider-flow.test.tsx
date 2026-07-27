@@ -4,8 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { App } from "../../src/app/App.js";
 import { CommandController } from "../../src/commands/controller.js";
 import { RpcProtocolError } from "../../src/protocol/client.js";
-import type { MethodName, MethodParams } from "../../src/protocol/methods.js";
+import type {
+  MethodName,
+  MethodParams,
+  MethodValue,
+} from "../../src/protocol/methods.js";
 import { createSurfaceStore } from "../../src/state/store.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 async function eventually(assertion: () => void): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -20,6 +25,31 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe("Provider setup flow", () => {
+  it("uses the catalog credential association to decide whether setup is required", () => {
+    const application = applicationState(false);
+    const [deepseekProvider] = application.model_catalog.providers;
+    if (!deepseekProvider) throw new Error("DeepSeek fixture is missing");
+    deepseekProvider.credential_id = "kimi";
+    application.provider_credentials.kimi.awesome_configured = true;
+    application.provider_credentials.kimi.selected_source = "awesome";
+    const store = createSurfaceStore();
+    store.dispatch({ type: "hydrate.application", application });
+
+    const view = render(
+      <App
+        store={store}
+        reportFatal={() => undefined}
+        width={80}
+        providerSetupRequired
+      />,
+    );
+
+    expect(view.lastFrame()).not.toContain(
+      "Choose a model Provider to get started.",
+    );
+    view.unmount();
+  });
+
   it("validates a masked key and resumes /model after explicit unverified confirmation", async () => {
     let configured = false;
     let credentialAttempts = 0;
@@ -473,7 +503,9 @@ function modelControllerWithoutCredential(): CommandController {
   });
 }
 
-function applicationState(configured: boolean) {
+function applicationState(
+  configured: boolean,
+): MethodValue["application.getState"] {
   return {
     initialized: true,
     session_id: "session_1",
@@ -481,6 +513,7 @@ function applicationState(configured: boolean) {
     workspace: { display_path: "E:\\workspace" },
     workspace_trusted: true,
     current_thread_id: "thread_1",
+    model_catalog: freshModelCatalog(),
     model_identity: {
       provider: "deepseek" as const,
       configured_model: "deepseek/deepseek-v4-flash",

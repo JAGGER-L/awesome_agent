@@ -34,16 +34,20 @@ Thread 和 Turn。
 | shutdown | 空请求 | stopped 确认 | 干净地关闭资源 |
 
 所有生命周期都显式携带身份、不准入第二个前台 mutation、对预期 busy/failure 使用类型化
-状态、传播取消，并且绝不在没有用户决策的情况下重放结果不确定的外部 action。
+状态、传播取消，并且绝不在没有用户决策的情况下重放结果不确定的副作用 action。
 
 ## 启动与信任
 
 ```text
 awesome [workspace]
   -> Ink starts one private awesome-core
-  -> initialize(protocol=3, client identity)
+  -> initialize(protocol=4, client identity)
   -> resolve candidate workspace identity
-  -> read-only state preflight + trust lookup
+  -> shared-lease read-only state preflight
+  -> if migration_required:
+       exclusive lease -> recheck -> SQLite backup -> one transaction
+       -> downgrade to shared lease -> initialize repositories
+  -> trust lookup
   -> trust decision, if required
   -> after acceptance/already trusted: acquire path + entity leases
   -> recheck workspace root identity under those leases
@@ -60,12 +64,16 @@ awesome [workspace]
 后，系统取得两种 lease，并在激活前重新校验身份。拒绝信任会退出，且不会持久化为
 denial。
 
-旧版 Application schema 会生成类型化的 reset-or-exit interaction。更新且未知、损坏、
-不可读或锁定的状态都会安全停止，绝不会被静默删除。确认 reset 后，会在 bootstrap lock、
-前台 interaction-resolution lease 和独占跨进程 state lease 下执行。
+生产 migration floor 是 7，当前 schema 是 8。唯一注册的 7→8 step 会增加可空的 Thread
+lineage，并让已有 Thread 保持 `lineage = null`。因此 Schema 1–6 会生成类型化
+reset-or-exit interaction。Migration 会保留 `application.db.pre-migration.bak` 供手动恢复，
+绝不会触发自动 reset 或 restore。更新、未知、损坏、不可读或锁定的状态都会安全停止，
+绝不会被静默删除。确认 reset 后，会在 bootstrap lock、前台 interaction-resolution lease
+和独占跨进程 state lease 下执行。
 
-进入 `ready` 前的失败会让协议握手保持关闭。状态分类详见
-[存储与恢复](storage-and-recovery.zh-CN.md)，握手 gate 详见
+进入 `ready` 前的失败会恢复或保持 Application-owned `ApplicationBootstrap` 的 non-ready
+phase。协议握手只是该事实的 admission projection，并会保持关闭。状态分类详见
+[存储与恢复](storage-and-recovery.zh-CN.md)，bootstrap admission 详见
 [协议与 TUI](protocol-and-tui.zh-CN.md)。
 
 ## 自然语言 Turn
@@ -91,10 +99,11 @@ turn.submit(thread_id, content, client_message_id)
   -> release foreground lease
 ```
 
-主要终态事实之后的清理尝试是有界的。清理失败不会改写已完成、已取消或失败的 Turn；
-启动校正可以重试残留 checkpoint 的清理。
+主要终态事实之后的本地 durable cleanup 会保持所有权，直到结果明确。清理失败不会改写
+已完成、已取消或失败的 Turn；启动校正可以重试残留 checkpoint 的清理。外部进程清理与
+best-effort event publication 仍使用有界 deadline。
 
-同步的持久化 Turn transition 与 Operation phase 共同构成一个 commit point。在它之前，
+由 worker 持有的 durable Turn transition 与 Operation phase 共同构成一个 commit point。在它之前，
 cancellation 胜出；在它之后，cancellation 会被拒绝，有界 terminal publication 会保留已经
 提交的 completed 或 failed outcome。Shutdown 观察同一 phase，只会等待而不会发出第二次
 cancellation。
@@ -135,16 +144,19 @@ Operation 和打开的 ChangeSet：
   -> validate Thread and pending interaction
   -> reserve Operation
   -> ToolExecutor(execute, origin=direct)
+       -> strict-validate registered execute arguments
+       -> registered hard admission
+       -> typed description exactly once
        -> emit tool.started
-       -> validate execute arguments
-       -> command hard-deny + Direct permission policy
-       -> Process Runner and bounded process cleanup
+       -> Direct capability policy
+       -> deadline + Process Runner + bounded process cleanup
   -> bounded transcript entry + ChangeSet observation
   -> seal ChangeSet and emit terminal Operation event
 ```
 
-直接执行与 Agent `execute` 调用使用相同的命令 policy、process runner、脱敏、超时、取消
-和审计路径。即使它有 ChangeSet，也不代表执行变得可逆；任意 shell 副作用仍不受管理。
+直接执行与 Agent `execute` 调用使用相同的注册 admission、命令 policy、process runner、
+脱敏、deadline、取消和审计路径。即使它有 ChangeSet，也不代表执行变得可逆；任意 shell
+副作用仍不受管理。
 
 它与选中 Thread 的 permission mode 无关。用户输入的确切 `! command` 本身就是授权，
 因此 Application 为该 Direct Operation 提供自己的 Full-access permission session，
@@ -171,6 +183,16 @@ finalizer 都失败，已取消的 Direct Operation 仍发出 `operation.cancell
   -> optional authoritative state effect
   -> exhaustive Presenter
 ```
+
+Fork 与 retry 复用同一命令边界和独占前台准入。系统会重新读取来源并核对 fingerprint，
+再在一个 SQLite transaction 中用全新 identity 物化前缀。Fork 只会在独立 Thread 已存在后
+发布 `thread_transition`。Retry 先创建独立前缀和新的进行中 Turn，再启动普通 Turn 路径，
+并返回同时包含 transition 与 Operation acceptance 的 `thread_retry` 组合 payload。
+它不复制 checkpoint、ToolActivity 或 ChangeSet，也不重放旧工具调用。
+
+Retry Event 可能先于命令响应到达 stdio。Ink 会在 sequence reduction 前暂存这些 Event，
+先应用权威 retry transition，把已接受 Operation 绑定到新的 Thread generation，再按 sequence
+重放缓冲 Event。Identity 不一致会使协议失败，而不是把 Event 投影到旧 Thread。
 
 一个 Operation 活动期间，只有以下无副作用观察可以穿过 Core gate：
 
@@ -211,11 +233,13 @@ MCP 和未知扩展能力仍需逐次审批。
 ## 取消
 
 `operation.cancel` 指向一个 Operation ID。取消通过 Operation task 传播到模型流或 Tool
-Executor。对于 Turn，Application 随后记录取消事实、尝试有界封存 ChangeSet 和删除
-checkpoint、发出 `operation.cancelled`，并释放 lease。清理失败不会取代已取消这一终态
-事实，并可在启动校正期间重试。对于 shell 进程，Process Runner 执行有界进程树与 pipe
-清理，再重新抛出原始 `CancelledError`。Direct transcript 与 ChangeSet finalizer 会在
-该取消穿过 Application 边界时继续保留它作为主 outcome。
+Executor。对于 Turn，Application 随后记录取消事实，并继续持有 foreground ownership，直到
+本地 ToolActivity、transcript、ChangeSet sealing 和 checkpoint deletion 得到明确结果；之后
+才发出 `operation.cancelled` 并释放 lease。清理失败不会取代已取消这一终态事实，并可在
+启动校正期间重试。对于 shell 进程，Process Runner 执行有界进程树与 pipe 清理，再重新抛出
+原始 `CancelledError`。Direct transcript 与 ChangeSet finalizer 会在该取消穿过 Application
+边界时继续保留它作为主 outcome。Event delivery 是有界 best-effort，不会缩短本地 durable
+ownership。
 
 True cancellation acknowledgement 表示匹配的 Operation 尚未越过 commit point；这包括
 `operation.started` 已可见但 acceptance response 尚未返回的窗口。在这个 starting 窗口中，
@@ -232,8 +256,8 @@ MCP 副作用可能已经发生。
 ```text
 unfinished Turn + checkpoint
   |-- completed valid graph state -> finalize product records
-  |-- valid resumable graph state -> recovery decision / resume
-  |-- uncertain shell or MCP call -> Abort (safe default) or explicit Retry
+  |-- resumable + currently registered replayable tool -> resume
+  |-- non-replayable, missing, or unknown metadata -> interaction: Abort | explicit Retry
   |-- missing, corrupt, or conflicting state -> fail Turn with stable code
 ```
 
@@ -241,19 +265,32 @@ Checkpoint 的冻结 manifest 只有通过 compare-and-swap，才能修复空的
 Application 投影。自洽但无关的 checkpoint 不会被接受为权威。即使一个 Turn 恢复失败，
 恢复过程仍会处理其他 Turn。
 
+对于中断的工具调用，恢复流程会在当前 Runtime Registry 中查找同名工具，并使用该注册项的
+replay-safety metadata；它不按具体工具名分支。经证明的本地 built-in 可以是 replayable。
+文件修改、MCP 和 Web 工具为 non-replayable，metadata 缺失或未知时 fail closed。这些情况
+绝不会自动重试：interaction 默认选择 Abort，而显式 Retry 可以继续旧 checkpoint 并重复
+pending call。因此，变更同名工具契约时必须考虑 checkpoint compatibility。
+
+这种恢复 Retry 与 `/retry [turn_id]` 不同。恢复可在显式批准后继续一个未完成 checkpoint；
+slash command 则要求终态 Turn，创建全新 Thread 与 Turn，并且绝不复用或复制来源 checkpoint。
+
 ## Shutdown
 
-Shutdown 会先关闭前台准入，然后取消活动 Operation，必要时取消另一个 exclusive
-所有者，等待 arbiter idle，最后才在 bootstrap lock 下关闭 MCP client、repository、
-database 和 process resource。
+Shutdown 会先关闭前台准入。它只在活动 Operation 仍处于 running 时取消该 Operation，等待
+任何 committing Operation 和另一个 exclusive 所有者，再等待 arbiter idle。随后它按逆序
+回收 workspace runtime，关闭 checkpoint saver，排空并关闭进程级 Application SQLite
+worker，最后在 bootstrap lock 下释放 workspace 与 state lease。
 
 ```text
 shutdown request
   -> foreground.begin_closing()
-  -> cancel and await Operation
+  -> cancel RUNNING Operation / await COMMITTING Operation
   -> cancel exclusive owner if external
   -> wait_idle()
-  -> close MCP and composed resources
+  -> retire runtime (MCP, Mem0, providers)
+  -> close checkpoint saver
+  -> drain and close ApplicationSQLite
+  -> release workspace and state leases
   -> mark Application closed
 ```
 
@@ -266,7 +303,7 @@ shutdown request
 - 预期工具错误成为有界 Agent observation；
 - 意外图/工具错误会显式终止 Operation；
 - 一个 Operation 只产生一个终态生命周期事件；
-- 结果不确定的外部作用绝不会自动重放；
+- 结果不确定的副作用绝不会自动重放；
 - 持久化完成后事件交付失败会被记录，而不会改变已经完成的产品事实。
 
 ## 设计取舍
@@ -274,7 +311,7 @@ shutdown request
 - 串行前台工作限制吞吐量，却让审批、ChangeSet、取消和恢复拥有唯一明确的所有者。
 - 会话内 interaction 避免持久化过期提示，但重启后的会话必须从持久化事实重建恢复决策。
 - TUI 输入排队改善交互流程，却不承诺 Core 侧并行。
-- 显式不确定结果决策增加摩擦，以避免重复外部作用。
+- 显式不确定结果决策增加摩擦，以避免重复副作用。
 
 ## 源代码与测试索引
 

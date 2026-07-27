@@ -44,12 +44,26 @@ Thread 是绑定到一个 Workspace 的持久会话。其中包含有序的用�
 /new
 /resume
 /resume <thread_id>
+/fork [turn_id]
+/retry [turn_id]
 /rename Dependency graph review
 ```
 
 `/new` 创建一个干净的 Thread，但不会删除之前的 Thread。`/resume` 只提供当前 Workspace 中的 Thread。选择或切换 Thread 会清除临时权限 grant，并把权限 Session 重置为 Request approval。旧的 Full access 确认不能应用到新选中的 Thread。
 
 新 Thread 接受第一条自然语言请求时，会获得自动生成且长度受限的标题。`/rename` 会把标题标记为用户选择。标题用于整理会话历史，不影响 Workspace 身份或模型上下文。
+
+### 物化的 Thread 分支
+
+Fork 与 retry 会从当前 Thread 的一个终态 Turn 创建独立 Thread record。`/fork` 包含目标
+Turn；`/retry` 包含目标之前的前缀，再为同一请求创建全新的 user entry 和进行中 Turn。
+省略 ID 时选择最近的终态 Turn；进行中的 Turn 不能作为物化目标。
+
+这是使用全新 Thread、entry、Turn、checkpoint-key 和 client-message identity 的物理前缀
+复制。目标只保存直接父级 lineage——`fork` 或 `retry`、来源 Thread ID 与来源 Turn ID——
+不会与来源共享历史 DAG。Summary、checkpoint、Tool activity 和 ChangeSet record 均不复制。
+Retry 会把目标 Turn 的 Provider、模型、Thinking、Skill 与预算冻结到新 Turn，并经过普通路径
+执行；旧工具调用不会重放，先前副作用也不会被撤销。
 
 ## Turn：持久请求边界
 
@@ -102,6 +116,8 @@ Operation 是自然语言 Turn 或 direct command 的独占 lease。会改变状
 | 带着历史继续解决同一问题 | 同一 Thread，新 Turn |
 | 在同一项目中开始无关任务 | `/new` |
 | 回到之前的工作 | `/resume` |
+| 从已完成节点探索且不修改原历史 | `/fork [turn_id]` |
+| 使用原始设置再次运行一个终态请求 | `/retry [turn_id]` |
 | 运行已经由你选定的命令 | `! command` |
 | 从当前 TUI 检查当前状态 | 等待或取消，然后使用快照命令 |
 | 更改权限或配置 | 等待 Operation/interaction 完成 |

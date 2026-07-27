@@ -19,13 +19,13 @@ from awesome_agent.application.dispatcher import (
     CommandDispatcher,
     InvalidCommandInventory,
 )
-from awesome_agent.application.foreground import ForegroundArbiter
+from awesome_agent.application.foreground import ForegroundArbiter, ForegroundKind
 from awesome_agent.application.operations import OperationBusy, OperationController
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.events import CollectingEventSink, EventEmitter
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
 )
-from awesome_agent.core.events import CollectingEventSink, EventEmitter
 
 
 async def successful_handler(intent: CommandIntent) -> CommandOutcome:
@@ -47,7 +47,7 @@ async def test_dispatcher_requires_and_exposes_exact_core_inventory() -> None:
     handlers = _complete_handlers()
     dispatcher = CommandDispatcher(handlers)
 
-    assert len(handlers) == 21
+    assert len(handlers) == 26
     assert set(dispatcher.registered_names) == set(handlers)
     outcome = await dispatcher.dispatch(CommandIntent(name=CommandName.TOOLS))
     assert outcome == result(NoticeCommandPayload(message="tools"))
@@ -114,6 +114,7 @@ async def test_dispatcher_allows_only_exact_observations_during_operation() -> N
         CommandIntent(name=CommandName.STATUS),
         CommandIntent(name=CommandName.USAGE),
         CommandIntent(name=CommandName.CONFIG),
+        CommandIntent(name=CommandName.SEARCH, arguments=("query",)),
     ):
         outcome = await dispatcher.dispatch(intent)
         assert not isinstance(outcome, CommandError)
@@ -124,11 +125,39 @@ async def test_dispatcher_allows_only_exact_observations_during_operation() -> N
         CommandIntent(name=CommandName.DOCTOR),
         CommandIntent(name=CommandName.MCP, arguments=("restart", "server")),
         CommandIntent(name=CommandName.NEW),
+        CommandIntent(name=CommandName.FORK),
+        CommandIntent(name=CommandName.RETRY),
+        CommandIntent(
+            name=CommandName.SEARCH,
+            arguments=("query", "thread_1"),
+        ),
     ):
         outcome = await dispatcher.dispatch(intent)
         assert isinstance(outcome, CommandError)
         assert outcome.code == "operation_busy"
 
+    operation.release()
+
+
+@pytest.mark.asyncio
+async def test_search_selection_is_observation_but_continuation_is_mutation() -> None:
+    foreground = ForegroundArbiter()
+    dispatcher = CommandDispatcher(_complete_handlers(), foreground=foreground)
+    operation = foreground.acquire_operation()
+
+    selection = await dispatcher.dispatch(
+        CommandIntent(name=CommandName.SEARCH, arguments=("quoted query",))
+    )
+    continuation = await dispatcher.dispatch(
+        CommandIntent(
+            name=CommandName.SEARCH,
+            arguments=("quoted query", "thread_1"),
+        )
+    )
+
+    assert not isinstance(selection, CommandError)
+    assert isinstance(continuation, CommandError)
+    assert continuation.code == "operation_busy"
     operation.release()
 
 
@@ -153,6 +182,98 @@ async def test_pending_interaction_blocks_mutation_but_not_observation() -> None
     resumed = await dispatcher.dispatch(CommandIntent(name=CommandName.RESUME))
     assert not isinstance(resumed, CommandError)
     assert resumed.kind == "result"
+
+
+@pytest.mark.asyncio
+async def test_retry_handler_starts_an_operation_without_an_exclusive_lease() -> None:
+    foreground = ForegroundArbiter()
+    emitter = EventEmitter(
+        session_id="session_1",
+        workspace_key="workspace_1",
+        sink=CollectingEventSink(),
+    )
+    operations = OperationController(emitter, foreground)
+    observed_kind: ForegroundKind | None = None
+
+    async def retry_handler(_: CommandIntent) -> CommandOutcome:
+        nonlocal observed_kind
+        reservation = operations.reserve()
+        observed_kind = foreground.active_kind
+        operations.abort(reservation)
+        return result(NoticeCommandPayload(message="retry"))
+
+    handlers = _complete_handlers()
+    handlers[CommandName.RETRY] = retry_handler
+    dispatcher = CommandDispatcher(handlers, foreground=foreground)
+
+    outcome = await dispatcher.dispatch(CommandIntent(name=CommandName.RETRY))
+
+    assert not isinstance(outcome, CommandError)
+    assert observed_kind is ForegroundKind.OPERATION
+    assert foreground.active_kind is None
+
+
+@pytest.mark.asyncio
+async def test_retry_rechecks_pending_interaction_after_mutation_guard() -> None:
+    foreground = ForegroundArbiter()
+    pending = False
+    handled = False
+
+    async def mutation_guard() -> None:
+        nonlocal pending
+        pending = True
+
+    async def retry_handler(_: CommandIntent) -> CommandOutcome:
+        nonlocal handled
+        handled = True
+        return result(NoticeCommandPayload(message="retry"))
+
+    handlers = _complete_handlers()
+    handlers[CommandName.RETRY] = retry_handler
+    dispatcher = CommandDispatcher(
+        handlers,
+        foreground=foreground,
+        has_pending_interaction=lambda: pending,
+        mutation_guard=mutation_guard,
+    )
+
+    outcome = await dispatcher.dispatch(CommandIntent(name=CommandName.RETRY))
+
+    assert isinstance(outcome, CommandError)
+    assert outcome.code == "interaction_busy"
+    assert handled is False
+
+
+@pytest.mark.asyncio
+async def test_retry_rechecks_foreground_after_mutation_guard() -> None:
+    foreground = ForegroundArbiter()
+    operation = None
+    handled = False
+
+    async def mutation_guard() -> None:
+        nonlocal operation
+        operation = foreground.acquire_operation()
+
+    async def retry_handler(_: CommandIntent) -> CommandOutcome:
+        nonlocal handled
+        handled = True
+        return result(NoticeCommandPayload(message="retry"))
+
+    handlers = _complete_handlers()
+    handlers[CommandName.RETRY] = retry_handler
+    dispatcher = CommandDispatcher(
+        handlers,
+        foreground=foreground,
+        mutation_guard=mutation_guard,
+    )
+
+    outcome = await dispatcher.dispatch(CommandIntent(name=CommandName.RETRY))
+
+    assert isinstance(outcome, CommandError)
+    assert outcome.code == "operation_busy"
+    assert handled is False
+    assert operation is not None
+    operation.release()
 
 
 @pytest.mark.asyncio

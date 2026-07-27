@@ -3,30 +3,40 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
-from contextlib import AsyncExitStack, suppress
+from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
+from contextlib import AsyncExitStack, contextmanager, suppress
+from contextvars import Context, ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic
 from typing import Any, cast
+from uuid import uuid4
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from pydantic import JsonValue
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
-    CloudPostAnswerMemory,
-    DisabledPostAnswerMemory,
-    PostAnswerMemory,
+    AgentState,
+    DisabledPostAnswerFinalizer,
+    PostAnswerFinalizer,
     TurnBudget,
     compile_agent_graph,
 )
 from awesome_agent.application.change_commands import ChangeCommandService
 from awesome_agent.application.change_scope import ChangeScope
-from awesome_agent.application.command_results import CommandOutcome, error
+from awesome_agent.application.command_results import (
+    CommandOption,
+    CommandOutcome,
+    CommandSelection,
+    error,
+    interaction,
+)
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     ApplicationState,
     CancelResult,
@@ -39,16 +49,23 @@ from awesome_agent.application.contracts import (
     ProductErrorCode,
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     StatusSnapshot,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
     thread_display_id,
 )
 from awesome_agent.application.conversation_commands import ConversationCommandService
 from awesome_agent.application.diagnostic_commands import DiagnosticCommandService
+from awesome_agent.application.diagnostics import ApplicationDiagnosticWriter
 from awesome_agent.application.direct import DirectCommandService
 from awesome_agent.application.dispatcher import CommandDispatcher
 from awesome_agent.application.errors import ApplicationFailure
@@ -66,6 +83,7 @@ from awesome_agent.application.interactions import (
     tool_approval_choices,
     workspace_trust_choices,
 )
+from awesome_agent.application.middleware import ObservationalMiddleware
 from awesome_agent.application.operations import (
     OperationBusy,
     OperationContinuation,
@@ -74,17 +92,26 @@ from awesome_agent.application.operations import (
 from awesome_agent.application.permission_commands import PermissionCommandService
 from awesome_agent.application.provider_configuration import (
     CredentialValidator,
+    ProviderConfigurationPublication,
     ProviderConfigurationRecoveryRequired,
     ProviderConfigurationService,
     ProviderConfigurationSnapshot,
     reconcile_provider_credential_transaction,
     reconcile_provider_model_transaction,
 )
+from awesome_agent.application.runtime_resources import RuntimeResources
+from awesome_agent.application.skill_management import SkillManagementService
+from awesome_agent.application.thread_export import ThreadExportService
 from awesome_agent.application.turns import (
     RecoveryResult,
     RecoveryStatus,
     TurnCoordinator,
     TurnExecutionFailed,
+)
+from awesome_agent.application.web_commands import (
+    WebCommandService,
+    WebConfigurationControl,
+    WebRuntimeStatus,
 )
 from awesome_agent.config import (
     ApplicationConfig,
@@ -103,14 +130,11 @@ from awesome_agent.config import (
     resolve_turn_config,
 )
 from awesome_agent.config.model_transaction import ProviderModelTransactionJournal
-from awesome_agent.config.resource_lock import (
-    ResourceLockTimeout,
-    ResourceLockUnavailable,
-)
 from awesome_agent.context import (
     CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
     ContextManifestItem,
+    ContextSourceKind,
     Mem0ContextResult,
     ThreadCompressor,
     WorkspaceInstructionSnapshot,
@@ -118,23 +142,34 @@ from awesome_agent.context import (
     estimate_messages,
     load_workspace_instructions,
     mem0_context_source,
+    skill_identities_from_manifest,
 )
 from awesome_agent.conversation import (
     ConversationService,
     Thread,
     ThreadNotFound,
+    ThreadSearchLimitExceeded,
     ToolActivity,
+    ToolActivityOrigin,
     Turn,
     TurnBusy,
     TurnNotFound,
     TurnStatus,
     UsageSummary,
 )
+from awesome_agent.core.cancellation import (
+    finish_bounded_cancellation_cleanup,
+    finish_cancellation_safe,
+)
 from awesome_agent.core.changes import (
     ChangeAnalyzer,
     ChangeJournal,
+    ChangeLifecycle,
     ChangeOperations,
+    merge_file_changes,
 )
+from awesome_agent.core.changes.errors import ChangeLifecycleError
+from awesome_agent.core.citations import Citation, CitationAllocator
 from awesome_agent.core.contracts import new_identifier
 from awesome_agent.core.events import (
     EventEmitter,
@@ -143,21 +178,33 @@ from awesome_agent.core.events import (
     InteractionRequiredPayload,
     InteractionResolvedPayload,
 )
+from awesome_agent.core.resource_lock import (
+    ResourceLockTimeout,
+    ResourceLockUnavailable,
+)
 from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
     ToolExecutor,
     ToolRequest,
+    ToolResourceGrant,
+    ToolSpec,
 )
 from awesome_agent.core.tools.builtins import (
     register_modifying_tools,
     register_read_tools,
 )
+from awesome_agent.core.tools.builtins.web_fetch import create_web_fetch_registration
+from awesome_agent.core.tools.builtins.web_search import (
+    create_web_search_registration,
+)
+from awesome_agent.core.tools.context import CapabilityQuotaLedger
 from awesome_agent.core.tools.permissions import (
     PermissionMode,
     PermissionSession,
     ToolApprovalDecision,
     ToolApprovalRequest,
+    ToolCapability,
 )
 from awesome_agent.core.tools.process import ProcessRunner
 from awesome_agent.core.tools.registry import ToolRegistry
@@ -178,7 +225,9 @@ from awesome_agent.extensions.mcp import (
 )
 from awesome_agent.extensions.mcp.manager import McpClient
 from awesome_agent.extensions.skills import (
+    SkillCatalog,
     SkillLoader,
+    SkillPackageManager,
     discover_skills,
     register_skill_tools,
 )
@@ -188,31 +237,28 @@ from awesome_agent.memory import (
     Mem0CloudError,
     Mem0Diagnostic,
     Mem0Identity,
+    Mem0PostAnswerFinalizer,
     MemoryDistiller,
-    create_mem0_client,
+    managed_mem0_client,
     refresh_local_memory_tools,
 )
 from awesome_agent.memory.mem0_cloud import Mem0Client
 from awesome_agent.modeling import (
-    GatewayEvent,
+    MODEL_CATALOG,
+    GatewayFactory,
     ModelCatalog,
-    ModelGateway,
     ModelIdentitySnapshot,
-    ModelProvider,
-    ModelRequest,
-    ModelTurn,
     ProviderId,
-    RetryPolicy,
-    SelectedModel,
 )
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.providers import (
-    DeepSeekProvider,
-    KimiProvider,
     ProviderCredentialValidator,
+    managed_gateway_factory,
 )
 from awesome_agent.storage import (
+    ApplicationMigrationError,
     ApplicationSchemaMismatch,
+    ApplicationSQLite,
     ApplicationStateUnavailable,
     ApplicationStateUnknown,
     SQLiteMcpEnablementStore,
@@ -222,9 +268,6 @@ from awesome_agent.storage import (
     StateLeaseUnavailable,
     StatePreflight,
     StateResetError,
-    initialize_application_database,
-    inspect_application_state,
-    reset_local_state,
 )
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import (
@@ -235,20 +278,28 @@ from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.pagination import (
     InvalidThreadCursor,
     decode_thread_cursor,
+    decode_thread_search_cursor,
     encode_thread_cursor,
+    encode_thread_search_cursor,
 )
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 from awesome_agent.version import PRODUCT_VERSION
+from awesome_agent.web import (
+    WebProvider,
+    managed_tavily_web_client,
+    validate_web_proxy_url,
+)
 
-type GatewayFactory = Callable[[ProviderId, str], ModelGateway]
 type McpClientFactory = Callable[[McpServerConfig], McpClient]
 
 logger = logging.getLogger(__name__)
 
 _MAX_THREAD_RESULT_BYTES = 900_000
-_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS = 5.0
+_APPLICATION_SHUTDOWN_CLEANUP_TIMEOUT_SECONDS = 45.0
 _RECOVERY_EVENT_DELIVERY_ATTEMPTS = 2
 _RECOVERY_EVENT_DELIVERY_TIMEOUT_SECONDS = 5.0
+_SKILL_DISCOVERY_DRAIN_TIMEOUT_SECONDS = 5.0
+_SKILL_TOOL_NAMES = frozenset({"load_skill", "read_skill_resource"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,37 +312,6 @@ class _RecoveryResolutionDelivery:
     client_message_id: str | None = None
 
 
-_ACTIVATION_STATE_FIELDS = (
-    "_sources",
-    "_application_config",
-    "_initialized",
-    "_commands",
-    "_command_dispatcher",
-    "_diagnostic_commands",
-    "_change_commands",
-    "_permission_commands",
-    "_provider_configuration",
-    "_turns",
-    "_direct",
-    "_extensions",
-    "_context",
-    "_registry",
-    "_local_memory",
-    "_mem0_adapter",
-    "_mem0_diagnostic",
-    "_mem0_session",
-    "_mcp",
-    "_change_scope",
-    "_change_store",
-    "_change_analyzer",
-    "_change_operations",
-    "_workspace_branch",
-    "_workspace_instruction_snapshot",
-    "_recovery_queue",
-    "_recovery_resolution_delivery",
-    "_recovery_required_delivery_id",
-)
-
 _CAPABILITIES = (
     "threads",
     "turns",
@@ -302,7 +322,90 @@ _CAPABILITIES = (
     "mcp",
     "local_memory",
     "mem0_cloud",
+    "web",
+    "citations",
 )
+
+
+def _tool_catalog_for_skill_mode(
+    registry: ToolRegistry,
+    skill_mode: str,
+) -> tuple[ToolSpec, ...]:
+    specifications = registry.specifications()
+    if skill_mode == "auto":
+        return specifications
+    visible_skill_tools = (
+        frozenset()
+        if skill_mode in {"off", "direct"}
+        else frozenset({"read_skill_resource"})
+    )
+    return tuple(
+        specification
+        for specification in specifications
+        if specification.name not in _SKILL_TOOL_NAMES
+        or specification.name in visible_skill_tools
+    )
+
+
+def _skill_resource_grants(
+    manifest: tuple[dict[str, JsonValue], ...],
+    *,
+    skill_mode: str,
+) -> tuple[ToolResourceGrant, ...]:
+    try:
+        items = tuple(ContextManifestItem.model_validate(item) for item in manifest)
+    except ValueError:
+        return ()
+    skill_items = tuple(
+        item
+        for item in items
+        if item.kind in {ContextSourceKind.SKILL, ContextSourceKind.SKILL_CATALOG}
+    )
+    operations: tuple[str, ...]
+    if skill_mode == "auto":
+        if (
+            len(skill_items) != 1
+            or skill_items[0].kind is not ContextSourceKind.SKILL_CATALOG
+        ):
+            return ()
+        operations = ("load", "read")
+    elif skill_mode in {"off", "direct"}:
+        return ()
+    else:
+        if (
+            len(skill_items) != 1
+            or skill_items[0].kind is not ContextSourceKind.SKILL
+            or skill_items[0].source_id != skill_mode
+        ):
+            return ()
+        operations = ("read",)
+    identities = skill_identities_from_manifest(manifest)
+    if skill_mode != "auto":
+        identities = tuple(
+            identity for identity in identities if identity.name == skill_mode
+        )
+    return tuple(
+        ToolResourceGrant(
+            capability=ToolCapability.CONTEXT_READ.value,
+            resource_type="skill",
+            resource_id=identity.name,
+            identity=identity.identity,
+            operations=operations,
+        )
+        for identity in identities
+    )
+
+
+def _skill_tool_catalog_mode(
+    manifest: tuple[dict[str, JsonValue], ...],
+    *,
+    skill_mode: str,
+) -> str:
+    if not manifest or skill_mode in {"off", "direct"}:
+        return skill_mode
+    if _skill_resource_grants(manifest, skill_mode=skill_mode):
+        return skill_mode
+    return "off"
 
 
 async def compose_local_application(
@@ -314,49 +417,58 @@ async def compose_local_application(
     gateway_factory: GatewayFactory | None = None,
     mcp_client_factory: McpClientFactory | None = None,
     mem0_client: object | None = None,
+    web_provider: WebProvider | None = None,
     credential_validator: CredentialValidator | None = None,
 ) -> LocalApplication:
     paths = AwesomePaths.from_home(home)
     identity = resolve_workspace(workspace)
+    session_id = new_identifier("session")
+    diagnostics: ApplicationDiagnosticWriter | None = None
+    try:
+        diagnostics = ApplicationDiagnosticWriter(paths.logs_dir)
+    except BaseException:
+        diagnostics = None
     stack = AsyncExitStack()
-    backend = _LocalApplicationBackend(
-        paths=paths,
-        workspace=identity,
-        event_sink=event_sink,
-        resources=stack,
-        environ=environ,
-        gateway_factory=gateway_factory,
-        mcp_client_factory=mcp_client_factory,
-        mem0_client=mem0_client,
-        credential_validator=credential_validator,
-    )
-    return LocalApplication(backend)
-
-
-class _GatewayRouter:
-    def __init__(self, factory: GatewayFactory) -> None:
-        self._factory = factory
-
-    async def complete(
-        self,
-        selected: SelectedModel,
-        request: ModelRequest,
-    ) -> ModelTurn:
-        return await self._factory(selected.provider, selected.model).complete(
-            selected,
-            request,
+    try:
+        backend = _LocalApplicationBackend(
+            paths=paths,
+            workspace=identity,
+            session_id=session_id,
+            event_sink=event_sink,
+            resources=stack,
+            environ=environ,
+            gateway_factory=gateway_factory,
+            mcp_client_factory=mcp_client_factory,
+            mem0_client=mem0_client,
+            web_provider=web_provider,
+            credential_validator=credential_validator,
         )
-
-    async def stream(
-        self,
-        selected: SelectedModel,
-        request: ModelRequest,
-    ) -> AsyncIterator[GatewayEvent]:
-        async for event in self._factory(selected.provider, selected.model).stream(
-            selected,
-            request,
-        ):
-            yield event
+        middleware = (
+            (
+                ObservationalMiddleware(
+                    session_id=session_id,
+                    correlation_id=lambda: f"correlation_{uuid4().hex}",
+                    monotonic=monotonic,
+                    sink=diagnostics.try_emit,
+                ),
+            )
+            if diagnostics is not None
+            else ()
+        )
+        application = LocalApplication(
+            backend,
+            middleware=middleware,
+            diagnostics_close=(diagnostics.aclose if diagnostics is not None else None),
+        )
+    except BaseException:
+        try:
+            await stack.aclose()
+        finally:
+            if diagnostics is not None:
+                with suppress(BaseException):
+                    await diagnostics.aclose()
+        raise
+    return application
 
 
 class _Mem0Session:
@@ -399,31 +511,75 @@ class _Mem0Session:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WorkspaceRuntime:
+    """One immutable snapshot of the activated workspace service graph."""
+
+    sources: LoadedConfigSources
+    application_config: ApplicationConfig
+    conversation: ConversationService
+    turns: TurnCoordinator
+    commands: ConversationCommandService
+    thread_export: ThreadExportService
+    command_dispatcher: CommandDispatcher
+    diagnostic_commands: DiagnosticCommandService
+    change_commands: ChangeCommandService
+    permission_commands: PermissionCommandService
+    web_commands: WebCommandService
+    provider_configuration: ProviderConfigurationService
+    direct: DirectCommandService
+    extensions: ApplicationExtensionService
+    context: ApplicationContextService
+    tool_registry: ToolRegistry
+    model_catalog: ModelCatalog
+    local_memory: LocalMemoryService
+    mem0_session: _Mem0Session
+    mcp: McpManager
+    change_scope: ChangeScope
+    change_store: SQLiteChangeSetStore
+    change_analyzer: ChangeAnalyzer
+    change_operations: ChangeOperations
+    workspace_branch: str | None
+    workspace_instruction_snapshot: WorkspaceInstructionSnapshot
+    web_available: bool
+    web_diagnostic_code: str | None
+    resources: RuntimeResources
+
+
 class _LocalApplicationBackend:
     def __init__(
         self,
         *,
         paths: AwesomePaths,
         workspace: WorkspaceIdentity,
+        session_id: str,
         event_sink: EventSink,
         resources: AsyncExitStack,
         environ: Mapping[str, str] | None,
         gateway_factory: GatewayFactory | None,
         mcp_client_factory: McpClientFactory | None,
         mem0_client: object | None,
+        web_provider: WebProvider | None,
         credential_validator: CredentialValidator | None,
     ) -> None:
         self._paths = paths
+        self._skill_management = SkillManagementService(
+            SkillPackageManager(
+                home=paths.home,
+                skills_root=paths.skills_dir,
+            )
+        )
         self._workspace = workspace
-        self._resources = resources
+        self._process_resources = resources
         self._environ = dict(environ or {})
         self._injected_gateway_factory = gateway_factory
         self._mcp_client_factory = mcp_client_factory
         self._injected_mem0_client = mem0_client
+        self._injected_web_provider = web_provider
         self._credential_validator = (
             credential_validator or ProviderCredentialValidator()
         )
-        self._session_id = new_identifier("session")
+        self._session_id = session_id
         self._emitter = EventEmitter(
             session_id=self._session_id,
             workspace_key=workspace.key,
@@ -436,11 +592,20 @@ class _LocalApplicationBackend:
             self._foreground,
             admission_gate=self._operation_admitted,
         )
-        self._trust = WorkspaceTrustService(
-            SQLiteWorkspaceTrustStore(paths.application_db)
+        self._state_lease: StateLease | None = None
+        self._workspace_path_lease: StateLease | None = None
+        self._workspace_entity_lease: StateLease | None = None
+        self._process_resources.callback(self._close_state_lease)
+        self._process_resources.callback(self._close_workspace_leases)
+        self._database = ApplicationSQLite(paths.application_db)
+        self._process_resources.push_async_callback(self._database.aclose)
+        self._trust = WorkspaceTrustService(SQLiteWorkspaceTrustStore(self._database))
+        self._repositories = SQLiteConversationRepositories(self._database)
+        self._clock = lambda: datetime.now(UTC)
+        self._conversation = ConversationService(
+            store=self._repositories,
+            clock=self._clock,
         )
-        self._repositories = SQLiteConversationRepositories(paths.application_db)
-        self._conversation = ConversationService(store=self._repositories)
         self._provider_model_journal = ProviderModelTransactionJournal(
             paths.provider_model_transaction_file
         )
@@ -451,50 +616,51 @@ class _LocalApplicationBackend:
         self._provider_credential_reconciled = False
         self._saver: BaseCheckpointSaver[str] | None = None
         self._checkpoints: LangGraphCheckpointStore | None = None
-        self._sources = LoadedConfigSources(
+        self._bootstrap_sources = LoadedConfigSources(
             user=UserConfigDocument(),
             workspace=None,
             secrets=SecretValues(),
             secret_status=SecretStatus(),
             provider_credentials=missing_provider_credential_statuses(),
         )
-        self._application_config = resolve_application_config(self._sources)
-        self._initialized = False
+        self._bootstrap_application_config = resolve_application_config(
+            self._bootstrap_sources
+        )
+        self._runtime: WorkspaceRuntime | None = None
+        self._request_runtime = ContextVar[WorkspaceRuntime | None](
+            f"awesome_workspace_runtime_{id(self)}",
+            default=None,
+        )
+        self._runtime_retirements: dict[RuntimeResources, asyncio.Task[None]] = {}
+        self._shutdown_task: asyncio.Task[None] | None = None
         self._closed = False
-        self._commands: ConversationCommandService | None = None
-        self._command_dispatcher: CommandDispatcher | None = None
-        self._diagnostic_commands: DiagnosticCommandService | None = None
-        self._change_commands: ChangeCommandService | None = None
-        self._permission_commands: PermissionCommandService | None = None
-        self._provider_configuration: ProviderConfigurationService | None = None
-        self._turns: TurnCoordinator | None = None
-        self._direct: DirectCommandService | None = None
-        self._extensions: ApplicationExtensionService | None = None
-        self._context: ApplicationContextService | None = None
-        self._registry: ToolRegistry | None = None
-        self._local_memory: LocalMemoryService | None = None
-        self._mem0_adapter: Mem0CloudAdapter | None = None
-        self._mem0_diagnostic: Mem0Diagnostic | None = None
-        self._mem0_session: _Mem0Session | None = None
-        self._mcp: McpManager | None = None
-        self._change_scope: ChangeScope | None = None
-        self._change_store: SQLiteChangeSetStore | None = None
-        self._change_analyzer: ChangeAnalyzer | None = None
-        self._change_operations: ChangeOperations | None = None
-        self._workspace_branch: str | None = None
-        self._workspace_instruction_snapshot: WorkspaceInstructionSnapshot | None = None
         self._recovery_queue: list[RecoveryResult] = []
         self._recovery_resolution_delivery: _RecoveryResolutionDelivery | None = None
         self._recovery_required_delivery_id: str | None = None
         self._recovery_required_delivery_lock = asyncio.Lock()
+        self._recovery_event_deliveries: set[asyncio.Task[None]] = set()
         self._permission_session = PermissionSession()
-        self._state_lease: StateLease | None = None
-        self._workspace_path_lease: StateLease | None = None
-        self._workspace_entity_lease: StateLease | None = None
+        self._web_configuration_control = WebConfigurationControl()
+        self._skill_catalog: SkillCatalog | None = None
+        self._skill_catalog_task: asyncio.Task[SkillCatalog] | None = None
+        self._process_resources.push_async_callback(self._drain_skill_catalog_discovery)
         self._bootstrap_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
-        self._resources.callback(self._close_state_lease)
-        self._resources.callback(self._close_workspace_leases)
+
+    async def list_skill_packages(self) -> SkillListResult:
+        return await self._skill_management.list()
+
+    async def install_skill_package(
+        self,
+        request: SkillInstallRequest,
+    ) -> SkillInstallResult:
+        return await self._skill_management.install(request)
+
+    async def remove_skill_package(
+        self,
+        request: SkillRemoveRequest,
+    ) -> SkillRemoveResult:
+        return await self._skill_management.remove(request)
 
     async def initialize_application(self) -> InitializeResult:
         async with self._bootstrap_lock:
@@ -506,11 +672,11 @@ class _LocalApplicationBackend:
             return await self._initialize_application_locked()
 
     async def _initialize_application_locked(self) -> InitializeResult:
-        if self._initialized:
+        if self._runtime is not None:
             await self._flush_recovery_notifications()
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=3,
+                protocol_version=PROTOCOL_VERSION,
                 status=InitializeStatus.READY,
                 session_id=self._session_id,
                 workspace=self._workspace_presentation(include_branch=True),
@@ -518,12 +684,26 @@ class _LocalApplicationBackend:
             )
         await self._reconcile_provider_credentials_before_state()
         try:
-            self._ensure_state_lease()
-            trust_status = self._trust.status(self._workspace)
+            await self._ensure_state_lease()
+            trust_status = await self._trust.status(self._workspace)
         except ApplicationSchemaMismatch as error:
-            if error.direction is StateCompatibility.OLDER:
+            if error.direction is StateCompatibility.MIGRATION_UNAVAILABLE:
                 return await self._state_reset_required()
-            raise self._newer_state_failure(error.found, error.expected) from error
+            if error.direction is StateCompatibility.NEWER:
+                raise self._newer_state_failure(error.found, error.expected) from error
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Awesome could not migrate local state safely.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
+        except ApplicationMigrationError as error:
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Awesome could not migrate local state safely.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
         except ApplicationStateUnknown as error:
             raise _application_failure(
                 ProductErrorCode.STATE_UNKNOWN,
@@ -575,7 +755,7 @@ class _LocalApplicationBackend:
                 )
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=3,
+                protocol_version=PROTOCOL_VERSION,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id=self._session_id,
                 interaction_id=pending.id,
@@ -585,7 +765,7 @@ class _LocalApplicationBackend:
         await self._activate_workspace()
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=3,
+            protocol_version=PROTOCOL_VERSION,
             status=InitializeStatus.READY,
             session_id=self._session_id,
             workspace=self._workspace_presentation(include_branch=True),
@@ -628,7 +808,7 @@ class _LocalApplicationBackend:
             )
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=3,
+            protocol_version=PROTOCOL_VERSION,
             status=InitializeStatus.STATE_RESET_REQUIRED,
             session_id=self._session_id,
             interaction_id=pending.id,
@@ -656,30 +836,54 @@ class _LocalApplicationBackend:
 
     async def application_state(self) -> ApplicationState:
         self._require_open()
-        current_id = (
-            self._commands.current_thread_id
-            if self._initialized and self._commands
-            else None
+        runtime = self._request_runtime.get() or self._runtime
+        if runtime is not None:
+            with self._runtime_request_scope(runtime) as bound_runtime:
+                return await self._application_state_in_runtime(bound_runtime)
+        return await self._application_state_in_runtime(None)
+
+    async def _application_state_in_runtime(
+        self,
+        runtime: WorkspaceRuntime | None,
+    ) -> ApplicationState:
+        conversation = (
+            runtime.conversation if runtime is not None else self._conversation
         )
-        current = (
-            self._conversation.read_thread(current_id).thread
+        sources = runtime.sources if runtime is not None else self._bootstrap_sources
+        application_config = (
+            runtime.application_config
+            if runtime is not None
+            else self._bootstrap_application_config
+        )
+        current_id = runtime.commands.current_thread_id if runtime is not None else None
+        current_view = (
+            await conversation.read_thread(current_id)
             if current_id is not None
             else None
         )
-        usage = (
-            self._conversation.thread_usage(current_id)
-            if current_id is not None
-            else UsageSummary()
-        )
-        local_enabled = self._local_memory.enabled if self._local_memory else False
+        current = current_view.thread if current_view is not None else None
+        usage = UsageSummary()
+        if current_view is not None:
+            for turn in current_view.turns:
+                usage += turn.usage
+        local_enabled = runtime.local_memory.enabled if runtime is not None else False
+        mem0_session = runtime.mem0_session if runtime is not None else None
         return ApplicationState(
-            initialized=self._initialized,
+            initialized=runtime is not None,
             session_id=self._session_id,
             workspace_key=self._workspace.key,
-            workspace=self._workspace_presentation(include_branch=True),
-            workspace_trusted=self._initialized,
+            workspace=self._workspace_presentation(
+                include_branch=True,
+                runtime=runtime,
+            ),
+            workspace_trusted=runtime is not None,
             current_thread_id=current_id,
-            model_identity=self._model_identity(current) if current else None,
+            model_catalog=(
+                runtime.model_catalog if runtime is not None else MODEL_CATALOG
+            ),
+            model_identity=(
+                self._model_identity(current, runtime=runtime) if current else None
+            ),
             thinking_enabled=current.thinking_enabled if current else True,
             skill_mode=current.skill_mode if current else "auto",
             active_operation_id=self._operations.active_operation_id,
@@ -688,17 +892,21 @@ class _LocalApplicationBackend:
             ),
             permission_mode=self._permission_session.mode,
             configuration_valid=True,
-            secret_status=self._sources.secret_status,
-            provider_credentials=self._sources.provider_credentials,
+            secret_status=sources.secret_status,
+            provider_credentials=sources.provider_credentials,
             memory_status={
                 "local": {"enabled": local_enabled},
                 "mem0": {
                     "enabled": (
-                        self._mem0_session.enabled
-                        if self._mem0_session is not None
-                        else self._application_config.memory.mem0_cloud
+                        mem0_session.enabled
+                        if mem0_session is not None
+                        else application_config.memory.mem0_cloud
                     ),
-                    "available": self._mem0_adapter is not None,
+                    "available": (
+                        mem0_session.adapter is not None
+                        if mem0_session is not None
+                        else False
+                    ),
                 },
             },
             mcp_status=tuple(
@@ -706,27 +914,38 @@ class _LocalApplicationBackend:
                     "server_id": status.server_id,
                     "state": status.state.value,
                 }
-                for status in (self._mcp.statuses() if self._mcp else ())
+                for status in (runtime.mcp.statuses() if runtime is not None else ())
             ),
             usage=usage.model_dump(mode="json"),
             configuration_diagnostics=(
-                (self._mem0_diagnostic.code,)
+                (mem0_session.diagnostic.code,)
                 if (
-                    self._mem0_diagnostic is not None
-                    and self._mem0_session is not None
-                    and self._mem0_session.enabled
+                    mem0_session is not None
+                    and mem0_session.diagnostic is not None
+                    and mem0_session.enabled
                 )
                 else ()
             ),
             workspace_instruction_diagnostic=(
-                self._workspace_instruction_snapshot.diagnostic
-                if self._workspace_instruction_snapshot is not None
+                runtime.workspace_instruction_snapshot.diagnostic
+                if runtime is not None
                 else None
             ),
         )
 
     async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
-        self._require_active()
+        runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime) as bound_runtime:
+            return await self._workspace_threads_in_runtime(
+                query, runtime=bound_runtime
+            )
+
+    async def _workspace_threads_in_runtime(
+        self,
+        query: ThreadListQuery,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> ThreadListResult:
         try:
             cursor = (
                 decode_thread_cursor(query.cursor) if query.cursor is not None else None
@@ -736,7 +955,7 @@ class _LocalApplicationBackend:
                 ProductErrorCode.INVALID_ARGUMENTS,
                 "Thread cursor is invalid.",
             ) from error
-        page = self._conversation.list_thread_page(
+        page = await runtime.conversation.list_thread_page(
             self._workspace.key,
             cursor=cursor,
             limit=query.limit,
@@ -752,12 +971,80 @@ class _LocalApplicationBackend:
             next_cursor=next_cursor,
         )
 
+    async def search_workspace_threads(
+        self,
+        query: ThreadSearchQuery,
+    ) -> ThreadListResult:
+        runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime) as bound_runtime:
+            return await self._search_workspace_threads_in_runtime(
+                query,
+                runtime=bound_runtime,
+            )
+
+    async def _search_workspace_threads_in_runtime(
+        self,
+        query: ThreadSearchQuery,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> ThreadListResult:
+        try:
+            cursor = (
+                decode_thread_search_cursor(
+                    query.cursor,
+                    workspace_key=self._workspace.key,
+                    query=query.query,
+                )
+                if query.cursor is not None
+                else None
+            )
+        except InvalidThreadCursor as error:
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Thread search cursor is invalid.",
+            ) from error
+        try:
+            page = await runtime.conversation.search_thread_page(
+                self._workspace.key,
+                query=query.query,
+                cursor=cursor,
+                limit=query.limit,
+            )
+        except ThreadSearchLimitExceeded as error:
+            raise _application_failure(
+                ProductErrorCode.RESULT_TOO_LARGE,
+                "Thread search exceeded its scan limit; refine the query.",
+            ) from error
+        next_cursor = (
+            encode_thread_search_cursor(
+                (page.threads[-1].updated_at, page.threads[-1].id),
+                workspace_key=self._workspace.key,
+                query=query.query,
+            )
+            if page.has_more and page.threads
+            else None
+        )
+        return ThreadListResult(
+            threads=page.threads,
+            has_more=page.has_more,
+            next_cursor=next_cursor,
+        )
+
     async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
-        self._require_active()
+        runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime) as bound_runtime:
+            return await self._thread_state_in_runtime(query, runtime=bound_runtime)
+
+    async def _thread_state_in_runtime(
+        self,
+        query: ThreadReadQuery,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> ThreadReadResult:
         limit = query.limit
         while True:
             try:
-                page = self._conversation.read_thread_page(
+                page = await runtime.conversation.read_thread_page(
                     query.thread_id,
                     before_sequence=query.before_sequence,
                     limit=limit,
@@ -774,7 +1061,10 @@ class _LocalApplicationBackend:
                 )
             result = ThreadReadResult(
                 view=page.view,
-                change_sets=self._page_change_summaries(page.view.tool_activities),
+                change_sets=await self._page_change_summaries(
+                    page.view.tool_activities,
+                    runtime=runtime,
+                ),
                 has_more=page.has_more,
                 next_before_sequence=page.next_before_sequence,
             )
@@ -796,9 +1086,23 @@ class _LocalApplicationBackend:
         content: str,
         client_message_id: str,
     ) -> OperationAccepted:
-        self._require_active()
-        self._require_selected_thread(thread_id)
-        assert self._turns is not None
+        runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime):
+            return await self._start_turn_in_runtime(
+                runtime,
+                thread_id,
+                content,
+                client_message_id,
+            )
+
+    async def _start_turn_in_runtime(
+        self,
+        runtime: WorkspaceRuntime,
+        thread_id: str,
+        content: str,
+        client_message_id: str,
+    ) -> OperationAccepted:
+        self._require_selected_thread(thread_id, runtime=runtime)
         if not content.strip():
             raise _application_failure(
                 ProductErrorCode.INVALID_ARGUMENTS,
@@ -811,11 +1115,11 @@ class _LocalApplicationBackend:
                 retryable=True,
             )
         try:
-            await self._require_runtime_consistent()
-            thread = self._conversation.read_thread(thread_id).thread
-            config = self._turn_config(thread)
-            self._require_provider_configured(config.provider)
-            return await self._turns.submit_turn(
+            await self._require_runtime_consistent(runtime)
+            thread = (await runtime.conversation.read_thread(thread_id)).thread
+            config = self._turn_config(thread, runtime=runtime)
+            self._require_provider_configured(config.provider, runtime=runtime)
+            return await runtime.turns.submit_turn(
                 thread_id,
                 content,
                 client_message_id=client_message_id,
@@ -852,9 +1156,17 @@ class _LocalApplicationBackend:
             ) from error
 
     async def start_direct(self, thread_id: str, command: str) -> OperationAccepted:
-        self._require_active()
-        self._require_selected_thread(thread_id)
-        assert self._direct is not None
+        runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime):
+            return await self._start_direct_in_runtime(runtime, thread_id, command)
+
+    async def _start_direct_in_runtime(
+        self,
+        runtime: WorkspaceRuntime,
+        thread_id: str,
+        command: str,
+    ) -> OperationAccepted:
+        self._require_selected_thread(thread_id, runtime=runtime)
         if not command.strip():
             raise _application_failure(
                 ProductErrorCode.INVALID_ARGUMENTS,
@@ -867,8 +1179,8 @@ class _LocalApplicationBackend:
                 retryable=True,
             )
         try:
-            await self._require_runtime_consistent()
-            return await self._direct.start(thread_id, command)
+            await self._require_runtime_consistent(runtime)
+            return await runtime.direct.start(thread_id, command)
         except ApplicationFailure:
             raise
         except OperationBusy as error:
@@ -884,28 +1196,35 @@ class _LocalApplicationBackend:
             ) from error
 
     async def run_command(self, intent: CommandIntent) -> CommandOutcome:
-        self._require_active()
-        assert self._command_dispatcher is not None
-        try:
-            return await self._command_dispatcher.dispatch(intent)
-        except ProviderConfigurationRecoveryRequired as error:
-            raise _application_failure(
-                ProductErrorCode.RECOVERY_REQUIRED,
-                "Provider configuration recovery is required. Restart Awesome.",
-                retryable=False,
-            ) from error
-        except ThreadNotFound as error:
-            raise _application_failure(
-                ProductErrorCode.THREAD_NOT_FOUND,
-                "Thread was not found.",
-            ) from error
+        runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime):
+            try:
+                return await runtime.command_dispatcher.dispatch(intent)
+            except ProviderConfigurationRecoveryRequired as error:
+                raise _application_failure(
+                    ProductErrorCode.RECOVERY_REQUIRED,
+                    "Provider configuration recovery is required. Restart Awesome.",
+                    retryable=False,
+                ) from error
+            except ThreadNotFound as error:
+                raise _application_failure(
+                    ProductErrorCode.THREAD_NOT_FOUND,
+                    "Thread was not found.",
+                ) from error
 
     async def set_provider_credential(
         self,
         request: ProviderCredentialSetRequest,
     ) -> ProviderCredentialSetResult:
-        self._require_active()
-        assert self._provider_configuration is not None
+        runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime):
+            return await self._set_provider_credential_in_runtime(runtime, request)
+
+    async def _set_provider_credential_in_runtime(
+        self,
+        runtime: WorkspaceRuntime,
+        request: ProviderCredentialSetRequest,
+    ) -> ProviderCredentialSetResult:
         if self._interactions.pending is not None:
             raise _application_failure(
                 ProductErrorCode.OPERATION_BUSY,
@@ -922,8 +1241,8 @@ class _LocalApplicationBackend:
             ) from error
         async with lease:
             try:
-                await self._require_runtime_consistent()
-                return await self._provider_configuration.set_credential(request)
+                await self._require_runtime_consistent(runtime)
+                return await runtime.provider_configuration.set_credential(request)
             except ApplicationFailure:
                 raise
             except ProviderConfigurationRecoveryRequired as error:
@@ -952,8 +1271,29 @@ class _LocalApplicationBackend:
         decision: str,
     ) -> InteractionResult:
         self._require_open()
-        if self._initialized:
-            await self._require_runtime_consistent()
+        runtime = self._request_runtime.get() or self._runtime
+        if runtime is None:
+            return await self._resolve_interaction_in_runtime(
+                interaction_id,
+                decision,
+                runtime=None,
+            )
+        with self._runtime_request_scope(runtime):
+            return await self._resolve_interaction_in_runtime(
+                interaction_id,
+                decision,
+                runtime=runtime,
+            )
+
+    async def _resolve_interaction_in_runtime(
+        self,
+        interaction_id: str,
+        decision: str,
+        *,
+        runtime: WorkspaceRuntime | None,
+    ) -> InteractionResult:
+        if runtime is not None:
+            await self._require_runtime_consistent(runtime)
         pending = self._interactions.pending
         if pending is None or pending.id != interaction_id:
             return InteractionResult(accepted=False, status="not_found")
@@ -962,10 +1302,16 @@ class _LocalApplicationBackend:
         except ValueError:
             return InteractionResult(accepted=False, status="invalid_decision")
         if pending.kind is InteractionKind.RECOVERY_DECISION:
+            if runtime is None:
+                raise _application_failure(
+                    ProductErrorCode.WORKSPACE_NOT_TRUSTED,
+                    "Trust the workspace before resolving recovery.",
+                )
             async with self._bootstrap_lock:
                 return await self._resolve_recovery_interaction(
                     pending,
                     parsed,
+                    runtime=runtime,
                 )
         if pending.kind is InteractionKind.STATE_RESET:
             try:
@@ -1004,7 +1350,7 @@ class _LocalApplicationBackend:
                     ),
                 )
                 if resolved is InteractionDecision.TRUST:
-                    self._trust.accept(self._workspace)
+                    await self._trust.accept(self._workspace)
                     await self._activate_workspace()
                 return InteractionResult(
                     accepted=True,
@@ -1016,7 +1362,7 @@ class _LocalApplicationBackend:
                 )
         if pending.kind is InteractionKind.TOOL_APPROVAL:
             current_thread_id = (
-                self._commands.current_thread_id if self._commands is not None else None
+                runtime.commands.current_thread_id if runtime is not None else None
             )
             if (
                 pending.operation_id != self._operations.active_operation_id
@@ -1046,9 +1392,7 @@ class _LocalApplicationBackend:
             async with lease:
                 current = self._interactions.pending
                 current_thread_id = (
-                    self._commands.current_thread_id
-                    if self._commands is not None
-                    else None
+                    runtime.commands.current_thread_id if runtime is not None else None
                 )
                 if (
                     current is None
@@ -1085,9 +1429,11 @@ class _LocalApplicationBackend:
         self,
         pending: PendingInteraction,
         decision: InteractionDecision,
+        *,
+        runtime: WorkspaceRuntime,
     ) -> InteractionResult:
         if decision is InteractionDecision.RETRY:
-            return await self._retry_recovery(pending)
+            return await self._retry_recovery(pending, runtime=runtime)
         if decision is not InteractionDecision.ABORT:
             return InteractionResult(accepted=False, status="rejected")
         try:
@@ -1099,9 +1445,8 @@ class _LocalApplicationBackend:
             if recovery is None:
                 self._interactions.discard(pending.id)
                 return InteractionResult(accepted=False, status="stale")
-            assert self._turns is not None
             try:
-                await self._turns.abort_recovery(
+                await runtime.turns.abort_recovery(
                     recovery.thread_id,
                     recovery.turn_id,
                 )
@@ -1135,24 +1480,24 @@ class _LocalApplicationBackend:
     async def _retry_recovery(
         self,
         pending: PendingInteraction,
+        *,
+        runtime: WorkspaceRuntime,
     ) -> InteractionResult:
         recovery = self._bound_recovery(pending)
         if recovery is None:
             self._interactions.discard(pending.id)
             return InteractionResult(accepted=False, status="stale")
-        assert self._turns is not None
-        assert self._commands is not None
-        turns = self._turns
-        commands = self._commands
+        turns = runtime.turns
+        commands = runtime.commands
         claimed = False
         resolution_published = asyncio.Event()
 
-        def claim(turn: Turn) -> None:
+        async def claim(turn: Turn) -> None:
             nonlocal claimed
             current = self._bound_recovery(pending)
             if current != recovery or turn.id != recovery.turn_id:
                 raise TurnExecutionFailed("recovery_stale")
-            commands.select_recovery_thread(recovery.thread_id)
+            await commands.select_recovery_thread(recovery.thread_id)
             if not self._interactions.discard(pending.id):
                 raise TurnExecutionFailed("recovery_stale")
             if self._recovery_required_delivery_id == pending.id:
@@ -1206,7 +1551,9 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="operation_busy")
         except TurnExecutionFailed:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery):
+            if claimed and await self._recovery_is_in_progress(
+                recovery, runtime=runtime
+            ):
                 self._recovery_queue.insert(0, recovery)
             elif not claimed:
                 self._discard_recovery(pending, recovery)
@@ -1216,7 +1563,9 @@ class _LocalApplicationBackend:
             return InteractionResult(accepted=False, status="stale")
         except asyncio.CancelledError:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery):
+            if claimed and await self._recovery_is_in_progress(
+                recovery, runtime=runtime
+            ):
                 self._recovery_queue.insert(0, recovery)
                 await self._present_next_recovery()
             if response_cancellation is not None:
@@ -1224,7 +1573,9 @@ class _LocalApplicationBackend:
             raise
         except BaseException:
             resolution_published.set()
-            if claimed and self._recovery_is_in_progress(recovery):
+            if claimed and await self._recovery_is_in_progress(
+                recovery, runtime=runtime
+            ):
                 self._recovery_queue.insert(0, recovery)
                 await self._present_next_recovery()
             raise
@@ -1304,6 +1655,8 @@ class _LocalApplicationBackend:
             if self._closed or self._foreground.closing:
                 break
             delivery_task: asyncio.Task[None] = asyncio.create_task(emit())
+            self._recovery_event_deliveries.add(delivery_task)
+            delivery_task.add_done_callback(self._recovery_event_deliveries.discard)
             deadline = (
                 asyncio.get_running_loop().time()
                 + _RECOVERY_EVENT_DELIVERY_TIMEOUT_SECONDS
@@ -1403,9 +1756,14 @@ class _LocalApplicationBackend:
         if self._recovery_queue and self._recovery_queue[0] == recovery:
             self._recovery_queue.pop(0)
 
-    def _recovery_is_in_progress(self, recovery: RecoveryResult) -> bool:
+    async def _recovery_is_in_progress(
+        self,
+        recovery: RecoveryResult,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> bool:
         try:
-            view = self._conversation.read_thread(recovery.thread_id)
+            view = await runtime.conversation.read_thread(recovery.thread_id)
         except ThreadNotFound:
             return False
         return any(
@@ -1432,7 +1790,7 @@ class _LocalApplicationBackend:
             pending = self._interactions.create(
                 kind=InteractionKind.RECOVERY_DECISION,
                 prompt=(
-                    "A tool may have produced external side effects. Retry or abort "
+                    "A tool may have produced side effects. Retry or abort "
                     "this unfinished Turn?"
                     if uncertain
                     else "Resume this unfinished Turn from its verified checkpoint?"
@@ -1441,7 +1799,7 @@ class _LocalApplicationBackend:
                     "recover_uncertain_turn" if uncertain else "recover_unfinished_turn"
                 ),
                 target=(
-                    "uncertain external tool call"
+                    "uncertain side-effecting tool call"
                     if uncertain
                     else f"unfinished Turn {recovery.turn_id}"
                 ),
@@ -1532,6 +1890,8 @@ class _LocalApplicationBackend:
             )
 
     async def _recover_older_state(self) -> None:
+        if self._state_lease is not None and self._state_lease.active:
+            return
         try:
             exclusive = StateLease.acquire(
                 self._paths.home,
@@ -1545,22 +1905,22 @@ class _LocalApplicationBackend:
                 data={"state_directory": str(self._paths.state_dir.resolve())},
             ) from error
 
-        worker: asyncio.Task[None] | None = None
+        cancellation: asyncio.CancelledError | None = None
         try:
-            preflight = inspect_application_state(self._paths.application_db)
-            if preflight.compatibility is StateCompatibility.OLDER:
-                worker = asyncio.create_task(
-                    asyncio.to_thread(reset_local_state, exclusive)
+            preflight = await self._database.preflight()
+            if preflight.compatibility is StateCompatibility.MIGRATION_UNAVAILABLE:
+                cancellation = await _finish_state_mutation(
+                    self._database.reset(exclusive)
                 )
-                await asyncio.shield(worker)
-            elif preflight.compatibility is StateCompatibility.NEW:
-                worker = asyncio.create_task(
-                    asyncio.to_thread(
-                        initialize_application_database,
-                        self._paths.application_db,
-                    )
+            elif preflight.compatibility is StateCompatibility.MIGRATION_REQUIRED:
+                cancellation = await _finish_state_mutation(
+                    self._database.migrate(exclusive)
                 )
-                await asyncio.shield(worker)
+            elif preflight.compatibility in {
+                StateCompatibility.NEW,
+                StateCompatibility.CURRENT,
+            }:
+                cancellation = await _finish_state_mutation(self._database.initialize())
             elif preflight.compatibility is StateCompatibility.NEWER:
                 assert preflight.found_schema is not None
                 raise self._newer_state_failure(
@@ -1573,10 +1933,17 @@ class _LocalApplicationBackend:
                     "Awesome cannot identify the local state format.",
                     data={"state_directory": str(self._paths.state_dir.resolve())},
                 )
-            exclusive.downgrade()
+            try:
+                exclusive.downgrade()
+            except StateLeaseUnavailable:
+                await _finish_state_mutation(self._database.suspend())
+                raise
+            initialize_cancellation = await _finish_state_mutation(
+                self._database.initialize()
+            )
+            if cancellation is None:
+                cancellation = initialize_cancellation
         except asyncio.CancelledError:
-            if worker is not None:
-                await _finish_cancelled_worker(worker)
             exclusive.close()
             raise
         except ApplicationFailure:
@@ -1618,7 +1985,17 @@ class _LocalApplicationBackend:
                     "state_directory": str(self._paths.state_dir.resolve()),
                 },
             ) from error
+        except ApplicationMigrationError as error:
+            exclusive.close()
+            raise _application_failure(
+                ProductErrorCode.STATE_UNAVAILABLE,
+                "Awesome could not migrate local state safely.",
+                retryable=True,
+                data={"state_directory": str(self._paths.state_dir.resolve())},
+            ) from error
         self._state_lease = exclusive
+        if cancellation is not None:
+            raise cancellation
 
     async def cancel_foreground(self, operation_id: str) -> CancelResult:
         cancelled = await self._operations.cancel(operation_id)
@@ -1628,15 +2005,54 @@ class _LocalApplicationBackend:
         async with self._close_lock:
             if self._closed:
                 return
-            self._foreground.begin_closing()
+            shutdown_task = self._shutdown_task
+            if shutdown_task is None:
+                self._foreground.begin_closing()
+                shutdown_task = asyncio.create_task(
+                    self._close_application_once(),
+                    name="local-application-close",
+                    context=Context(),
+                )
+                self._shutdown_task = shutdown_task
+        try:
+            await asyncio.shield(shutdown_task)
+        except asyncio.CancelledError:
+            await finish_bounded_cancellation_cleanup(
+                _await_shielded_task(shutdown_task),
+                timeout_seconds=_APPLICATION_SHUTDOWN_CLEANUP_TIMEOUT_SECONDS,
+            )
+            raise
+
+    async def _close_application_once(self) -> None:
+        try:
+            self._permission_session.revoke_thread_network()
+            for delivery in tuple(self._recovery_event_deliveries):
+                delivery.cancel()
             await self._operations.shutdown()
             self._foreground.cancel_exclusive()
             await self._foreground.wait_idle()
+            retirements: tuple[asyncio.Task[None], ...]
             async with self._bootstrap_lock:
-                if self._mcp is not None:
-                    await self._mcp.aclose()
-                await self._resources.aclose()
-            self._closed = True
+                runtime = self._runtime
+                self._runtime = None
+                if runtime is not None:
+                    self._schedule_workspace_runtime_retirement(runtime)
+                retirements = tuple(self._runtime_retirements.values())
+            outcomes = await asyncio.gather(
+                *(asyncio.shield(retirement) for retirement in retirements),
+                return_exceptions=True,
+            )
+            for outcome in outcomes:
+                if isinstance(outcome, BaseException):
+                    logger.warning(
+                        "Workspace runtime retirement failed during shutdown.",
+                        exc_info=(type(outcome), outcome, outcome.__traceback__),
+                    )
+        finally:
+            try:
+                await self._process_resources.aclose()
+            finally:
+                self._closed = True
 
     async def _reconcile_provider_credentials_before_state(self) -> None:
         if self._provider_credential_reconciled:
@@ -1655,45 +2071,74 @@ class _LocalApplicationBackend:
                 retryable=False,
                 data={"state_directory": str(self._paths.home.resolve())},
             ) from error
-        self._sources = self._load_sources(workspace_trusted=False)
-        self._application_config = resolve_application_config(self._sources)
+        self._bootstrap_sources = self._load_sources(workspace_trusted=False)
+        self._bootstrap_application_config = resolve_application_config(
+            self._bootstrap_sources
+        )
         self._provider_credential_reconciled = True
 
-    def _ensure_state_lease(self) -> None:
+    async def _ensure_state_lease(self) -> None:
         if self._state_lease is not None and self._state_lease.active:
             return
         shared = StateLease.acquire(self._paths.home, StateLeaseMode.SHARED)
         try:
-            preflight = inspect_application_state(self._paths.application_db)
-        except Exception:
+            preflight = await self._database.preflight()
+        except BaseException:
             shared.close()
             raise
         if preflight.compatibility is StateCompatibility.CURRENT:
+            try:
+                cancellation = await _finish_state_mutation(self._database.initialize())
+            except BaseException:
+                shared.close()
+                raise
             self._state_lease = shared
+            if cancellation is not None:
+                raise cancellation
             return
         shared.close()
-        if preflight.compatibility is not StateCompatibility.NEW:
+        if preflight.compatibility not in {
+            StateCompatibility.NEW,
+            StateCompatibility.MIGRATION_REQUIRED,
+        }:
             self._raise_preflight(preflight)
 
         exclusive = StateLease.acquire(
             self._paths.home,
             StateLeaseMode.EXCLUSIVE,
         )
+        cancellation = None
         try:
-            confirmed = inspect_application_state(self._paths.application_db)
+            confirmed = await self._database.preflight()
             if confirmed.compatibility is StateCompatibility.NEW:
-                initialize_application_database(self._paths.application_db)
+                cancellation = await _finish_state_mutation(self._database.initialize())
+            elif confirmed.compatibility is StateCompatibility.MIGRATION_REQUIRED:
+                cancellation = await _finish_state_mutation(
+                    self._database.migrate(exclusive)
+                )
             elif confirmed.compatibility is not StateCompatibility.CURRENT:
                 self._raise_preflight(confirmed)
-            exclusive.downgrade()
-        except Exception:
+            try:
+                exclusive.downgrade()
+            except StateLeaseUnavailable:
+                await _finish_state_mutation(self._database.suspend())
+                raise
+            initialize_cancellation = await _finish_state_mutation(
+                self._database.initialize()
+            )
+            if cancellation is None:
+                cancellation = initialize_cancellation
+        except BaseException:
             exclusive.close()
             raise
         self._state_lease = exclusive
+        if cancellation is not None:
+            raise cancellation
 
     def _raise_preflight(self, preflight: StatePreflight) -> None:
         if preflight.compatibility in {
-            StateCompatibility.OLDER,
+            StateCompatibility.MIGRATION_REQUIRED,
+            StateCompatibility.MIGRATION_UNAVAILABLE,
             StateCompatibility.NEWER,
         }:
             assert preflight.found_schema is not None
@@ -1772,472 +2217,742 @@ class _LocalApplicationBackend:
             ) from error
 
     async def _activate_workspace(self) -> None:
+        previous_runtime = self._runtime
         self._prepare_workspace_activation()
         try:
             await self._activate()
         except BaseException:
-            self._close_workspace_leases()
+            if previous_runtime is None and self._runtime is None:
+                self._close_workspace_leases()
             raise
 
     async def _activate(self) -> None:
-        if self._initialized:
-            return
-        snapshot = {field: getattr(self, field) for field in _ACTIVATION_STATE_FIELDS}
+        previous_runtime = self._runtime
+        candidate = await self._build_workspace_runtime(
+            selected_thread_id=(
+                previous_runtime.commands.current_thread_id
+                if previous_runtime is not None
+                else None
+            )
+        )
+        published = False
         try:
-            await self._activate_candidate()
+            self._validate_workspace_runtime(candidate)
+            recovery_results = await candidate.turns.reconcile_startup()
+            recovery_queue = [
+                result
+                for result in recovery_results
+                if result.status
+                in {RecoveryStatus.RESUMABLE, RecoveryStatus.INTERACTION_REQUIRED}
+            ]
+            self._require_runtime_publication_idle()
+            self._publish_workspace_runtime(
+                candidate,
+                expected_previous=previous_runtime,
+            )
+            published = True
+            self._recovery_queue = recovery_queue
+            try:
+                await self._present_next_recovery()
+            finally:
+                if previous_runtime is not None:
+                    await self._close_workspace_runtime(previous_runtime)
         except BaseException:
-            candidate_mcp = self._mcp
-            for field, value in snapshot.items():
-                setattr(self, field, value)
-            if candidate_mcp is not None and candidate_mcp is not snapshot["_mcp"]:
-                await self._close_activation_candidate(candidate_mcp)
+            if not published:
+                await self._close_workspace_runtime(candidate)
             raise
 
-    async def _activate_candidate(self) -> None:
-        if self._saver is None:
-            self._saver = await self._resources.enter_async_context(
-                sqlite_checkpoint_saver(self._paths.checkpoint_db)
-            )
-            self._checkpoints = LangGraphCheckpointStore(self._saver)
-        saver = self._saver
-        checkpoints = self._checkpoints
-        assert saver is not None
-        assert checkpoints is not None
-        self._workspace_branch = await asyncio.to_thread(
-            _git_branch,
-            self._workspace.canonical_path,
-        )
+    async def _build_workspace_runtime(
+        self,
+        *,
+        configuration: ProviderConfigurationSnapshot | None = None,
+        selected_thread_id: str | None = None,
+    ) -> WorkspaceRuntime:
+        token = self._request_runtime.set(None)
         try:
-            await asyncio.to_thread(
-                reconcile_provider_model_transaction,
-                journal=self._provider_model_journal,
-                config_writer=UserConfigWriter(self._paths.config_file),
-                conversation=self._conversation,
+            return await self._build_workspace_runtime_candidate(
+                configuration=configuration,
+                selected_thread_id=selected_thread_id,
             )
-        except ProviderConfigurationRecoveryRequired as error:
-            raise _application_failure(
-                ProductErrorCode.RECOVERY_REQUIRED,
-                "Provider configuration recovery could not be completed.",
-                retryable=False,
-                data={"state_directory": str(self._paths.state_dir.resolve())},
-            ) from error
-        self._sources = self._load_sources(workspace_trusted=True)
-        self._application_config = resolve_application_config(self._sources)
-        gateway_factory = self._injected_gateway_factory or self._provider_factory()
-        gateway_router = _GatewayRouter(gateway_factory)
+        finally:
+            self._request_runtime.reset(token)
 
-        change_store = SQLiteChangeSetStore(self._paths.application_db)
-        self._change_store = change_store
-        change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
-        journal = ChangeJournal(change_store, change_blobs, self._workspace)
-        self._change_analyzer = ChangeAnalyzer(
-            change_store,
-            change_blobs,
-            self._workspace,
-        )
-        self._change_operations = ChangeOperations(
-            change_store,
-            change_blobs,
-            self._workspace,
-            analyzer=self._change_analyzer,
-        )
-
-        registry = ToolRegistry()
-        register_read_tools(registry)
-        register_modifying_tools(registry, journal, ProcessRunner())
-        self._registry = registry
-        executor = ToolExecutor(registry)
-        self._change_scope = ChangeScope(
-            journal=journal,
-            store=change_store,
-            registry=registry,
-            session_id=self._session_id,
-            workspace=self._workspace,
-        )
-        self._change_scope.reconcile()
-
-        bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
-        catalog = discover_skills(
-            bundled_root=bundled,
-            user_root=self._paths.skills_dir,
-            workspace_root=self._workspace.canonical_path / ".awesome" / "skills",
-            workspace_trusted=True,
-            workspace_anchor=self._workspace.canonical_path,
-            disabled={
-                skill.name
-                for skill in (
-                    *self._application_config.user_skills,
-                    *self._application_config.workspace_skills,
+    async def _build_workspace_runtime_candidate(
+        self,
+        *,
+        configuration: ProviderConfigurationSnapshot | None,
+        selected_thread_id: str | None,
+    ) -> WorkspaceRuntime:
+        runtime_resources = RuntimeResources()
+        candidate_mcp: McpManager | None = None
+        try:
+            if self._saver is None:
+                self._saver = await self._process_resources.enter_async_context(
+                    sqlite_checkpoint_saver(self._paths.checkpoint_db)
                 )
-                if not skill.enabled
-            },
-        )
-        skill_loader = SkillLoader(catalog)
-        register_skill_tools(registry, skill_loader)
-
-        enablements = SQLiteMcpEnablementStore(self._paths.application_db)
-        if self._mcp_client_factory is None:
-            self._mcp = McpManager(
-                configs=_mcp_configs(self._application_config),
-                workspace_key=self._workspace.key,
-                workspace_trusted=True,
-                enablements=enablements,
-                registry=registry,
+                self._checkpoints = LangGraphCheckpointStore(self._saver)
+            saver = self._saver
+            checkpoints = self._checkpoints
+            assert saver is not None
+            assert checkpoints is not None
+            workspace_branch = await asyncio.to_thread(
+                _git_branch,
+                self._workspace.canonical_path,
             )
-        else:
-            self._mcp = McpManager(
-                configs=_mcp_configs(self._application_config),
-                workspace_key=self._workspace.key,
-                workspace_trusted=True,
-                enablements=enablements,
-                registry=registry,
-                client_factory=self._mcp_client_factory,
-            )
-
-        self._local_memory = LocalMemoryService(
-            paths=self._paths,
-            workspace_key=self._workspace.key,
-            enabled=self._application_config.memory.local_file_memory,
-        )
-        refresh_local_memory_tools(registry, self._local_memory)
-        mem0_identity = self._mem0_identity()
-        self._mem0_adapter = self._create_mem0_adapter()
-        self._mem0_session = _Mem0Session(
-            enabled=self._application_config.memory.mem0_cloud,
-            adapter=self._mem0_adapter,
-            identity=mem0_identity,
-            diagnostic=self._mem0_diagnostic,
-        )
-
-        model_catalog = ModelCatalog.from_application(self._application_config)
-        context_model_limit = min(
-            profile.context_limit for profile in model_catalog.models
-        )
-        context_budget = calculate_context_budget(
-            self._application_config.budgets.total_context_tokens,
-            context_model_limit,
-        )
-        self._workspace_instruction_snapshot = load_workspace_instructions(
-            workspace_root=self._workspace.canonical_path,
-            workspace_trusted=True,
-            effective_input_limit=context_budget.effective_input_limit,
-        )
-        context_service = ApplicationContextService(
-            conversation=self._conversation,
-            workspace=self._workspace,
-            builder=ContextBuilder(),
-            compressor=ThreadCompressor(gateway_router),
-            configured_total_tokens=self._application_config.budgets.total_context_tokens,
-            model_context_limit=context_model_limit,
-            product_instructions=CODING_AGENT_PRODUCT_INSTRUCTIONS,
-            workspace_instructions=(self._workspace_instruction_snapshot.content or ""),
-            workspace_instruction_source_id=(
-                self._workspace_instruction_snapshot.source_id
-            ),
-            model_identity=lambda turn: ModelIdentitySnapshot.from_models(
-                configured_model=turn.model,
-                effective_model=turn.model,
-            ),
-            skill_loader=skill_loader,
-            local_memory=self._local_memory,
-            mem0_recall=self._mem0_session.recall,
-        )
-        self._context = context_service
-
-        graph = compile_agent_graph(saver)
-
-        def runtime_factory(
-            turn: Turn,
-            operation_id: str,
-            projector: ApplicationEventProjector,
-        ) -> AgentRuntimeContext:
-            turn_id = turn.id
-            budgets = turn.budgets
-
-            async def resolve_tool_interaction(
-                request: ToolApprovalRequest,
-            ) -> ToolApprovalDecision:
-                pending = self._interactions.create(
-                    kind=InteractionKind.TOOL_APPROVAL,
-                    prompt=request.prompt,
-                    operation=request.operation,
-                    target=request.target,
-                    capability=request.capability,
-                    choices=tool_approval_choices(request.capability),
-                    thread_id=turn.thread_id,
-                    turn_id=turn_id,
-                    operation_id=operation_id,
-                )
+            if configuration is None:
                 try:
-                    await self._emitter.emit(
-                        InteractionRequiredPayload(
-                            interaction_id=pending.id,
-                            interaction_kind="tool_approval",
-                            prompt=pending.prompt,
-                            operation=pending.operation,
-                            target=pending.target,
-                            capability=pending.capability,
-                            choices=tuple(
-                                InteractionChoicePayload(
-                                    decision=choice.decision.value,
-                                    label=choice.label,
-                                    description=choice.description,
+                    await reconcile_provider_model_transaction(
+                        journal=self._provider_model_journal,
+                        config_writer=UserConfigWriter(self._paths.config_file),
+                        model_transactions=(self._repositories.run_write_transaction),
+                        clock=self._clock,
+                    )
+                except ProviderConfigurationRecoveryRequired as error:
+                    raise _application_failure(
+                        ProductErrorCode.RECOVERY_REQUIRED,
+                        "Provider configuration recovery could not be completed.",
+                        retryable=False,
+                        data={"state_directory": str(self._paths.state_dir.resolve())},
+                    ) from error
+                sources = self._load_sources(workspace_trusted=True)
+                application_config = resolve_application_config(sources)
+            else:
+                sources, application_config = configuration
+            model_catalog = MODEL_CATALOG
+            base_gateway_factory = self._injected_gateway_factory
+            if base_gateway_factory is None:
+                base_gateway_factory = await runtime_resources.enter_async_context(
+                    managed_gateway_factory(
+                        application_config,
+                        sources.secrets,
+                        model_catalog=model_catalog,
+                    )
+                )
+            gateway_factory = runtime_resources.bind_gateway_factory(
+                base_gateway_factory
+            )
+            gateway_router = runtime_resources
+
+            change_store = SQLiteChangeSetStore(self._database)
+            change_blobs = FileChangeBlobStore(self._paths.change_journal_dir)
+            journal = ChangeJournal(change_store, change_blobs, self._workspace)
+            change_analyzer = ChangeAnalyzer(
+                change_store,
+                change_blobs,
+                self._workspace,
+            )
+            change_operations = ChangeOperations(
+                change_store,
+                change_blobs,
+                self._workspace,
+                analyzer=change_analyzer,
+            )
+
+            registry = ToolRegistry()
+            register_read_tools(registry)
+            register_modifying_tools(
+                registry,
+                journal,
+                ProcessRunner(),
+                workspace=self._workspace,
+            )
+            web_available = False
+            web_diagnostic_code: str | None = "web_disabled"
+            if application_config.web.enabled:
+                tavily_key = sources.secrets.tavily_api_key
+                if tavily_key is None:
+                    web_diagnostic_code = "web_credential_missing"
+                else:
+                    try:
+                        validate_web_proxy_url(sources.secrets.web_proxy_url)
+                    except ValueError:
+                        web_diagnostic_code = "web_proxy_invalid"
+                    else:
+                        try:
+                            web_provider = self._injected_web_provider
+                            if web_provider is None:
+                                web_provider = (
+                                    await runtime_resources.enter_async_context(
+                                        managed_tavily_web_client(
+                                            api_key=tavily_key,
+                                            proxy_url=sources.secrets.web_proxy_url,
+                                        )
+                                    )
                                 )
-                                for choice in pending.choices
-                            ),
-                        ),
+                            registry.replace_exact_set(
+                                ("web_fetch", "web_search"),
+                                (
+                                    create_web_fetch_registration(
+                                        web_provider,
+                                        blocked_domains=(
+                                            application_config.web.blocked_domains
+                                        ),
+                                    ),
+                                    create_web_search_registration(
+                                        web_provider,
+                                        blocked_domains=(
+                                            application_config.web.blocked_domains
+                                        ),
+                                    ),
+                                ),
+                            )
+                        except ValueError:
+                            web_diagnostic_code = "web_client_invalid"
+                        else:
+                            web_available = True
+                            web_diagnostic_code = None
+            executor = ToolExecutor(registry)
+            change_scope = ChangeScope(
+                journal=journal,
+                store=change_store,
+                registry=registry,
+                session_id=self._session_id,
+                workspace=self._workspace,
+            )
+            await change_scope.reconcile()
+
+            catalog = await self._session_skill_catalog(application_config)
+            skill_loader = SkillLoader(catalog)
+            register_skill_tools(registry, skill_loader)
+
+            local_memory = LocalMemoryService(
+                paths=self._paths,
+                workspace_key=self._workspace.key,
+                enabled=application_config.memory.local_file_memory,
+            )
+            refresh_local_memory_tools(registry, local_memory)
+            mem0_identity = self._mem0_identity(application_config)
+            mem0_adapter, mem0_diagnostic = await self._create_mem0_adapter(
+                sources,
+                resources=runtime_resources,
+            )
+            mem0_session = _Mem0Session(
+                enabled=application_config.memory.mem0_cloud,
+                adapter=mem0_adapter,
+                identity=mem0_identity,
+                diagnostic=mem0_diagnostic,
+            )
+
+            enablements = SQLiteMcpEnablementStore(self._database)
+            enablement_snapshot = await enablements.snapshot(self._workspace.key)
+            if self._mcp_client_factory is None:
+                candidate_mcp = McpManager(
+                    configs=_mcp_configs(application_config),
+                    workspace_trusted=True,
+                    enablements=enablement_snapshot,
+                    registry=registry,
+                )
+            else:
+                candidate_mcp = McpManager(
+                    configs=_mcp_configs(application_config),
+                    workspace_trusted=True,
+                    enablements=enablement_snapshot,
+                    registry=registry,
+                    client_factory=self._mcp_client_factory,
+                )
+            runtime_resources.push_async_callback(
+                candidate_mcp.aclose,
+            )
+
+            context_model_limit = min(
+                profile.context_limit
+                for descriptor in model_catalog.providers
+                for profile in descriptor.models
+            )
+            context_budget = calculate_context_budget(
+                application_config.budgets.total_context_tokens,
+                context_model_limit,
+            )
+            workspace_instruction_snapshot = load_workspace_instructions(
+                workspace_root=self._workspace.canonical_path,
+                workspace_trusted=True,
+                effective_input_limit=context_budget.effective_input_limit,
+            )
+            context_service = ApplicationContextService(
+                conversation=self._conversation,
+                workspace=self._workspace,
+                builder=ContextBuilder(),
+                compressor=ThreadCompressor(gateway_router),
+                configured_total_tokens=application_config.budgets.total_context_tokens,
+                model_context_limit=context_model_limit,
+                product_instructions=CODING_AGENT_PRODUCT_INSTRUCTIONS,
+                workspace_instructions=(workspace_instruction_snapshot.content or ""),
+                workspace_instruction_source_id=workspace_instruction_snapshot.source_id,
+                model_identity=lambda turn: ModelIdentitySnapshot.from_models(
+                    configured_model=turn.model,
+                    effective_model=turn.model,
+                ),
+                skill_loader=skill_loader,
+                local_memory=local_memory,
+                mem0_recall=mem0_session.recall,
+            )
+
+            graph = compile_agent_graph(saver)
+
+            async def runtime_factory(
+                turn: Turn,
+                operation_id: str,
+                projector: ApplicationEventProjector,
+            ) -> AgentRuntimeContext:
+                runtime = self._require_runtime()
+                turn_id = turn.id
+                budgets = turn.budgets
+
+                async def resolve_tool_interaction(
+                    request: ToolApprovalRequest,
+                ) -> ToolApprovalDecision:
+                    pending = self._interactions.create(
+                        kind=InteractionKind.TOOL_APPROVAL,
+                        prompt=request.prompt,
+                        operation=request.operation,
+                        target=request.target,
+                        capability=request.capability,
+                        choices=tool_approval_choices(request.capability),
                         thread_id=turn.thread_id,
                         turn_id=turn_id,
                         operation_id=operation_id,
                     )
-                except BaseException:
-                    self._interactions.discard(pending.id)
-                    raise
-                decision = await self._interactions.wait(pending.id)
-                return ToolApprovalDecision(decision.value)
+                    try:
+                        await self._emitter.emit(
+                            InteractionRequiredPayload(
+                                interaction_id=pending.id,
+                                interaction_kind="tool_approval",
+                                prompt=pending.prompt,
+                                operation=pending.operation,
+                                target=pending.target,
+                                capability=pending.capability,
+                                choices=tuple(
+                                    InteractionChoicePayload(
+                                        decision=choice.decision.value,
+                                        label=choice.label,
+                                        description=choice.description,
+                                    )
+                                    for choice in pending.choices
+                                ),
+                            ),
+                            thread_id=turn.thread_id,
+                            turn_id=turn_id,
+                            operation_id=operation_id,
+                        )
+                    except BaseException:
+                        self._interactions.discard(pending.id)
+                        raise
+                    decision = await self._interactions.wait(pending.id)
+                    return ToolApprovalDecision(decision.value)
 
-            def tool_context(
-                state: object,
+                async def tool_context(
+                    state: object,
+                    request: ToolRequest,
+                ) -> ToolExecutionContext:
+                    agent_state = cast(AgentState, state)
+                    return ToolExecutionContext(
+                        workspace=self._workspace,
+                        thread_id=turn.thread_id,
+                        operation_id=operation_id,
+                        turn_id=turn_id,
+                        origin=ToolExecutionOrigin.AGENT,
+                        emitter=self._emitter,
+                        activity_writer=self._repositories,
+                        monotonic=monotonic,
+                        change_set_id=await runtime.change_scope.change_set_for_tool(
+                            tool_name=request.tool_name,
+                            owner=turn_id,
+                            turn_id=turn_id,
+                        ),
+                        permission_session=self._permission_session,
+                        approval_resolver=resolve_tool_interaction,
+                        capability_quotas=CapabilityQuotaLedger(
+                            {"network.read": budgets.web_requests},
+                            used_counts={"network.read": agent_state["web_requests"]},
+                        ),
+                        citation_allocator=CitationAllocator(
+                            tuple(
+                                Citation.model_validate(item)
+                                for item in agent_state["citations"]
+                            )
+                        ),
+                        skill_mode=turn.skill_mode,
+                        resource_grants=_skill_resource_grants(
+                            tuple(agent_state["context_manifest"]),
+                            skill_mode=turn.skill_mode,
+                        ),
+                    )
+
+                async def record_context_snapshot(
+                    manifest: tuple[dict[str, JsonValue], ...],
+                ) -> None:
+                    await runtime.conversation.store_context_manifest(turn.id, manifest)
+
+                post_answer_finalizer: PostAnswerFinalizer = (
+                    DisabledPostAnswerFinalizer()
+                )
+                if (
+                    runtime.mem0_session.enabled
+                    and runtime.mem0_session.adapter is not None
+                    and runtime.mem0_session.identity is not None
+                ):
+                    post_answer_finalizer = Mem0PostAnswerFinalizer(
+                        distiller=MemoryDistiller(gateway_router),
+                        adapter=runtime.mem0_session.adapter,
+                        identity=runtime.mem0_session.identity,
+                        project_status=projector.project_memory_status,
+                    )
+                return AgentRuntimeContext(
+                    gateway=gateway_factory(
+                        cast(ProviderId, turn.provider),
+                        turn.model,
+                    ),
+                    executor=executor,
+                    tool_catalog=lambda: _tool_catalog_for_skill_mode(
+                        registry,
+                        _skill_tool_catalog_mode(
+                            turn.context_manifest,
+                            skill_mode=turn.skill_mode,
+                        ),
+                    ),
+                    tool_context_factory=tool_context,
+                    event_projector=projector,
+                    context_builder=context_service.build,
+                    budget=TurnBudget(
+                        model_calls=budgets.model_calls,
+                        tool_calls=budgets.tool_calls,
+                        provider_retries=budgets.provider_retries,
+                        compressions=budgets.compressions,
+                        active_execution_seconds=budgets.active_execution_seconds,
+                        web_requests=budgets.web_requests,
+                    ),
+                    monotonic=monotonic,
+                    context_token_estimator=estimate_messages,
+                    compressor=context_service,
+                    current_user_text=await context_service.runtime_current_input(turn),
+                    context_snapshot_recorder=record_context_snapshot,
+                    post_answer_finalizer=post_answer_finalizer,
+                )
+
+            turns = TurnCoordinator(
+                workspace_key=self._workspace.key,
+                conversation=self._conversation,
+                config_resolver=self._turn_config,
+                graph=cast(Any, graph),
+                runtime_context_factory=runtime_factory,
+                operations=self._operations,
+                emitter=self._emitter,
+                checkpoints=checkpoints,
+                seal_changes=self._seal_turn,
+                reconcile_changes=change_scope.reconcile,
+                turn_input_preparer=context_service.prepare_turn,
+                turn_extension_preparer=self._prepare_turn_extensions,
+                context_snapshot_validator=context_service.validate_frozen_snapshot,
+                tool_replay_safety=registry.replay_safety,
+            )
+
+            async def direct_context(
+                thread_id: str,
+                operation_id: str,
                 request: ToolRequest,
             ) -> ToolExecutionContext:
-                del state
-                assert self._change_scope is not None
+                runtime = self._require_runtime()
                 return ToolExecutionContext(
                     workspace=self._workspace,
-                    thread_id=turn.thread_id,
+                    thread_id=thread_id,
                     operation_id=operation_id,
-                    turn_id=turn_id,
-                    origin=ToolExecutionOrigin.AGENT,
-                    emitter=self._emitter,
-                    activity_writer=self._repositories.tool_activities,
-                    monotonic=monotonic,
-                    change_set_id=self._change_scope.change_set_for_tool(
-                        tool_name=request.tool_name,
-                        owner=turn_id,
-                        turn_id=turn_id,
-                    ),
-                    permission_session=self._permission_session,
-                    approval_resolver=resolve_tool_interaction,
-                )
-
-            def record_context_snapshot(
-                manifest: tuple[dict[str, JsonValue], ...],
-            ) -> None:
-                self._conversation.store_context_manifest(turn.id, manifest)
-
-            post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
-            if (
-                self._mem0_session is not None
-                and self._mem0_session.enabled
-                and self._mem0_session.adapter is not None
-                and self._mem0_session.identity is not None
-            ):
-                post_answer_memory = CloudPostAnswerMemory(
-                    distiller=MemoryDistiller(gateway_router),
-                    adapter=self._mem0_session.adapter,
-                    identity=self._mem0_session.identity,
-                )
-            return AgentRuntimeContext(
-                gateway=gateway_factory(
-                    cast(ProviderId, turn.provider),
-                    turn.model,
-                ),
-                executor=executor,
-                tool_catalog=registry.specifications,
-                tool_context_factory=tool_context,
-                event_projector=projector,
-                context_builder=context_service.build,
-                budget=TurnBudget(
-                    model_calls=budgets.model_calls,
-                    tool_calls=budgets.tool_calls,
-                    provider_retries=budgets.provider_retries,
-                    compressions=budgets.compressions,
-                    active_execution_seconds=budgets.active_execution_seconds,
-                ),
-                monotonic=monotonic,
-                context_token_estimator=estimate_messages,
-                compressor=context_service,
-                current_user_text=context_service.runtime_current_input(turn),
-                context_snapshot_recorder=record_context_snapshot,
-                post_answer_memory=post_answer_memory,
-            )
-
-        self._turns = TurnCoordinator(
-            workspace_key=self._workspace.key,
-            conversation=self._conversation,
-            config_resolver=self._turn_config,
-            graph=cast(Any, graph),
-            runtime_context_factory=runtime_factory,
-            operations=self._operations,
-            emitter=self._emitter,
-            checkpoints=checkpoints,
-            seal_changes=self._seal_turn,
-            reconcile_changes=self._change_scope.reconcile,
-            turn_input_preparer=context_service.prepare_turn,
-            turn_extension_preparer=self._prepare_turn_extensions,
-            context_snapshot_validator=context_service.validate_frozen_snapshot,
-        )
-
-        def direct_context(
-            thread_id: str,
-            operation_id: str,
-            request: ToolRequest,
-        ) -> ToolExecutionContext:
-            assert self._change_scope is not None
-            return ToolExecutionContext(
-                workspace=self._workspace,
-                thread_id=thread_id,
-                operation_id=operation_id,
-                turn_id=None,
-                origin=ToolExecutionOrigin.DIRECT,
-                emitter=self._emitter,
-                activity_writer=self._repositories.tool_activities,
-                monotonic=monotonic,
-                change_set_id=self._change_scope.change_set_for_tool(
-                    tool_name=request.tool_name,
-                    owner=operation_id,
                     turn_id=None,
+                    origin=ToolExecutionOrigin.DIRECT,
+                    emitter=self._emitter,
+                    activity_writer=self._repositories,
+                    monotonic=monotonic,
+                    change_set_id=await runtime.change_scope.change_set_for_tool(
+                        tool_name=request.tool_name,
+                        owner=operation_id,
+                        turn_id=None,
+                    ),
+                    permission_session=PermissionSession(
+                        mode=PermissionMode.FULL_ACCESS
+                    ),
+                    skill_mode="direct",
+                )
+
+            direct = DirectCommandService(
+                conversation=self._conversation,
+                executor=executor,
+                operations=self._operations,
+                context_factory=direct_context,
+                finalize_operation=self._seal_direct,
+            )
+            commands = ConversationCommandService(
+                conversation=self._conversation,
+                turns=turns,
+                workspace_key=self._workspace.key,
+                application_snapshot=self.application_state,
+                thread_snapshot=self.thread_state,
+                has_active_operation=lambda: (
+                    self._operations.active_operation_id is not None
                 ),
-                permission_session=PermissionSession(mode=PermissionMode.FULL_ACCESS),
+                default_model=self._initial_thread_model,
+                on_thread_selected=self._on_thread_selected,
+                selected_thread_id=selected_thread_id,
+            )
+            extensions = ApplicationExtensionService(
+                conversation=self._conversation,
+                catalog=catalog,
+                manager=candidate_mcp,
+                enablements=enablements,
+                workspace_key=self._workspace.key,
+                registry=registry,
+                current_thread_id=lambda: (
+                    self._require_runtime().commands.current_thread_id
+                ),
+                credential_statuses=lambda: (
+                    self._require_runtime().sources.provider_credentials
+                ),
+                local_memory=local_memory,
+                config_writer=UserConfigWriter(self._paths.config_file),
+                mem0_cloud=mem0_adapter,
+                mem0_enabled=application_config.memory.mem0_cloud,
+                mem0_user_id=application_config.memory.mem0_user_id,
+                mem0_initialization_diagnostic=mem0_diagnostic,
+                mem0_state_changed=mem0_session.update,
+                has_active_turn=lambda: (
+                    self._operations.active_operation_id is not None
+                ),
+            )
+            await extensions.prepare_turn_extensions()
+            provider_configuration = ProviderConfigurationService(
+                conversation=self._conversation,
+                model_transactions=self._repositories.run_write_transaction,
+                config_writer=UserConfigWriter(self._paths.config_file),
+                secret_store=UserSecretStore(self._paths.env_file),
+                validator=self._credential_validator,
+                sources=lambda: self._require_runtime().sources,
+                load_configuration=self._load_provider_configuration,
+                apply_configuration=self._apply_provider_configuration,
+                model_transaction_journal=self._provider_model_journal,
+                credential_transaction_journal=self._provider_credential_journal,
+                model_catalog=model_catalog,
+                clock=self._clock,
             )
 
-        self._direct = DirectCommandService(
-            conversation=self._conversation,
-            executor=executor,
-            operations=self._operations,
-            context_factory=direct_context,
-            finalize_operation=self._seal_direct,
-        )
-        assert self._mem0_session is not None
-        self._commands = ConversationCommandService(
-            conversation=self._conversation,
-            workspace_key=self._workspace.key,
-            application_snapshot=self.application_state,
-            thread_snapshot=self.thread_state,
-            has_active_operation=lambda: (
-                self._operations.active_operation_id is not None
-            ),
-            default_model=self._initial_thread_model,
-            on_thread_selected=self._on_thread_selected,
-        )
-        self._extensions = ApplicationExtensionService(
-            conversation=self._conversation,
-            catalog=catalog,
-            manager=self._mcp,
-            enablements=enablements,
-            workspace_key=self._workspace.key,
-            registry=registry,
-            current_thread_id=lambda: (
-                self._commands.current_thread_id if self._commands is not None else None
-            ),
-            credential_statuses=lambda: self._sources.provider_credentials,
-            local_memory=self._local_memory,
-            config_writer=UserConfigWriter(self._paths.config_file),
-            mem0_cloud=self._mem0_adapter,
-            mem0_enabled=self._application_config.memory.mem0_cloud,
-            mem0_user_id=self._application_config.memory.mem0_user_id,
-            mem0_initialization_diagnostic=self._mem0_diagnostic,
-            mem0_state_changed=self._mem0_session.update,
-            has_active_turn=lambda: self._operations.active_operation_id is not None,
-        )
-        await self._extensions.prepare_turn_extensions()
-        self._provider_configuration = ProviderConfigurationService(
-            conversation=self._conversation,
-            config_writer=UserConfigWriter(self._paths.config_file),
-            secret_store=UserSecretStore(self._paths.env_file),
-            validator=self._credential_validator,
-            sources=lambda: self._sources,
-            load_configuration=self._load_provider_configuration,
-            apply_configuration=self._apply_provider_configuration,
-            model_transaction_journal=self._provider_model_journal,
-            credential_transaction_journal=self._provider_credential_journal,
-        )
-        self._diagnostic_commands = DiagnosticCommandService(
-            workspace_path=self._workspace.display_path,
-            registry=registry,
-            permission_session=self._permission_session,
-            status_reader=self._command_status_snapshot,
-            usage_reader=self._command_usage,
-            credential_statuses=lambda: self._sources.provider_credentials,
-            provider_doctor=self._provider_configuration.doctor,
-            workspace_instruction_diagnostic=lambda: (
-                self._workspace_instruction_snapshot.diagnostic
-                if self._workspace_instruction_snapshot is not None
-                else None
-            ),
-        )
-        assert self._change_operations is not None
-        assert self._change_store is not None
-        self._change_commands = ChangeCommandService(
-            operations=self._change_operations,
-            store=self._change_store,
-            workspace_key=self._workspace.key,
-        )
-        self._permission_commands = PermissionCommandService(
-            session=self._permission_session,
-            operations=self._operations,
-            interactions=self._interactions,
-            emitter=self._emitter,
-            current_thread_id=lambda: (
-                self._commands.current_thread_id if self._commands is not None else None
-            ),
-        )
-        self._command_dispatcher = CommandDispatcher(
-            {
-                CommandName.NEW: self._commands.new,
-                CommandName.RENAME: self._commands.rename,
-                CommandName.RESUME: self._commands.resume,
-                CommandName.CONTEXT: self._context_command,
-                CommandName.COMPACT: self._compact_command,
-                CommandName.AUTH: self._provider_configuration.auth_command,
-                CommandName.MODEL: self._model_command,
-                CommandName.THINKING: self._commands.thinking,
-                CommandName.WORKSPACE: self._diagnostic_commands.workspace,
-                CommandName.DIFF: self._change_commands.diff,
-                CommandName.UNDO: self._change_commands.undo,
-                CommandName.REDO: self._change_commands.redo,
-                CommandName.TOOLS: self._diagnostic_commands.tools,
-                CommandName.SKILLS: self._extensions.skills,
-                CommandName.MCP: self._extensions.mcp,
-                CommandName.MEMORY: self._extensions.memory,
-                CommandName.STATUS: self._diagnostic_commands.status,
-                CommandName.USAGE: self._diagnostic_commands.usage,
-                CommandName.DOCTOR: self._diagnostic_commands.doctor,
-                CommandName.CONFIG: self._diagnostic_commands.config,
-                CommandName.PERMISSIONS: self._permission_commands.permissions,
-            },
-            foreground=self._foreground,
-            has_pending_interaction=lambda: self._interactions.pending is not None,
-            mutation_guard=self._require_runtime_consistent,
-        )
-        recovery_results = await self._turns.reconcile_startup()
-        self._recovery_queue = [
-            result
-            for result in recovery_results
-            if result.status
-            in {RecoveryStatus.RESUMABLE, RecoveryStatus.INTERACTION_REQUIRED}
-        ]
-        await self._present_next_recovery()
-        self._initialized = True
+            async def configuration_ready() -> bool:
+                return self._runtime is not None
 
-    async def _close_activation_candidate(self, candidate: McpManager) -> None:
-        close_task = asyncio.create_task(candidate.aclose())
-        try:
-            done, _ = await asyncio.wait(
-                (close_task,),
-                timeout=_ACTIVATION_ROLLBACK_TIMEOUT_SECONDS,
+            diagnostic_commands = DiagnosticCommandService(
+                workspace_path=self._workspace.display_path,
+                registry=registry,
+                permission_session=self._permission_session,
+                status_reader=self._command_status_snapshot,
+                usage_reader=self._command_usage,
+                credential_statuses=lambda: (
+                    self._require_runtime().sources.provider_credentials
+                ),
+                provider_doctor=provider_configuration.doctor,
+                configuration_ready=configuration_ready,
+                sqlite_ready=self._database.quick_check,
+                checkpoints_ready=checkpoints.health,
+                workspace_instruction_diagnostic=lambda: (
+                    self._require_runtime().workspace_instruction_snapshot.diagnostic
+                ),
+            )
+            change_commands = ChangeCommandService(
+                operations=change_operations,
+                store=change_store,
+                workspace_key=self._workspace.key,
+            )
+            permission_commands = PermissionCommandService(
+                session=self._permission_session,
+                operations=self._operations,
+                interactions=self._interactions,
+                emitter=self._emitter,
+                current_thread_id=lambda: (
+                    self._require_runtime().commands.current_thread_id
+                ),
+            )
+            web_commands = WebCommandService(
+                config_writer=UserConfigWriter(self._paths.config_file),
+                current_configuration=lambda: (sources, application_config),
+                load_configuration=self._load_provider_configuration,
+                apply_configuration=self._apply_web_configuration,
+                runtime_status=lambda: WebRuntimeStatus(
+                    available=web_available,
+                    diagnostic_code=web_diagnostic_code,
+                ),
+                permission_session=self._permission_session,
+                current_thread_id=lambda: commands.current_thread_id,
+                validate_proxy=validate_web_proxy_url,
+                configuration_control=self._web_configuration_control,
+            )
+            thread_export = ThreadExportService(
+                conversation=self._conversation,
+                workspace=self._workspace,
+                current_thread_id=lambda: commands.current_thread_id,
+                journal=journal,
+                change_scope=change_scope,
+            )
+            command_dispatcher = CommandDispatcher(
+                {
+                    CommandName.NEW: commands.new,
+                    CommandName.RENAME: commands.rename,
+                    CommandName.RESUME: commands.resume,
+                    CommandName.FORK: commands.fork,
+                    CommandName.RETRY: commands.retry,
+                    CommandName.SEARCH: self._search_command,
+                    CommandName.EXPORT: thread_export.export,
+                    CommandName.CONTEXT: self._context_command,
+                    CommandName.COMPACT: self._compact_command,
+                    CommandName.AUTH: provider_configuration.auth_command,
+                    CommandName.MODEL: self._model_command,
+                    CommandName.THINKING: commands.thinking,
+                    CommandName.WORKSPACE: diagnostic_commands.workspace,
+                    CommandName.DIFF: change_commands.diff,
+                    CommandName.UNDO: change_commands.undo,
+                    CommandName.REDO: change_commands.redo,
+                    CommandName.TOOLS: diagnostic_commands.tools,
+                    CommandName.SKILLS: extensions.skills,
+                    CommandName.MCP: extensions.mcp,
+                    CommandName.MEMORY: extensions.memory,
+                    CommandName.STATUS: diagnostic_commands.status,
+                    CommandName.USAGE: diagnostic_commands.usage,
+                    CommandName.DOCTOR: diagnostic_commands.doctor,
+                    CommandName.CONFIG: diagnostic_commands.config,
+                    CommandName.PERMISSIONS: permission_commands.permissions,
+                    CommandName.WEB: web_commands.web,
+                },
+                foreground=self._foreground,
+                has_pending_interaction=lambda: self._interactions.pending is not None,
+                mutation_guard=self._require_runtime_consistent,
+            )
+            return WorkspaceRuntime(
+                sources=sources,
+                application_config=application_config,
+                conversation=self._conversation,
+                turns=turns,
+                commands=commands,
+                thread_export=thread_export,
+                command_dispatcher=command_dispatcher,
+                diagnostic_commands=diagnostic_commands,
+                change_commands=change_commands,
+                permission_commands=permission_commands,
+                web_commands=web_commands,
+                provider_configuration=provider_configuration,
+                direct=direct,
+                extensions=extensions,
+                context=context_service,
+                tool_registry=registry,
+                model_catalog=model_catalog,
+                local_memory=local_memory,
+                mem0_session=mem0_session,
+                mcp=candidate_mcp,
+                change_scope=change_scope,
+                change_store=change_store,
+                change_analyzer=change_analyzer,
+                change_operations=change_operations,
+                workspace_branch=workspace_branch,
+                workspace_instruction_snapshot=workspace_instruction_snapshot,
+                web_available=web_available,
+                web_diagnostic_code=web_diagnostic_code,
+                resources=runtime_resources,
             )
         except BaseException:
-            close_task.cancel()
-            close_task.add_done_callback(_consume_background_task_result)
-            return
-        if close_task not in done:
-            close_task.cancel()
-            close_task.add_done_callback(_consume_background_task_result)
-            await asyncio.sleep(0)
-            return
-        with suppress(Exception, asyncio.CancelledError):
-            close_task.result()
+            await self._close_runtime_resources_best_effort(
+                runtime_resources,
+                reason="candidate construction",
+            )
+            raise
+
+    def _validate_workspace_runtime(self, candidate: WorkspaceRuntime) -> None:
+        if candidate.conversation is not self._conversation:
+            raise RuntimeError("Workspace runtime owns the wrong Conversation service.")
+        if candidate.model_catalog is not MODEL_CATALOG:
+            raise RuntimeError("Workspace runtime Model Catalog is inconsistent.")
+        web_tools_registered = (
+            candidate.tool_registry.resolve("web_fetch") is not None,
+            candidate.tool_registry.resolve("web_search") is not None,
+        )
+        if web_tools_registered != (
+            candidate.web_available,
+            candidate.web_available,
+        ):
+            raise RuntimeError("Workspace runtime Web availability is inconsistent.")
+
+    def _require_runtime_publication_idle(self) -> None:
+        if self._closed or self._foreground.closing:
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "Application shutdown prevents workspace runtime replacement.",
+                retryable=True,
+            )
+        if (
+            self._foreground.operation_active
+            or self._operations.active_operation_id is not None
+        ):
+            raise _application_failure(
+                ProductErrorCode.OPERATION_BUSY,
+                "An active Operation prevents workspace runtime replacement.",
+                retryable=True,
+            )
+
+    def _publish_workspace_runtime(
+        self,
+        candidate: WorkspaceRuntime,
+        *,
+        expected_previous: WorkspaceRuntime | None,
+    ) -> None:
+        if self._runtime is not expected_previous:
+            raise RuntimeError("Workspace runtime changed before publication.")
+        self._runtime = candidate
+        self._permission_session.revoke_thread_network()
+
+    async def _close_workspace_runtime(self, runtime: WorkspaceRuntime) -> None:
+        retirement = self._schedule_workspace_runtime_retirement(runtime)
+        if retirement is not None:
+            await asyncio.shield(retirement)
+
+    def _schedule_workspace_runtime_retirement(
+        self,
+        runtime: WorkspaceRuntime,
+    ) -> asyncio.Task[None] | None:
+        resources = runtime.resources
+        if resources.closed:
+            return None
+        retirement = self._runtime_retirements.get(resources)
+        if retirement is None:
+            retirement = asyncio.create_task(
+                self._retire_workspace_runtime(resources),
+                name="workspace-runtime-retirement",
+                context=Context(),
+            )
+            self._runtime_retirements[resources] = retirement
+        return retirement
+
+    async def _retire_workspace_runtime(
+        self,
+        resources: RuntimeResources,
+    ) -> None:
+        try:
+            await resources.aclose()
+        except BaseException as error:
+            logger.warning(
+                "Workspace runtime resource cleanup failed during retirement.",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+        finally:
+            retirement = self._runtime_retirements.get(resources)
+            if retirement is asyncio.current_task():
+                self._runtime_retirements.pop(resources, None)
+
+    async def _close_runtime_resources_best_effort(
+        self,
+        resources: RuntimeResources,
+        *,
+        reason: str,
+    ) -> None:
+        try:
+            await resources.aclose()
+        except BaseException as error:
+            logger.warning(
+                "Workspace runtime resource cleanup failed after %s.",
+                reason,
+                exc_info=(type(error), error, error.__traceback__),
+            )
 
     def _load_sources(self, *, workspace_trusted: bool) -> LoadedConfigSources:
         return load_config_sources(
@@ -2247,17 +2962,148 @@ class _LocalApplicationBackend:
             environ=self._environ,
         )
 
+    async def _session_skill_catalog(
+        self,
+        application_config: ApplicationConfig,
+    ) -> SkillCatalog:
+        catalog = self._skill_catalog
+        if catalog is not None:
+            return catalog
+        task = self._skill_catalog_task
+        if task is None:
+            await self._skill_management.recover()
+            catalog = self._skill_catalog
+            if catalog is not None:
+                return catalog
+            task = self._skill_catalog_task
+        if task is None:
+            bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
+            task = asyncio.create_task(
+                asyncio.to_thread(
+                    discover_skills,
+                    bundled_root=bundled,
+                    user_root=self._paths.skills_dir,
+                    workspace_root=(
+                        self._workspace.canonical_path / ".awesome" / "skills"
+                    ),
+                    workspace_trusted=True,
+                    workspace_anchor=self._workspace.canonical_path,
+                    disabled={
+                        skill.name
+                        for skill in (
+                            *application_config.user_skills,
+                            *application_config.workspace_skills,
+                        )
+                        if not skill.enabled
+                    },
+                ),
+                name=f"awesome-skill-discovery-{self._session_id}",
+            )
+            self._skill_catalog_task = task
+            task.add_done_callback(self._skill_catalog_discovery_finished)
+        return await asyncio.shield(task)
+
+    def _skill_catalog_discovery_finished(
+        self,
+        task: asyncio.Task[SkillCatalog],
+    ) -> None:
+        if task.cancelled():
+            if self._skill_catalog_task is task:
+                self._skill_catalog_task = None
+            return
+        error = task.exception()
+        if error is not None:
+            if self._skill_catalog_task is task:
+                self._skill_catalog_task = None
+            logger.warning(
+                "Skill Catalog discovery failed.",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            return
+        if self._skill_catalog_task is task:
+            self._skill_catalog = task.result()
+
+    async def _drain_skill_catalog_discovery(self) -> None:
+        task = self._skill_catalog_task
+        if task is None:
+            return
+        try:
+            async with asyncio.timeout(_SKILL_DISCOVERY_DRAIN_TIMEOUT_SECONDS):
+                await asyncio.shield(task)
+        except TimeoutError:
+            logger.warning(
+                "Skill Catalog discovery did not finish during bounded shutdown."
+            )
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                raise
+        except Exception:
+            # The done callback records and consumes the concrete failure.
+            return
+
     def _load_provider_configuration(self) -> ProviderConfigurationSnapshot:
         sources = self._load_sources(workspace_trusted=True)
         return sources, resolve_application_config(sources)
 
-    def _apply_provider_configuration(
+    async def _apply_provider_configuration(
         self,
         snapshot: ProviderConfigurationSnapshot,
+        publication: ProviderConfigurationPublication,
     ) -> None:
-        sources, application_config = snapshot
-        self._sources = sources
-        self._application_config = application_config
+        runtime = self._require_runtime()
+        candidate = await self._build_workspace_runtime(
+            configuration=snapshot,
+            selected_thread_id=runtime.commands.current_thread_id,
+        )
+        published = False
+        try:
+            self._validate_workspace_runtime(candidate)
+            self._require_runtime_publication_idle()
+            publication.require_active()
+            self._publish_workspace_runtime(
+                candidate,
+                expected_previous=runtime,
+            )
+            published = True
+            # This callback runs inside the request scope bound to ``runtime``.
+            # Retirement must begin now but cannot wait for that same reader.
+            self._schedule_workspace_runtime_retirement(runtime)
+        except BaseException:
+            if not published:
+                await self._close_workspace_runtime(candidate)
+            raise
+
+    async def _apply_web_configuration(
+        self,
+        snapshot: ProviderConfigurationSnapshot,
+    ) -> WebRuntimeStatus:
+        published_runtime = self._runtime
+        if published_runtime is None:
+            raise RuntimeError("Web configuration requires a published Runtime.")
+        candidate = await self._build_workspace_runtime(
+            configuration=snapshot,
+            selected_thread_id=published_runtime.commands.current_thread_id,
+        )
+        published = False
+        try:
+            self._validate_workspace_runtime(candidate)
+            self._require_runtime_publication_idle()
+            self._publish_workspace_runtime(
+                candidate,
+                expected_previous=published_runtime,
+            )
+            published = True
+            # Publication recovery can run inside a request still bound to an
+            # older Runtime. Retire the actual globally published predecessor.
+            self._schedule_workspace_runtime_retirement(published_runtime)
+            return WebRuntimeStatus(
+                available=candidate.web_available,
+                diagnostic_code=candidate.web_diagnostic_code,
+            )
+        except BaseException:
+            if not published:
+                await self._close_workspace_runtime(candidate)
+            raise
 
     def _on_thread_selected(self) -> None:
         pending = self._interactions.pending
@@ -2269,68 +3115,34 @@ class _LocalApplicationBackend:
         self._permission_session.reset()
 
     async def _prepare_turn_extensions(self) -> None:
-        if self._extensions is None:
-            raise RuntimeError("Application extensions are not initialized.")
-        await self._extensions.prepare_turn_extensions()
+        runtime = self._require_runtime()
+        await runtime.extensions.prepare_turn_extensions()
 
-    def _provider_factory(self) -> GatewayFactory:
-        def build(provider: ProviderId, model: str) -> ModelGateway:
-            secrets = self._sources.secrets
-            retries = self._application_config.budgets.provider_retries
-            if provider == "deepseek":
-                secret = secrets.deepseek_api_key
-                if secret is None:
-                    raise AssertionError("DeepSeek credential preflight was bypassed.")
-                adapter: ModelProvider = DeepSeekProvider(
-                    api_key=secret.get_secret_value(),
-                    model=model,
-                )
-            else:
-                secret = secrets.moonshot_api_key
-                if secret is None:
-                    raise AssertionError("Kimi credential preflight was bypassed.")
-                adapter = KimiProvider(
-                    api_key=secret.get_secret_value(),
-                    model=model,
-                    region=self._application_config.providers.kimi_region,
-                )
-            return ModelGateway(
-                {provider: adapter},
-                retry_policy=RetryPolicy(max_retries=retries),
-                sleeper=asyncio.sleep,
-            )
-
-        return build
-
-    def _turn_config(self, thread: Thread) -> TurnConfig:
-        selected = resolve_turn_config(
-            self._application_config,
-            thread=ThreadConfigState(
-                model=thread.current_model,
-                thinking_enabled=thread.thinking_enabled,
-                skill_mode=thread.skill_mode,
-            ),
-            environ={},
-        )
-        model_context_limit = (
-            ModelCatalog.from_application(self._application_config)
-            .profile(selected.model)
-            .context_limit
-        )
+    def _turn_config(
+        self,
+        thread: Thread,
+        *,
+        runtime: WorkspaceRuntime | None = None,
+    ) -> TurnConfig:
+        runtime = runtime or self._require_runtime()
         return resolve_turn_config(
-            self._application_config,
+            runtime.application_config,
             thread=ThreadConfigState(
                 model=thread.current_model,
                 thinking_enabled=thread.thinking_enabled,
                 skill_mode=thread.skill_mode,
             ),
             environ={},
-            model_context_limit=model_context_limit,
         )
 
-    def _model_identity(self, thread: Thread) -> ModelIdentitySnapshot | None:
+    def _model_identity(
+        self,
+        thread: Thread,
+        *,
+        runtime: WorkspaceRuntime | None = None,
+    ) -> ModelIdentitySnapshot | None:
         try:
-            model = self._turn_config(thread).model
+            model = self._turn_config(thread, runtime=runtime).model
         except ValueError:
             return None
         return ModelIdentitySnapshot.from_models(
@@ -2339,36 +3151,107 @@ class _LocalApplicationBackend:
         )
 
     def _initial_thread_model(self) -> str | None:
+        runtime = self._require_runtime()
         selected = self._environ.get("AWESOME_MODEL")
         if selected is not None:
             return selected
-        selected = self._application_config.providers.default_model
+        selected = runtime.application_config.providers.default_model
         if selected is not None:
             return selected
         try:
             return resolve_turn_config(
-                self._application_config,
+                runtime.application_config,
                 thread=ThreadConfigState(),
                 environ={},
             ).model
         except ValueError:
             return None
 
+    async def _search_command(self, intent: CommandIntent) -> CommandOutcome:
+        if len(intent.arguments) not in {1, 2}:
+            return error(
+                "invalid_arguments",
+                'Usage: /search "<query>" [thread_id]',
+            )
+        query = intent.arguments[0].strip()
+        if not 1 <= len(query) <= 200:
+            return error(
+                "invalid_arguments",
+                "Search query must be 1 to 200 characters; quote multi-word queries.",
+            )
+        runtime = self._require_runtime()
+        if len(intent.arguments) == 1:
+            try:
+                page = await runtime.conversation.search_thread_page(
+                    self._workspace.key,
+                    query=query,
+                    cursor=None,
+                    limit=50,
+                )
+            except ThreadSearchLimitExceeded:
+                return error(
+                    "result_too_large",
+                    "Thread search exceeded its scan limit; refine the query.",
+                )
+            if not page.threads:
+                return error("thread_not_found", "No matching Threads were found.")
+            return interaction(
+                CommandSelection(
+                    prompt=(
+                        "Showing the 50 most recent matches; refine the query "
+                        "for older results."
+                        if page.has_more
+                        else "Select a matching Thread to resume."
+                    ),
+                    options=tuple(
+                        CommandOption(
+                            value=thread.id,
+                            label=thread.title,
+                            description=thread.id,
+                            selected=thread.id == runtime.commands.current_thread_id,
+                        )
+                        for thread in page.threads
+                    ),
+                )
+            )
+        thread_id = intent.arguments[1]
+        if not 1 <= len(thread_id) <= 128:
+            return error(
+                "invalid_arguments",
+                "Thread ID must be 1 to 128 characters.",
+            )
+        try:
+            matches = await runtime.conversation.thread_matches_search(
+                self._workspace.key,
+                query=query,
+                thread_id=thread_id,
+            )
+        except ThreadSearchLimitExceeded:
+            return error(
+                "result_too_large",
+                "Thread search exceeded its scan limit; refine the query.",
+            )
+        if not matches:
+            return error("thread_not_found", "Selected Thread no longer matches.")
+        return await runtime.commands.resume(
+            CommandIntent(name=CommandName.RESUME, arguments=(thread_id,))
+        )
+
     async def _context_command(self, intent: CommandIntent) -> CommandOutcome:
-        thread_id = self._selected_thread_id()
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return error("thread_not_found", "Select a Thread first.")
-        assert self._context is not None
-        return await self._context.context_command(intent, thread_id=thread_id)
+        return await runtime.context.context_command(intent, thread_id=thread_id)
 
     async def _compact_command(self, intent: CommandIntent) -> CommandOutcome:
-        thread_id = self._selected_thread_id()
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return error("thread_not_found", "Select a Thread first.")
-        assert self._context is not None
-        thread = self._conversation.read_thread(thread_id).thread
-        config = self._turn_config(thread)
-        return await self._context.compact_command(
+        thread = (await runtime.conversation.read_thread(thread_id)).thread
+        config = self._turn_config(thread, runtime=runtime)
+        return await runtime.context.compact_command(
             intent,
             thread_id=thread_id,
             provider=config.provider,
@@ -2376,41 +3259,53 @@ class _LocalApplicationBackend:
         )
 
     async def _model_command(self, intent: CommandIntent) -> CommandOutcome:
-        thread_id = self._selected_thread_id()
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return error("thread_not_found", "Select a Thread first.")
-        assert self._provider_configuration is not None
-        return await self._provider_configuration.model_command(
+        return await runtime.provider_configuration.model_command(
             intent,
             thread_id=thread_id,
         )
 
-    def _selected_thread_id(self) -> str | None:
-        return self._commands.current_thread_id if self._commands is not None else None
+    def _selected_thread_id(
+        self,
+        *,
+        runtime: WorkspaceRuntime | None = None,
+    ) -> str | None:
+        runtime = runtime or self._runtime
+        return runtime.commands.current_thread_id if runtime is not None else None
 
-    def _command_usage(self) -> UsageSummary | None:
-        thread_id = self._selected_thread_id()
-        return None if thread_id is None else self._conversation.thread_usage(thread_id)
+    async def _command_usage(self) -> UsageSummary | None:
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
+        return (
+            None
+            if thread_id is None
+            else await runtime.conversation.thread_usage(thread_id)
+        )
 
-    def _command_status_snapshot(self) -> StatusSnapshot | None:
-        thread_id = self._selected_thread_id()
+    async def _command_status_snapshot(self) -> StatusSnapshot | None:
+        runtime = self._require_runtime()
+        thread_id = self._selected_thread_id(runtime=runtime)
         if thread_id is None:
             return None
-        thread = self._conversation.read_thread(thread_id).thread
-        config = self._turn_config(thread)
-        candidates = self._conversation.match_thread_prefix(
+        view = await runtime.conversation.read_thread(thread_id)
+        thread = view.thread
+        config = self._turn_config(thread, runtime=runtime)
+        candidates = await runtime.conversation.match_thread_prefix(
             self._workspace.key,
             prefix=thread_display_id(thread.id),
             limit=200,
         )
-        statuses = self._mcp.statuses() if self._mcp is not None else ()
-        model_identity = self._model_identity(thread)
+        statuses = runtime.mcp.statuses()
+        model_identity = self._model_identity(thread, runtime=runtime)
         if model_identity is None:
             return None
         credential = (
-            self._sources.provider_credentials.deepseek
+            runtime.sources.provider_credentials.deepseek
             if config.provider == "deepseek"
-            else self._sources.provider_credentials.kimi
+            else runtime.sources.provider_credentials.kimi
         )
         return StatusSnapshot(
             version=PRODUCT_VERSION,
@@ -2424,17 +3319,13 @@ class _LocalApplicationBackend:
             model_identity=model_identity,
             model_status=(
                 "configured"
-                if self._provider_is_configured(config.provider)
+                if self._provider_is_configured(config.provider, runtime=runtime)
                 else "not_configured"
             ),
             thinking_enabled=thread.thinking_enabled,
             skill_mode=thread.skill_mode,
-            local_memory_enabled=(
-                self._local_memory.enabled if self._local_memory is not None else False
-            ),
-            mem0_enabled=(
-                self._mem0_session.enabled if self._mem0_session is not None else False
-            ),
+            local_memory_enabled=(runtime.local_memory.enabled),
+            mem0_enabled=(runtime.mem0_session.enabled),
             mcp_ready=sum(
                 item.state is McpConnectionState.CONNECTED for item in statuses
             ),
@@ -2448,9 +3339,8 @@ class _LocalApplicationBackend:
             configuration_valid=True,
             configuration_diagnostic_count=(
                 1
-                if self._mem0_diagnostic is not None
-                and self._mem0_session is not None
-                and self._mem0_session.enabled
+                if runtime.mem0_session.diagnostic is not None
+                and runtime.mem0_session.enabled
                 else 0
             ),
             permission_mode=self._permission_session.mode,
@@ -2458,43 +3348,94 @@ class _LocalApplicationBackend:
             credential_source_available=credential.source_available,
             context_used_tokens=sum(
                 ContextManifestItem.model_validate(item).estimated_tokens
-                for item in self._conversation.latest_context_manifest(thread_id)
+                for item in await runtime.conversation.latest_context_manifest(
+                    thread_id
+                )
             ),
             context_budget_tokens=config.budgets.total_context_tokens,
-            changed_file_count=0,
+            changed_file_count=await self._latest_agent_change_file_count(
+                view.tool_activities,
+                runtime=runtime,
+            ),
         )
 
-    def _mem0_identity(self) -> Mem0Identity | None:
-        user_id = self._application_config.memory.mem0_user_id
+    async def _latest_agent_change_file_count(
+        self,
+        activities: tuple[ToolActivity, ...],
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> int:
+        seen: set[str] = set()
+        for activity in reversed(activities):
+            identifier = activity.change_set_id
+            if (
+                activity.origin is not ToolActivityOrigin.AGENT
+                or identifier is None
+                or identifier in seen
+            ):
+                continue
+            seen.add(identifier)
+            change_set = await runtime.change_store.get(identifier)
+            if (
+                change_set is None
+                or change_set.workspace_key != self._workspace.key
+                or change_set.turn_id != activity.turn_id
+                or change_set.lifecycle is ChangeLifecycle.OPEN
+            ):
+                continue
+            if change_set.lifecycle is ChangeLifecycle.UNDONE:
+                return 0
+            try:
+                return len(merge_file_changes(change_set.files))
+            except ChangeLifecycleError:
+                continue
+        return 0
+
+    def _mem0_identity(
+        self,
+        application_config: ApplicationConfig,
+    ) -> Mem0Identity | None:
+        user_id = application_config.memory.mem0_user_id
         if user_id is None:
             return None
         return Mem0Identity(user_id=user_id, workspace_key=self._workspace.key)
 
-    def _create_mem0_adapter(self) -> Mem0CloudAdapter | None:
+    async def _create_mem0_adapter(
+        self,
+        sources: LoadedConfigSources,
+        *,
+        resources: RuntimeResources,
+    ) -> tuple[Mem0CloudAdapter | None, Mem0Diagnostic | None]:
         client = self._injected_mem0_client
         if client is None:
-            secret = self._sources.secrets.mem0_api_key
+            secret = sources.secrets.mem0_api_key
             try:
-                client = create_mem0_client(
-                    secret.get_secret_value() if secret is not None else None
+                client = await resources.enter_async_context(
+                    managed_mem0_client(
+                        secret.get_secret_value() if secret is not None else None
+                    )
                 )
             except Mem0CloudError as error:
-                self._mem0_diagnostic = error.diagnostic
-                return None
-        return Mem0CloudAdapter(cast(Mem0Client, client))
+                return None, error.diagnostic
+        return Mem0CloudAdapter(cast(Mem0Client, client)), None
 
-    def _seal_turn(self, turn_id: str) -> None:
-        if self._change_scope is not None:
-            self._change_scope.seal(turn_id)
+    async def _seal_turn(self, turn_id: str) -> None:
+        runtime = self._request_runtime.get() or self._runtime
+        if runtime is not None:
+            await runtime.change_scope.seal(turn_id)
 
-    def _seal_direct(self, operation_id: str) -> None:
-        if self._change_scope is not None:
-            self._change_scope.seal(operation_id)
+    async def _seal_direct(self, operation_id: str) -> None:
+        runtime = self._request_runtime.get() or self._runtime
+        if runtime is not None:
+            await runtime.change_scope.seal(operation_id)
 
-    async def _require_runtime_consistent(self) -> None:
-        assert self._provider_configuration is not None
+    async def _require_runtime_consistent(
+        self,
+        runtime: WorkspaceRuntime | None = None,
+    ) -> None:
+        runtime = runtime or self._require_runtime()
         try:
-            await self._provider_configuration.ensure_consistent()
+            await runtime.provider_configuration.ensure_consistent()
         except ProviderConfigurationRecoveryRequired as error:
             raise _application_failure(
                 ProductErrorCode.RECOVERY_REQUIRED,
@@ -2515,13 +3456,34 @@ class _LocalApplicationBackend:
                 data={"state_directory": str(self._paths.state_dir.resolve())},
             ) from error
 
-    def _require_active(self) -> None:
+    def _require_runtime(self) -> WorkspaceRuntime:
+        bound = self._request_runtime.get()
+        if bound is not None:
+            return bound
         self._require_open()
-        if not self._initialized:
+        runtime = self._runtime
+        if runtime is None:
             raise _application_failure(
                 ProductErrorCode.WORKSPACE_NOT_TRUSTED,
                 "Trust the workspace before using project capabilities.",
             )
+        return runtime
+
+    @contextmanager
+    def _runtime_request_scope(
+        self,
+        runtime: WorkspaceRuntime,
+    ) -> Iterator[WorkspaceRuntime]:
+        bound = self._request_runtime.get()
+        if bound is not None:
+            yield bound
+            return
+        with runtime.resources.reader():
+            token = self._request_runtime.set(runtime)
+            try:
+                yield runtime
+            finally:
+                self._request_runtime.reset(token)
 
     def _require_open(self) -> None:
         if self._closed or self._foreground.closing:
@@ -2530,23 +3492,38 @@ class _LocalApplicationBackend:
                 "Application is shutting down.",
             )
 
-    def _require_provider_configured(self, provider: ProviderId) -> None:
-        if not self._provider_is_configured(provider):
+    def _require_provider_configured(
+        self,
+        provider: ProviderId,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> None:
+        if not self._provider_is_configured(provider, runtime=runtime):
             raise _application_failure(
                 ProductErrorCode.PROVIDER_NOT_CONFIGURED,
                 f"{provider} credentials are not configured.",
                 data={"provider": provider},
             )
 
-    def _require_selected_thread(self, thread_id: str) -> None:
-        if self._selected_thread_id() != thread_id:
+    def _require_selected_thread(
+        self,
+        thread_id: str,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> None:
+        if self._selected_thread_id(runtime=runtime) != thread_id:
             raise _application_failure(
                 ProductErrorCode.INVALID_ARGUMENTS,
                 "Select the target Thread before starting an operation.",
             )
 
-    def _provider_is_configured(self, provider: ProviderId) -> bool:
-        status = self._sources.secret_status
+    def _provider_is_configured(
+        self,
+        provider: ProviderId,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> bool:
+        status = runtime.sources.secret_status
         return (
             status.deepseek_api_key
             if provider == "deepseek"
@@ -2557,18 +3534,20 @@ class _LocalApplicationBackend:
         self,
         *,
         include_branch: bool,
+        runtime: WorkspaceRuntime | None = None,
     ) -> WorkspacePresentation:
+        runtime = runtime or self._request_runtime.get() or self._runtime
         return WorkspacePresentation(
             display_path=str(self._workspace.display_path),
-            branch=self._workspace_branch if include_branch else None,
+            branch=runtime.workspace_branch if include_branch and runtime else None,
         )
 
-    def _page_change_summaries(
+    async def _page_change_summaries(
         self,
         activities: tuple[ToolActivity, ...],
+        *,
+        runtime: WorkspaceRuntime,
     ) -> tuple[ChangeSetSummary, ...]:
-        if self._change_store is None or self._change_analyzer is None:
-            return ()
         summaries: list[ChangeSetSummary] = []
         seen: set[str] = set()
         for activity in activities:
@@ -2576,10 +3555,10 @@ class _LocalApplicationBackend:
             if change_set_id is None or change_set_id in seen:
                 continue
             seen.add(change_set_id)
-            change_set = self._change_store.get(change_set_id)
+            change_set = await runtime.change_store.get(change_set_id)
             if change_set is None:
                 continue
-            analysis = self._change_analyzer.analyze(change_set_id)
+            analysis = await runtime.change_analyzer.analyze(change_set_id)
             if not analysis.changes:
                 continue
             summaries.append(
@@ -2594,6 +3573,19 @@ class _LocalApplicationBackend:
                 )
             )
         return tuple(summaries)
+
+
+async def _await_shielded_task(task: asyncio.Task[None]) -> None:
+    await asyncio.shield(task)
+
+
+async def _finish_state_mutation[ResultT](
+    operation: Awaitable[ResultT],
+) -> asyncio.CancelledError | None:
+    """Finish a lease-bound state mutation before exposing caller cancellation."""
+
+    _, cancellation = await finish_cancellation_safe(operation)
+    return cancellation
 
 
 async def _finish_cancelled_worker(worker: asyncio.Task[None]) -> None:

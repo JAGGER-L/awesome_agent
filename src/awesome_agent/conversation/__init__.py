@@ -1,9 +1,17 @@
 """Framework-free local conversation domain contracts."""
 
+from awesome_agent.conversation.export import ThreadExportFormat, render_thread_export
+from awesome_agent.conversation.materialization import (
+    RetryPreparation,
+    ThreadMaterializationPlan,
+    materialization_source_fingerprint,
+)
 from awesome_agent.conversation.models import (
+    AssistantEntryMetadata,
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadLineage,
     ThreadListPage,
     ThreadPage,
     ThreadSummary,
@@ -21,14 +29,10 @@ from awesome_agent.conversation.repository import (
     ConversationError,
     ConversationStore,
     InvalidTurnTransition,
-    ThreadEntryRepository,
     ThreadNotFound,
-    ThreadRepository,
-    ThreadSummaryRepository,
-    ToolActivityRepository,
+    ThreadSearchLimitExceeded,
     TurnBusy,
     TurnNotFound,
-    TurnRepository,
     require_turn_transition,
 )
 from awesome_agent.conversation.service import ConversationService
@@ -39,35 +43,38 @@ from awesome_agent.conversation.titles import (
 )
 
 __all__ = [
+    "AssistantEntryMetadata",
     "ConversationConflict",
     "ConversationError",
     "ConversationService",
     "ConversationStore",
     "InvalidTurnTransition",
+    "RetryPreparation",
     "Thread",
     "ThreadEntry",
     "ThreadEntryKind",
-    "ThreadEntryRepository",
+    "ThreadExportFormat",
+    "ThreadLineage",
     "ThreadListPage",
+    "ThreadMaterializationPlan",
     "ThreadNotFound",
     "ThreadPage",
-    "ThreadRepository",
+    "ThreadSearchLimitExceeded",
     "ThreadSummary",
-    "ThreadSummaryRepository",
     "ThreadTitleSource",
     "ThreadView",
     "ToolActivity",
     "ToolActivityOrigin",
     "ToolActivityOutcome",
-    "ToolActivityRepository",
     "Turn",
     "TurnBusy",
     "TurnNotFound",
-    "TurnRepository",
     "TurnStatus",
     "UsageSummary",
     "automatic_title",
+    "materialization_source_fingerprint",
     "normalize_title",
+    "render_thread_export",
     "require_turn_transition",
     "visible_graphemes",
 ]

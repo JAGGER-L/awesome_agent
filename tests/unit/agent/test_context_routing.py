@@ -156,7 +156,7 @@ async def _invoke(
         del state
         return prepared
 
-    def record_snapshot(manifest: tuple[dict[str, JsonValue], ...]) -> None:
+    async def record_snapshot(manifest: tuple[dict[str, JsonValue], ...]) -> None:
         if snapshot_records is not None:
             snapshot_records.append(manifest)
 

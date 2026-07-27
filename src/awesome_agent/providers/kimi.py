@@ -9,8 +9,8 @@ from typing import Any, Literal, cast
 
 from openai import AsyncOpenAI
 
-from awesome_agent.config.models import KimiRegion
 from awesome_agent.modeling import (
+    MODEL_CATALOG,
     AssistantMessage,
     ContinuationState,
     ModelRequest,
@@ -32,6 +32,7 @@ from awesome_agent.modeling import (
     TurnFailed,
     UserMessage,
 )
+from awesome_agent.modeling.catalog import KimiRegion, ModelCatalogError
 from awesome_agent.modeling.errors import ModelProviderError
 from awesome_agent.providers.errors import classify_openai_error
 
@@ -39,7 +40,6 @@ KIMI_OFFICIAL_BASE_URLS = {
     KimiRegion.CN: "https://api.moonshot.cn/v1",
     KimiRegion.GLOBAL: "https://api.moonshot.ai/v1",
 }
-_CURATED_MODELS = {"kimi/kimi-k2.6", "kimi/kimi-k2.5"}
 _WIRE_UNSAFE = re.compile(r"[^A-Za-z0-9_]")
 
 
@@ -57,7 +57,11 @@ class KimiProvider:
         timeout_seconds: float = 60.0,
         client: AsyncOpenAI | None = None,
     ) -> None:
-        if model not in _CURATED_MODELS:
+        try:
+            descriptor = MODEL_CATALOG.provider_for_model(model)
+        except ModelCatalogError as error:
+            raise ValueError("Model must be a curated Kimi model.") from error
+        if descriptor.id != "kimi":
             raise ValueError("Model must be a curated Kimi model.")
         try:
             resolved_region = KimiRegion(region)

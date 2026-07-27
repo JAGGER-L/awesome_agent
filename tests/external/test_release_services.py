@@ -6,6 +6,7 @@ import os
 from uuid import uuid4
 
 import pytest
+from pydantic import SecretStr
 
 from awesome_agent.config import KimiRegion
 from awesome_agent.memory import (
@@ -24,6 +25,11 @@ from awesome_agent.modeling import (
     UserMessage,
 )
 from awesome_agent.providers import DeepSeekProvider, KimiProvider
+from awesome_agent.web import (
+    WebFetchRequest,
+    WebSearchRequest,
+    managed_tavily_web_client,
+)
 
 pytestmark = [pytest.mark.external, pytest.mark.asyncio]
 
@@ -80,6 +86,28 @@ async def test_live_provider_completes_one_small_turn(
     )
 
     assert turn.assistant.content.strip()
+
+
+async def test_live_tavily_search_and_fetch() -> None:
+    api_key = _required("TAVILY_API_KEY")
+    fetch_url = "https://www.python.org/"
+
+    async with managed_tavily_web_client(
+        api_key=SecretStr(api_key),
+        timeout_seconds=60.0,
+    ) as adapter:
+        search = await adapter.search(
+            WebSearchRequest(
+                query="Python programming language official website",
+                max_results=3,
+            )
+        )
+        fetched = await adapter.fetch(WebFetchRequest(url=fetch_url))
+
+    assert search.results
+    assert all(result.url.startswith("https://") for result in search.results)
+    assert fetched.url == fetch_url
+    assert fetched.content.strip()
 
 
 async def test_live_mem0_add_recall_remove() -> None:

@@ -10,7 +10,7 @@ import yaml
 
 from awesome_agent.config.loader import read_user_config_document
 from awesome_agent.config.models import UserConfigDocument
-from awesome_agent.config.resource_lock import exclusive_resource_lock
+from awesome_agent.core.resource_lock import exclusive_resource_lock
 
 
 class UserConfigWriter:

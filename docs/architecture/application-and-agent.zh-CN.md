@@ -12,6 +12,7 @@ Awesome 将产品生命周期与推理执行分离。Application 回答的是：
 | 关注点 | Application | Agent |
 | --- | --- | --- |
 | 工作区信任与激活 | 负责 | 不检查 |
+| bootstrap phase 与 ready 前准入 | 负责 | 不检查 |
 | 已选择的 Thread 与生效配置 | 负责 | 接收冻结值 |
 | Turn 创建与终态 | 负责 | 返回图执行结果 |
 | 前台准入与取消 | 负责 | 配合取消 |
@@ -42,6 +43,7 @@ Protocol dispatcher
 Application 的职责被有意拆分到聚焦的模块中：
 
 - `facade.py`：稳定的界面契约与预期失败封装；
+- `bootstrap.py`：bootstrap phase 转移与 ready 前准入；
 - `composition.py`：激活与具体依赖装配；
 - `foreground.py` 和 `operations.py`：原子的前台所有权；
 - `turns.py`：Turn 执行、终结、取消与恢复；
@@ -52,6 +54,75 @@ Application 的职责被有意拆分到聚焦的模块中：
 
 `composition.py` 可能较大，因为它负责装配和启动顺序。它不能成为命令语义、图路由、
 任意结果构造或展示格式化的容器。
+
+### Bootstrap phase 所有权
+
+`LocalApplication` 持有一个具体的 `ApplicationBootstrap`；Protocol 或 UI 组件都不能改变
+`BootstrapPhase`。Coordinator 初始为 uninitialized。Initialize invocation 会在异步工作
+开始前把它移到 initializing，然后消费类型化 `ApplicationResult[InitializeResult]`：ready、
+trust-required 与 state-reset-required result 会选择对应 phase，失败或取消则恢复此前 phase。
+进入 ready 后重复 initialize 的全过程仍保持 ready，因此界面重试不会关闭已经激活的
+Application。
+
+Coordinator 还会把 bootstrap interaction 绑定到精确 identity。只有类型化 interaction result
+确认接受，并且 backend activation 已成功返回后，trust response 才能进入 ready。陈旧、
+拒绝、失败或被取消的 response 都不能推进 phase。接受 state reset 后，Application 仍保持
+non-ready，直到后续 initialize 完成。
+
+界面在 dispatch 前向 Application 查询提供商中立的 admission decision。stdio Host 会把拒绝
+映射成既有 Protocol v4 `-32002` diagnostic，但绝不维护第二套状态机，也不解析序列化的
+request/result payload 来推断 readiness。Cancellation 与 shutdown 在每个 phase 都保持准入。
+Protocol v4 的 wire shape、status value 和 error 语义仍由 Application 统一拥有。
+
+### Workspace runtime 快照
+
+受信激活成功后会发布唯一的不可变 `WorkspaceRuntime`。该快照包含解析后的配置与稳定的
+workspace service graph：Conversation、Turn coordination、command service、Tool
+Registry、Model Catalog、context 与 extension、memory 与 MCP，以及 Change Journal
+service 和一个 `RuntimeResources` owner。Foreground ownership、pending interaction、
+permission grant、recovery delivery 和进程 shutdown 等可变生命周期协调仍保留在
+Application backend 上。
+
+顶层请求会在 Application 持有的 request context 中只绑定一次 `_runtime`。被 await 的
+callback 和由 foreground 持有的子 task 会继承这份不可变快照，不会通过多个 backend 字段
+重新拼装依赖。Detached task 不会取得独立的 runtime reader lease，因此不是受支持的所有权
+边界。发布遵循唯一顺序：
+完全使用局部值构建 candidate，完成校验，在 workspace activation 时校正 startup state，
+确认没有前台 Operation，再通过一次赋值更新 runtime 指针。随后针对已发布 candidate 发送
+recovery 通知；通知失败会被报告，但不会恢复旧 runtime。
+
+发布前已准入的请求继续看到旧 runtime，新请求则看到新 runtime。`RuntimeResources` 为每个
+candidate 提供独立的 generation identity 和 reader 计数；retirement 会先排空该 generation，
+再关闭其 `AsyncExitStack`，因此不会在暂停的 reader 下方关闭资源。退出栈持有可复用的
+provider client、内部创建的 Mem0 client 和 MCP；注册顺序保证按 MCP、Mem0、provider 的
+逆序恰好关闭一次。注入的 gateway 和 Mem0 对象只借用，Awesome 绝不关闭。Candidate 构建
+失败或取消会关闭整个候选退出栈，但不改变旧 runtime 或请求权威。Candidate 构建会清除调用
+方的 runtime binding，而 retirement 与 close task 使用干净 context，因此长期资源不会保留
+旧 generation。Provider 与 credential mutation 会从已提交快照构建完整 candidate，但不重复
+startup reconciliation；它把已选择的 Thread 静默带入 candidate，不触发 selection callback，
+完成原子发布后，等绑定旧 runtime 的 mutation 请求退出再回收旧 runtime。资源关闭失败会被
+报告，但不会覆盖 candidate 的主要失败或跳过进程清理。跨 runtime generation 复用的
+checkpoint saver、一个进程级 `ApplicationSQLite` worker 和 state lease 始终由另一套进程
+生命周期 Application `AsyncExitStack` 持有。Database worker 会串行执行面向 Application
+的 repository 调用，而不会占用 event-loop thread。
+
+### Application invocation diagnostics
+
+诊断 sink 属于进程/会话级 Application 生命周期，而不属于 `WorkspaceRuntime`。因此，
+runtime 发布不会让一次 invocation 跨越两个日志 owner，替换 workspace runtime 也不会关闭
+writer。Writer 使用有界 queue，并在 caller 之外执行文件 I/O。Queue 已满或日志写入失败时
+会 fail open：它可能丢失一条诊断记录，但不能延迟、使 Application invocation 失败或改变
+其结果。
+
+`ObservationalMiddleware` 为每个已完成的 facade invocation 记录一个经过 allowlist 的 JSON
+object。字段包括 `version`、`timestamp`、`session_id`、`correlation_id`、`operation`、
+`outcome` 和 `duration_ms`，以及可选的 `error_code` 与有界 `usage`。它不会序列化任意
+argument、result、exception 或 event；尤其不会让 prompt、模型与 Tool 正文、query、URL、
+path、secret 或任意 payload 进入该日志。
+
+Invocation outcome 只描述 middleware 观测到的 facade 调用。有些调用会准入异步 Agent
+工作，并在 Turn 到达终态之前返回。因此，成功的 invocation 不是 Agent Turn 成功记录；
+Turn lifecycle event 与持久 Conversation state 才是该终态的权威来源。
 
 ## 前台串行化
 
@@ -107,8 +178,14 @@ execute_one_tool
 - 上下文 manifest、token 估算、生效上限和压缩请求；
 - 提供商中立消息和 continuation 状态；
 - 待处理工具调用、下一调用索引和结果；
-- 模型/工具/重试/压缩/活动时间计数器；
+- 模型/工具/Web/重试/压缩/活动时间计数器；
 - usage、恢复问题、最终回答和终止原因。
+
+`tool_results` 存储每个完整序列化的 `ToolResult`，包括其中由 Core 定义的最小
+`Citation` tuple。每个 result 完成后，Agent 会在 `AgentState.citations` 中派生有序 Turn
+快照；该快照和 `web_requests` 计数都会经过 checkpoint recovery。Finalization 校验
+`[[S1]]` marker，Conversation 把同一来源随 assistant entry 持久化，Protocol v4 再投影给
+TUI 与 headless 界面。
 
 新增 channel 会改变 checkpoint 兼容性和恢复校验。这里不是放置任意 UI 或产品状态
 的便捷容器。
@@ -165,22 +242,50 @@ Application accepts Turn
 Application service 负责访问 Conversation 和工作区快照；Agent 不知道具体的 SQLite
 仓库或文件系统发现逻辑。
 
+## 回答后 Finalizer 端口
+
+Agent 拥有唯一的提供商中立 `PostAnswerFinalizer` 端口，以及严格、不可变的
+`PostAnswerFinalizationRequest` 和 `PostAnswerFinalizationResult` 值。Request 包含用户
+文本、已经生成的回答、所选模型、工作区标识、剩余模型/retry 预算，以及从 `tool_results`
+按顺序收集的 citations。收集过程保留首次出现顺序、折叠 ID 与值均相同的重复项，并把同一
+ID 对应不同值视为不变量失败。Turn 中唯一 citation 超过 128 条同样属于聚合不变量失败，
+并发生在 finalizer 运行前。Request 携带这个有界 tuple，而不会增加 `AgentState` channel。
+
+Result 包含去除首尾空白后仍非空的回答、零或一次主要模型调用、有界 `ModelUsage`，以及
+最多 32 条通用 `PostAnswerDiagnostic`。只有报告一次模型调用时，usage 才能非零。Agent
+会严格重建返回值；若 provider retry 超过剩余 retry 预算，或主要调用加 retry 超过剩余
+model-call 预算，则拒绝结果。Active-time 耗尽会把 request 的剩余模型调用强制设为零，
+但 finalizer 仍会运行，使不调用模型的实现可以完成。有效结果会替换回答、计入一次主要
+调用及其 provider retry、合并 usage，并投影每条 diagnostic 的原始 code 与 message。
+
+`DisabledPostAnswerFinalizer` 原样返回现有回答。Application 也可以注入
+`memory.Mem0PostAnswerFinalizer`；Agent 不导入 Memory，也不知道 Mem0 identity、adapter、
+status 或 diagnostic。若注入的 finalizer 抛出异常、返回无效值或超出预算，Agent 会发出
+`answer_finalization_failed`，并保留已经生成的回答及原有 usage。取消时 Agent 不投影
+warning；它会保留此前 checkpoint 中的回答，并立即把调用方的原始取消重新抛给 Application
+生命周期。该路径不是正常 completion。可选 finalization 不能把回答变成空值或部分更新结果。
+
 ## 完成与取消
 
 图正常完成时，Application 校验返回的状态、追加 assistant 回答、记录有界 usage，
 并完成 Turn。随后它尝试封存 ChangeSet 并删除 checkpoint。失败或取消时，它会记录
-稳定的终态产品事实，并执行同样的有界终结。主要终态事实落盘后，清理异常会被有意
-抑制；启动校正会重试残留的终态 checkpoint，而不会改变已经完成/取消/失败的结果。
+稳定的终态产品事实，并执行同样的 durable finalization。本地 transcript、activity、
+ChangeSet 与 checkpoint 工作会保持所有权，直到得到明确结果。主要终态事实落盘后，清理
+异常会被有意抑制；启动校正会重试残留的终态 checkpoint，而不会改变已经完成/取消/失败
+的结果。
 
 Operation phase 明确定义了取消边界。Commit point 之前，匹配的 cancel 会把 `running` 改为
-`cancelling`，唯一终态是 cancelled。成功完成只会在同步持久化 completed Turn 时越过 commit
-point；主要失败则会在执行有界的失败事实恢复之前关闭同一边界。一旦 committed，
-`operation.cancel` 返回 false，shutdown 会等待而不是再次 cancel；即使 request task 被取消或
-event sink 失败，有界且受 shield 保护的 publication 仍会保留已经提交的 Turn 和 Operation
-终态。系统不存在 cancellation 和 completion 可以同时胜出的时间窗口。
+`cancelling`，唯一终态是 cancelled。Durable finalization 会先把 `running` 改为
+`committing`，再请求 Application SQLite worker 持久化 completed 或 failed Turn。此时匹配的
+`operation.cancel` 返回 false，shutdown 会等待而不是再次 cancel。如果 request task 在 durable
+write 已准入后被取消，Core 会等待 worker 给出明确的 COMMIT 或 ROLLBACK 结果，再重新抛出
+caller 的第一次 cancellation。即使 event sink 失败，有界且受 shield 保护的 publication 仍会
+保留已经提交的 Turn 和 Operation 终态。系统不存在 cancellation 和 completion 可以同时胜出
+的时间窗口。
 
-模型流、工具或终结步骤活动时都可能收到取消。只有为了有界地保全事实，清理才会受到
-shield 保护；它不能吞掉原始取消，也不能让前台所有权一直保持活动状态。
+模型流、工具或终结步骤活动时都可能收到取消。本地 durable fact preservation 会受到
+shield 保护直到得到明确结果，并在此期间继续持有 foreground lease。只有外部进程清理与
+best-effort event delivery 使用有界 deadline；两条路径都不能吞掉原始取消。
 
 ## 与恢复的关系
 
@@ -194,8 +299,8 @@ lineage 与 compare-and-swap 使其收敛，而不是实现第二套图。详见
 
 ## 依赖规则
 
-Agent 只能导入 Agent、Core、Memory 和 Modeling 包。它不能导入 Application、
-Storage、Protocol、providers 或 TUI。Application 是 Python 顶层组装层，可以依赖
+Agent 只能导入 Agent、Core 和 Modeling 包。它不能导入 Application、Memory、Storage、
+Protocol、providers 或 TUI。Application 是 Python 顶层组装层，可以依赖
 当前适配器。`tests/structural/test_dependency_architecture.py` 和
 `tests/structural/test_product_architecture.py` 会强制这些方向，并确保只有一个
 `StateGraph` 所有者。
@@ -212,9 +317,12 @@ Storage、Protocol、providers 或 TUI。Application 是 Python 顶层组装层�
 ## 源代码与测试索引
 
 - Facade 与组装：`application/facade.py`、`application/composition.py`
+- Invocation diagnostics：`application/middleware.py`、
+  `application/diagnostics.py`
 - 准入：`application/foreground.py`、`application/operations.py`
 - Turn 与恢复：`application/turns.py`
-- 图与状态：`agent/graph.py`、`agent/state.py`、`agent/nodes.py`
+- 图、状态与 finalizer 端口：`agent/graph.py`、`agent/state.py`、`agent/nodes.py`、
+  `agent/finalization.py`
 - 预算：`agent/budgets.py`
 - 单元测试：`tests/unit/application/`、`tests/unit/agent/`
 - 集成测试：`tests/integration/test_agent_turn.py`、

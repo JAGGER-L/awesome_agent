@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import get_type_hints
 
 import pytest
@@ -16,7 +19,14 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveRequest,
+    SkillRemoveResult,
 )
+from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import (
     ApplicationFacade,
     ApplicationResult,
@@ -27,18 +37,34 @@ from awesome_agent.application.facade import (
     InteractionResult,
     LocalApplication,
     OperationAccepted,
+    ProductError,
+    ProductErrorCode,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
 )
+from awesome_agent.application.middleware import (
+    ApplicationCall,
+    ApplicationInvocation,
+    ApplicationObservation,
+    ApplicationOperation,
+    ObservationalMiddleware,
+)
 from awesome_agent.config import CredentialSource, SecretStatus
+from awesome_agent.modeling import MODEL_CATALOG
+from awesome_agent.storage import ApplicationSQLiteUnavailable
 
 METHODS = {
     "initialize",
+    "list_skills",
+    "install_skill",
+    "remove_skill",
     "get_state",
     "list_threads",
+    "search_threads",
     "read_thread",
     "submit_turn",
     "execute_direct",
@@ -58,12 +84,35 @@ class Backend:
         self.calls.append(("initialize", None))
         return InitializeResult(
             product_version="0.1.0",
-            protocol_version=3,
+            protocol_version=4,
             status=InitializeStatus.READY,
             session_id="session_1",
             workspace=WorkspacePresentation(display_path="C:\\workspace"),
             capabilities=("turns", "commands"),
         )
+
+    async def list_skill_packages(self) -> SkillListResult:
+        self.calls.append(("skill.list", None))
+        return SkillListResult(
+            skills=(SkillPackageSummary(name="review", description="Review code"),)
+        )
+
+    async def install_skill_package(
+        self,
+        request: SkillInstallRequest,
+    ) -> SkillInstallResult:
+        self.calls.append(("skill.install", request))
+        return SkillInstallResult(
+            name="review",
+            status="replaced" if request.replace else "installed",
+        )
+
+    async def remove_skill_package(
+        self,
+        request: SkillRemoveRequest,
+    ) -> SkillRemoveResult:
+        self.calls.append(("skill.remove", request))
+        return SkillRemoveResult(name=request.name, status="removed")
 
     async def application_state(self) -> ApplicationState:
         self.calls.append(("state", None))
@@ -73,12 +122,20 @@ class Backend:
             workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             workspace=WorkspacePresentation(display_path="C:\\workspace"),
             workspace_trusted=True,
+            model_catalog=MODEL_CATALOG,
             configuration_valid=True,
             secret_status=SecretStatus(),
         )
 
     async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
         self.calls.append(("threads", query))
+        return ThreadListResult()
+
+    async def search_workspace_threads(
+        self,
+        query: ThreadSearchQuery,
+    ) -> ThreadListResult:
+        self.calls.append(("search", query))
         return ThreadListResult()
 
     async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
@@ -161,6 +218,8 @@ def test_facade_and_concrete_class_freeze_exact_public_methods() -> None:
     )
     for concrete in ("SQLite", "Mcp", "Mem0"):
         assert concrete not in annotations
+    assert inspect.iscoroutinefunction(ApplicationFacade.bootstrap_rejection) is False
+    assert inspect.iscoroutinefunction(LocalApplication.bootstrap_rejection) is False
 
 
 @pytest.mark.asyncio
@@ -176,13 +235,279 @@ async def test_facade_initialization_and_shutdown_are_idempotent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_skill_management_is_serialized_and_preinitialize_only() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingBackend(Backend):
+        async def list_skill_packages(self) -> SkillListResult:
+            entered.set()
+            await release.wait()
+            return await super().list_skill_packages()
+
+    backend = BlockingBackend()
+    facade = LocalApplication(backend)
+    listing = asyncio.create_task(facade.list_skills())
+    await asyncio.wait_for(entered.wait(), timeout=0.5)
+
+    initializing = await facade.initialize()
+    concurrent = await facade.remove_skill(SkillRemoveRequest(name="review"))
+    shutdown = await facade.shutdown()
+    assert initializing.ok is False
+    assert initializing.error is not None
+    assert initializing.error.code is ProductErrorCode.OPERATION_BUSY
+    assert concurrent.ok is False
+    assert concurrent.error is not None
+    assert concurrent.error.code is ProductErrorCode.OPERATION_BUSY
+    assert shutdown.ok is False
+    assert shutdown.error is not None
+    assert shutdown.error.code is ProductErrorCode.OPERATION_BUSY
+    assert shutdown.error.data == {
+        "diagnostic_code": "preinitialize_operation_in_progress"
+    }
+    assert ("shutdown", None) not in backend.calls
+
+    release.set()
+    assert _unwrap(await listing).skills[0].name == "review"
+    assert _unwrap(await facade.initialize()).status is InitializeStatus.READY
+
+    after_initialize = await facade.install_skill(
+        SkillInstallRequest(source_path="review", replace=False)
+    )
+    assert after_initialize.ok is False
+    assert after_initialize.error is not None
+    assert after_initialize.error.code is ProductErrorCode.COMMAND_NOT_AVAILABLE
+    assert after_initialize.error.data == {
+        "diagnostic_code": "skill_management_requires_uninitialized"
+    }
+
+
+@pytest.mark.asyncio
+async def test_skill_list_preserves_catalog_size_failure() -> None:
+    class OversizedCatalogBackend(Backend):
+        async def list_skill_packages(self) -> SkillListResult:
+            raise ApplicationFailure(
+                ProductError(
+                    code=ProductErrorCode.RESULT_TOO_LARGE,
+                    message="The installed Skill catalog exceeds the supported limit.",
+                    data={"diagnostic_code": "package_too_large"},
+                )
+            )
+
+    result = await LocalApplication(OversizedCatalogBackend()).list_skills()
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code is ProductErrorCode.RESULT_TOO_LARGE
+    assert result.error.data == {"diagnostic_code": "package_too_large"}
+    assert "installation" not in result.error.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_skill_management_reserves_preinitialize_before_middleware() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingSkillMiddleware:
+        async def __call__(
+            self,
+            invocation: ApplicationInvocation,
+            next_call: ApplicationCall,
+        ) -> object:
+            if invocation.operation is ApplicationOperation.SKILL_LIST:
+                entered.set()
+                await release.wait()
+            return await next_call(invocation)
+
+    backend = Backend()
+    facade = LocalApplication(backend, middleware=(BlockingSkillMiddleware(),))
+    listing = asyncio.create_task(facade.list_skills())
+    await asyncio.wait_for(entered.wait(), timeout=0.5)
+
+    initializing = await facade.initialize()
+    assert initializing.ok is False
+    assert initializing.error is not None
+    assert initializing.error.code is ProductErrorCode.OPERATION_BUSY
+    assert backend.calls == []
+
+    listing.cancel("cancel-preinitialize")
+    with pytest.raises(asyncio.CancelledError) as cancellation:
+        await asyncio.wait_for(listing, timeout=0.5)
+    assert cancellation.value.args == ("cancel-preinitialize",)
+    assert facade.bootstrap_rejection(ApplicationOperation.INITIALIZE) is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_blocks_new_skill_management_before_closing_backend() -> None:
+    close_entered = asyncio.Event()
+    close_release = asyncio.Event()
+
+    class BlockingCloseBackend(Backend):
+        async def close_application(self) -> None:
+            self.calls.append(("shutdown", None))
+            close_entered.set()
+            await close_release.wait()
+
+    backend = BlockingCloseBackend()
+    facade = LocalApplication(backend)
+    shutdown = asyncio.create_task(facade.shutdown())
+    await asyncio.wait_for(close_entered.wait(), timeout=0.5)
+
+    install = await facade.install_skill(
+        SkillInstallRequest(source_path="review", replace=False)
+    )
+    assert install.ok is False
+    assert install.error is not None
+    assert install.error.code is ProductErrorCode.COMMAND_NOT_AVAILABLE
+    assert all(call[0] != "skill.install" for call in backend.calls)
+
+    close_release.set()
+    assert _unwrap(await shutdown).stopped is True
+
+
+@pytest.mark.asyncio
+async def test_facade_sets_initializing_before_middleware_and_rolls_back_cancel() -> (
+    None
+):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingInitialize:
+        async def __call__(
+            self,
+            invocation: ApplicationInvocation,
+            next_call: ApplicationCall,
+        ) -> object:
+            if invocation.operation is ApplicationOperation.INITIALIZE:
+                entered.set()
+                await release.wait()
+            return await next_call(invocation)
+
+    backend = Backend()
+    facade = LocalApplication(backend, middleware=(BlockingInitialize(),))
+    initializing = asyncio.create_task(facade.initialize())
+    await asyncio.wait_for(entered.wait(), timeout=0.5)
+
+    blocked = facade.bootstrap_rejection(ApplicationOperation.GET_STATE)
+    assert blocked is not None
+    assert blocked.diagnostic_code == "server_not_ready"
+    duplicate = await facade.initialize()
+    assert duplicate.ok is False
+    assert duplicate.error is not None
+    assert duplicate.error.code is ProductErrorCode.OPERATION_BUSY
+    assert backend.calls == []
+
+    initializing.cancel("cancel-bootstrap")
+    with pytest.raises(asyncio.CancelledError) as cancellation:
+        await asyncio.wait_for(initializing, timeout=0.5)
+    assert cancellation.value.args == ("cancel-bootstrap",)
+    restored = facade.bootstrap_rejection(ApplicationOperation.GET_STATE)
+    assert restored is not None
+    assert restored.diagnostic_code == "server_not_initialized"
+
+
+@pytest.mark.asyncio
+async def test_malformed_middleware_initialize_result_rolls_back_phase() -> None:
+    class MalformedResult:
+        async def __call__(
+            self,
+            invocation: ApplicationInvocation,
+            next_call: ApplicationCall,
+        ) -> object:
+            del next_call
+            assert invocation.operation is ApplicationOperation.INITIALIZE
+            return object()
+
+    facade = LocalApplication(Backend(), middleware=(MalformedResult(),))
+
+    with pytest.raises(TypeError, match="invalid application result"):
+        await facade.initialize()
+
+    rejection = facade.bootstrap_rejection(ApplicationOperation.GET_STATE)
+    assert rejection is not None
+    assert rejection.diagnostic_code == "server_not_initialized"
+
+
+@pytest.mark.asyncio
+async def test_facade_bootstrap_transition_requires_exact_resolved_trust() -> None:
+    class TrustBackend(Backend):
+        async def initialize_application(self) -> InitializeResult:
+            self.calls.append(("initialize", None))
+            return InitializeResult(
+                product_version="0.1.0",
+                protocol_version=4,
+                status=InitializeStatus.TRUST_REQUIRED,
+                session_id="session_1",
+                interaction_id="interaction_trust",
+                workspace=WorkspacePresentation(display_path="C:\\workspace"),
+            )
+
+        async def resolve_interaction(
+            self,
+            interaction_id: str,
+            decision: str,
+        ) -> InteractionResult:
+            self.calls.append(("interaction", (interaction_id, decision)))
+            return InteractionResult(accepted=True, status="resolved")
+
+    facade = LocalApplication(TrustBackend())
+    initialized = _unwrap(await facade.initialize())
+    assert initialized.status is InitializeStatus.TRUST_REQUIRED
+    assert facade.bootstrap_rejection(ApplicationOperation.GET_STATE) is not None
+
+    _unwrap(await facade.respond_interaction("interaction_stale", "trust"))
+    assert facade.bootstrap_rejection(ApplicationOperation.GET_STATE) is not None
+
+    _unwrap(await facade.respond_interaction("interaction_trust", "trust"))
+    assert facade.bootstrap_rejection(ApplicationOperation.GET_STATE) is None
+
+
+@pytest.mark.asyncio
+async def test_facade_maps_application_sqlite_failure_without_leaking_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = Backend()
+    private_path = tmp_path / "private" / "application.db"
+
+    async def fail_state() -> ApplicationState:
+        raise ApplicationSQLiteUnavailable(private_path)
+
+    monkeypatch.setattr(backend, "application_state", fail_state)
+    outcome = await LocalApplication(backend).get_state()
+
+    assert outcome.ok is False
+    assert outcome.error is not None
+    assert outcome.error.code is ProductErrorCode.STATE_UNAVAILABLE
+    assert outcome.error.retryable is True
+    assert str(private_path) not in outcome.model_dump_json()
+
+
+@pytest.mark.asyncio
 async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     backend = Backend()
     facade = LocalApplication(backend)
     intent = CommandIntent(name=CommandName.STATUS)
 
+    assert _unwrap(await facade.list_skills()).skills[0].name == "review"
+    assert (
+        _unwrap(
+            await facade.install_skill(
+                SkillInstallRequest(source_path="review", replace=True)
+            )
+        ).status
+        == "replaced"
+    )
+    assert (
+        _unwrap(await facade.remove_skill(SkillRemoveRequest(name="review"))).status
+        == "removed"
+    )
     assert _unwrap(await facade.get_state()).workspace_trusted is True
     assert _unwrap(await facade.list_threads(ThreadListQuery())).threads == ()
+    assert (
+        _unwrap(await facade.search_threads(ThreadSearchQuery(query="needle"))).threads
+        == ()
+    )
     assert (
         _unwrap(
             await facade.submit_turn("thread_1", "inspect", "client_1")
@@ -209,3 +534,236 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
         is True
     )
     assert _unwrap(await facade.cancel_operation("operation_1")).cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_facade_routes_only_closed_operation_names_through_middleware() -> None:
+    backend = Backend()
+    invocations: list[ApplicationInvocation] = []
+
+    class Recorder:
+        async def __call__(
+            self,
+            invocation: ApplicationInvocation,
+            next_call: ApplicationCall,
+        ) -> object:
+            invocations.append(invocation)
+            return await next_call(invocation)
+
+    facade = LocalApplication(backend, middleware=(Recorder(),))
+    await facade.list_skills()
+    await facade.install_skill(
+        SkillInstallRequest(source_path="C:\\private\\skill", replace=False)
+    )
+    await facade.remove_skill(SkillRemoveRequest(name="private-skill"))
+    await facade.initialize()
+    await facade.get_state()
+    await facade.list_threads(ThreadListQuery())
+    await facade.search_threads(ThreadSearchQuery(query="private query"))
+    with pytest.raises(LookupError):
+        await facade.read_thread(ThreadReadQuery(thread_id="thread_private"))
+    await facade.submit_turn(
+        "thread_private",
+        "private prompt https://private.example",
+        "client_private",
+    )
+    await facade.execute_direct("thread_private", "echo private-secret")
+    await facade.execute_command(CommandIntent(name=CommandName.STATUS))
+    await facade.set_provider_credential(
+        ProviderCredentialSetRequest(
+            provider="deepseek",
+            action="add",
+            api_key=SecretStr("private-credential"),
+        )
+    )
+    await facade.respond_interaction("interaction_private", "trust")
+    await facade.cancel_operation("operation_private")
+    await facade.shutdown()
+
+    operations = [item.operation for item in invocations]
+    assert len(operations) == len(ApplicationOperation)
+    assert set(operations) == set(ApplicationOperation)
+    encoded = "".join(item.model_dump_json() for item in invocations)
+    for forbidden in (
+        "thread_private",
+        "private prompt",
+        "private.example",
+        "private-secret",
+        "private-credential",
+        "private-skill",
+        "private\\skill",
+        "interaction_private",
+        "operation_private",
+    ):
+        assert forbidden not in encoded
+
+
+@pytest.mark.asyncio
+async def test_facade_observes_mapped_product_error_without_error_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = Backend()
+    private_path = tmp_path / "private" / "application.db"
+    observations: list[ApplicationObservation] = []
+
+    async def fail_state() -> ApplicationState:
+        raise ApplicationSQLiteUnavailable(private_path)
+
+    monkeypatch.setattr(backend, "application_state", fail_state)
+    facade = LocalApplication(
+        backend,
+        middleware=(
+            ObservationalMiddleware(
+                session_id="session_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                correlation_id=lambda: "correlation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                clock=lambda: datetime(2026, 7, 27, tzinfo=UTC),
+                monotonic=iter((1.0, 1.1)).__next__,
+                sink=observations.append,
+            ),
+        ),
+    )
+
+    outcome = await facade.get_state()
+
+    assert outcome.ok is False
+    assert observations[0].outcome == "product_error"
+    assert observations[0].error_code == ProductErrorCode.STATE_UNAVAILABLE
+    assert str(private_path) not in observations[0].model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_observation_precedes_diagnostic_close() -> None:
+    backend = Backend()
+    order: list[str] = []
+
+    def observe(observation: ApplicationObservation) -> None:
+        assert observation.operation is ApplicationOperation.SHUTDOWN
+        order.append("observed")
+
+    async def close_diagnostics() -> None:
+        order.append("diagnostics_closed")
+
+    facade = LocalApplication(
+        backend,
+        middleware=(
+            ObservationalMiddleware(
+                session_id="session_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                correlation_id=lambda: "correlation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                clock=lambda: datetime(2026, 7, 27, tzinfo=UTC),
+                monotonic=iter((1.0, 1.1)).__next__,
+                sink=observe,
+            ),
+        ),
+        diagnostics_close=close_diagnostics,
+    )
+
+    result = await facade.shutdown()
+
+    assert result.ok is True
+    assert order == ["observed", "diagnostics_closed"]
+
+
+@pytest.mark.asyncio
+async def test_internal_diagnostic_close_cancellation_does_not_replace_shutdown() -> (
+    None
+):
+    async def self_cancel_diagnostics() -> None:
+        raise asyncio.CancelledError("diagnostics-only")
+
+    facade = LocalApplication(
+        Backend(),
+        diagnostics_close=self_cancel_diagnostics,
+    )
+
+    result = await facade.shutdown()
+
+    assert result.ok is True
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_wins_when_diagnostic_close_then_fails() -> None:
+    close_started = asyncio.Event()
+    fail_close = asyncio.Event()
+
+    async def close_diagnostics() -> None:
+        close_started.set()
+        await fail_close.wait()
+        raise RuntimeError("diagnostics close failed")
+
+    facade = LocalApplication(Backend(), diagnostics_close=close_diagnostics)
+    shutdown = asyncio.create_task(facade.shutdown())
+    await close_started.wait()
+    shutdown.cancel("cancel-shutdown")
+    fail_close.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await shutdown
+    assert cancelled.value.args == ("cancel-shutdown",)
+
+
+@pytest.mark.asyncio
+async def test_pre_requested_cancellation_wins_over_diagnostic_close_failure() -> None:
+    async def close_diagnostics() -> None:
+        await asyncio.sleep(0)
+        raise RuntimeError("diagnostics close failed")
+
+    def cancel_before_close(observation: ApplicationObservation) -> None:
+        if observation.operation is ApplicationOperation.SHUTDOWN:
+            current = asyncio.current_task()
+            assert current is not None
+            current.cancel("pre-requested-shutdown-cancel")
+
+    facade = LocalApplication(
+        Backend(),
+        middleware=(
+            ObservationalMiddleware(
+                session_id="session_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                correlation_id=lambda: "correlation_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                monotonic=iter((1.0, 1.1)).__next__,
+                sink=cancel_before_close,
+            ),
+        ),
+        diagnostics_close=close_diagnostics,
+    )
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await facade.shutdown()
+    assert cancelled.value.args == ("pre-requested-shutdown-cancel",)
+
+
+@pytest.mark.asyncio
+async def test_failed_shutdown_keeps_diagnostics_open_for_retry() -> None:
+    class RetryBackend(Backend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+
+        async def close_application(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise ApplicationFailure(
+                    ProductError(
+                        code=ProductErrorCode.OPERATION_BUSY,
+                        message="Shutdown is temporarily unavailable.",
+                        retryable=True,
+                    )
+                )
+            await super().close_application()
+
+    diagnostics_closes = 0
+
+    async def close_diagnostics() -> None:
+        nonlocal diagnostics_closes
+        diagnostics_closes += 1
+
+    backend = RetryBackend()
+    facade = LocalApplication(backend, diagnostics_close=close_diagnostics)
+
+    first = await facade.shutdown()
+    assert first.ok is False
+    assert diagnostics_closes == 0
+
+    second = await facade.shutdown()
+    assert second.ok is True
+    assert diagnostics_closes == 1

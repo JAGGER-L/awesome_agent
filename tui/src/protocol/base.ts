@@ -83,6 +83,7 @@ export const interactionDecisionSchema = z.enum([
   "reset_state",
   "allow_once",
   "allow_thread_writes",
+  "allow_thread_network",
   "enable_full_access",
   "retry",
   "abort",

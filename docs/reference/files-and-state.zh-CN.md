@@ -24,8 +24,17 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 ├── .provider-credential-transaction.env
 ├── .state.lock
 ├── .config.yaml.lock
+├── .skills.lock
+├── .skills-transaction.json
 ├── config.yaml
 ├── ui.json
+├── logs/
+│   ├── .application.jsonl.lock
+│   ├── application.jsonl
+│   ├── application.jsonl.1
+│   ├── application.jsonl.2
+│   ├── application.jsonl.3
+│   └── application.jsonl.4
 ├── skills/
 ├── memory/
 │   ├── .USER.md.lock
@@ -36,6 +45,7 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 │       └── MEMORY.md
 ├── state/
 │   ├── application.db
+│   ├── application.db.pre-migration.bak
 │   ├── checkpoints.db
 │   ├── provider-model-transaction.json
 │   └── change-journal/
@@ -48,18 +58,34 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 
 目录和文件按需创建。它们不存在通常是正常默认状态，并非损坏。
 
+## Application invocation 日志
+
+`<HOME>/logs/application.jsonl` 是当前的进程/会话级结构化诊断日志。它位于
+`WorkspaceRuntime`、Application database state 和 Thread history 之外。Awesome 最多保留
+当前文件以及 `application.jsonl.1` 至 `.4`；每个文件上限为 5 MiB。
+`<HOME>/logs/.application.jsonl.lock` 用于协调 writer，不属于这 5 个数据文件。
+
+每个 JSON line 使用封闭的 record version `1`：`version`、`timestamp`、`session_id`、
+`correlation_id`、`operation`、`outcome`、`duration_ms`，以及可选的 `error_code` 与有界
+`usage`。Prompt、模型或 Tool 正文、query、URL、path、secret 和任意 request/result payload
+绝不会写入日志。写入是非阻塞、fail-open 的，因此记录缺失可能表示 queue 已满或本地日志
+失败，并且不会改变 Application 结果。Invocation outcome 只描述 facade request，不是异步
+准入的 Agent 工作之后到达的终态。
+
 ## 用户拥有的文件
 
 ### `<HOME>/config.yaml`
 
-严格的 User 配置 schema 版本 `1`：Provider 默认值、凭据来源选择、预算、Memory 开关、
-禁用的 Skills 和 User MCP 声明。它不包含秘密值。见[配置](configuration.zh-CN.md)。
+严格的 User 配置 schema 版本 `2`：Provider 默认值、凭据来源选择、预算、Web 设置、
+Memory 开关、禁用的 Skills 和 User MCP 声明。版本 `1` 仍可读取，并由第一次受支持的写操作
+原子升级。该文档不包含秘密值。见[配置](configuration.zh-CN.md)。
 
 ### `<HOME>/.env`
 
-由 Awesome 管理的 `DEEPSEEK_API_KEY`、`MOONSHOT_API_KEY` 和 `MEM0_API_KEY` 凭据存储。
-`/auth` 通过同目录 temporary file 写入、flush，然后以原子方式替换目标。在 POSIX 上，
-Awesome 创建目录时只允许 owner 访问，创建文件时只允许 owner 读写。
+由 Awesome 管理的 `DEEPSEEK_API_KEY`、`MOONSHOT_API_KEY`、`MEM0_API_KEY`，以及可选的
+`AWESOME_WEB_PROXY_URL` 凭据存储。`/auth` 只管理前三项；受支持的 writer 通过同目录
+temporary file 写入、flush，然后以原子方式替换目标。在 POSIX 上，Awesome 创建目录时
+只允许 owner 访问，创建文件时只允许 owner 读写。
 
 这不是通用 dotenv 契约。任意条目不会被当作配置，值也不会自动转发给 MCP 服务器。绝不要
 提交该文件或把它复制进 Workspace。
@@ -81,8 +107,24 @@ Ink 拥有的 UI preferences。当前 schema：
 
 ### `<HOME>/skills/`
 
-User Skill 包，通常为 `<HOME>/skills/<name>/SKILL.md` 加可选资源。User Skills 是本地受信任
-输入，并保留现有链接行为；更严格的禁止 reparse 包规则应用于 Workspace Skills。见
+User Skill 包，通常为 `<HOME>/skills/<name>/SKILL.md` 加可选资源。Bundled 与 User Skills
+使用相同的固定 package 和 `SKILL.md` identity 要求；Workspace Skills 还会固定完整的受信任
+Workspace 链。每种来源的资源遍历都拒绝逃逸、link、junction 和其他 reparse 组成部分。
+
+`awesome skills install` 会在发布 User 包前校验完整的本地目录或 ZIP。本地 source 遍历以及
+installed/quarantine 包清理都会拒绝跨越 filesystem 或 mount boundary，其中包括 POSIX mount
+与 bind boundary；Windows volume mount 遍历由既有的 reparse-point 拒绝覆盖。
+
+`<HOME>/.skills.lock` 会跨进程序列化 list 和 mutation 操作；
+`<HOME>/.skills-transaction.json` 记录进行中的安装、替换或移除。全新安装通过一次同目录
+no-replace 原子 rename，把已校验 stage 发布到不存在的 target。Replace 不是一次原子替换：
+它依次记录 `prepared`、把 target rename 到 quarantine、记录 `quarantined`、把 stage rename
+到 target，并在清理前记录 `published`。Remove 围绕 target-to-quarantine 记录相同 phase，
+只在发布后删除 quarantine。Recovery 会在发布前回滚 replace/remove，在发布后向前完成
+quarantine 清理。
+
+事务运行或等待恢复期间，`skills/` 下可能出现私有 `.skill-stage-*` 与
+`.skill-quarantine-*` 目录。Awesome 可能仍在运行时，不要编辑或删除这些 artifact。见
 [Skills](../extensions/skills.zh-CN.md)。
 
 ### Local Memory 文件
@@ -94,13 +136,13 @@ User Skill 包，通常为 `<HOME>/skills/<name>/SKILL.md` 加可选资源。Use
 
 ### User 状态 mutation 锁
 
-Core 会在线程和进程之间串行化 `config.yaml`、`.env`、`USER.md` 以及每个
-Workspace `MEMORY.md` 的 read-modify-write 事务。它使用一个持久的单字节 sibling
+Core 会在线程和进程之间串行化 `config.yaml`、`.env`、`USER.md` 与每个 Workspace
+`MEMORY.md` 的 read-modify-write 事务。它使用一个持久的单字节 sibling
 `.<resource>.lock`；已经隐藏的 `.env` 使用 `.env.lock`，不会再增加一个前导点。
-等待这些锁有明确上限，且不在 event-loop 线程中运行，因此另一进程不会冻结
-foreground cancellation 或状态渲染。已取消的 mutation 会先在有界清理窗口内完成
-已经开始的文件系统事务，再报告取消；错过该窗口的 worker 不能之后再提交内存状态。
-在之后的进程重新加载持久文件前，必须把该 worker 的文件系统 outcome 视为不确定。
+等待这些锁有明确上限，且不在 event-loop 线程中运行，因此另一进程不会冻结 foreground
+cancellation 或状态渲染。已取消的 mutation 会先在有界清理窗口内完成已经开始的文件系统
+事务，再报告取消；错过该窗口的 worker 不能之后再提交内存状态。在之后的进程重新加载
+持久文件前，必须把该 worker 的文件系统 outcome 视为不确定。
 
 等待锁达到 deadline 时，Command 和 credential RPC 会返回可重试的
 `operation_busy`，Memory tool 调用会返回可重试的 `timeout`。不安全或不可用的
@@ -109,9 +151,21 @@ sidecar/平台锁有两种类型化 envelope：Application command 或 RPC 返�
 不可重试的 `state_unavailable` `ToolOutput`。这些错误是固定且脱敏的，不会暴露
 sidecar 路径或操作系统异常。
 
-这些 sidecar 是协调 artifact，不是配置或 Memory 内容。只要 Awesome 进程可能仍在运行，
-就不要编辑或删除它们。第一次 mutation 前缺失它们是正常的；Core 会按需创建，
-并拒绝 link、reparse point、非常规文件，以及打开后 identity 与路径不匹配的 sidecar。
+Skill package 操作使用独立的 `.skills.lock`；等待锁有明确上限，并在 event-loop 线程外运行。
+Source 大小、entry 数和文件读取同样有界。但 owned package worker 一旦开始，cancellation-safe
+收敛就没有 wall-clock 清理 deadline：调用方被取消时，Core 会继续等待 worker，直到事务
+到达可恢复的终态，再重新抛出原始取消。它不会 detach 一个会让之后文件系统 outcome 变成
+未知的 worker。
+
+对于 Skill package RPC，不可用或竞争中的 `.skills.lock` 会返回可重试的
+`operation_busy`；无法安全完成的包事务（包括 installed/quarantine 清理发现跨 boundary）
+会返回可重试的 `state_unavailable`。Source 校验、source 跨 boundary、大小、名称已存在和
+名称不存在错误则返回不可重试的 `invalid_arguments`，并携带有界诊断 code。
+
+这些 lock file 和包事务 marker 是协调 artifact，不是配置、Memory 或 Skill 包内容。只要
+Awesome 进程可能仍在运行，就不要编辑或删除它们。第一次 mutation 前缺失它们是正常的；
+Core 会按需创建，并拒绝 link、reparse point、非常规文件，以及打开后 identity 与路径不匹配
+的 sidecar。
 
 ## Workspace 拥有的文件
 
@@ -138,23 +192,27 @@ Workspace Skills 会接受逐组成部分 anti-link 与身份检查。运行会�
 在 lazy read 前安全完成的资源替换可以被观察到，而固定的 package/`SKILL.md` 替换与不安全
 资源遍历会安全失败（fail closed）。
 
-`.awesome/config.yaml` 会在信任后经过 schema 验证，但当前文件读取没有绑定 identity 或限制
-大小，并且可能跟随 link/reparse point。这是已知安全加固缺口，不具备与 `AGENTS.md` 或
-Workspace Skill 加载相同的保证。请把受信任 Workspace 配置当作特权输入，并参阅
-[配置参考](configuration.zh-CN.md#workspace-配置)。
+`.awesome/config.yaml` 会在信任后经过 schema 验证，并通过有界、no-follow、绑定 identity
+的普通文件边界读取。它最多接受 1 MiB 不含 NUL 的严格 UTF-8 内容，并拒绝 link/reparse
+point、hard link、非普通节点和读取期间的身份变化。任何违规都会使配置激活失败，不会跟随
+或截断输入。参阅[配置参考](configuration.zh-CN.md#workspace-配置)。
 
 ## Application database
 
 `<HOME>/state/application.db` 是权威的嵌入式 Application SQLite database。当前
-`PRAGMA user_version` 是 **7**。连接会启用 foreign key、五秒 busy timeout、WAL journal
-mode 和 normal synchronous mode。
+`PRAGMA user_version` 是 **8**。一个进程级有界 FIFO worker 持有其长期 connection；该
+connection 会启用 foreign key、五秒 busy timeout、WAL journal mode 和 normal synchronous
+mode。面向 Application 的 repository 暴露 async method：read 使用 deferred transaction，
+write 使用 `BEGIN IMMEDIATE`。取消的 read 可以停止等待；已准入的 durable write 与 lifecycle
+operation 会等到明确的 COMMIT、ROLLBACK 或 close 结果，再重新抛出第一次 cancellation。
+SQLite connection、cursor 和 row 不会跨越 worker 边界。
 
 其逻辑所有权为：
 
 | 记录 | 用途 |
 | --- | --- |
 | `trusted_workspaces` | 已接受的 workspace key、canonical path 和信任时间 |
-| `threads` | Workspace 关联、title/source、已选 model、Thinking 和 Skill mode |
+| `threads` | Workspace 关联、title/source、已选 model、Thinking 和 Skill mode，以及可选的 immediate-parent fork/retry lineage |
 | `thread_entries` | 按顺序排列的持久 User 消息、Assistant 消息和直接命令 |
 | `turns` | Turn 生命周期、不可变执行选择/预算、usage、context manifest 和 checkpoint key |
 | `thread_summaries` | 有界对话摘要及其覆盖的 sequence/count |
@@ -166,6 +224,13 @@ mode 和 normal synchronous mode。
 Slash Command 是控制输入，不是模型对话条目。直接命令是持久 transcript 条目，但没有 Turn
 ID。Tool activity 有唯一的 `(operation_id, call_id)` 边界，因此 completion 无法被静默复制。
 
+会话搜索只读取活动 Workspace 内的 Thread title 与 `thread_entries.content`。它包含持久
+user、assistant 和 direct-command entry，但排除 ToolActivity、summary、checkpoint 与
+metadata。首版是 SQLite 字面 `LOWER`/substring query，而不是 FTS index。页面按
+`updated_at DESC, id DESC` 稳定排序；cursor scope 通过 hash 绑定 Workspace 与规范化 query，
+不会在 cursor 中发布 workspace key。每个 page query 与精确结果 revalidation 都受
+5,000,000 SQLite VM-op budget 限制；预算耗尽时返回 `result_too_large`。
+
 不要手动编辑此 database。Row invariant、foreign key、Checkpoint store 和 Change Journal
 blob 虽使用不同文件，却共同组成一份恢复契约。
 
@@ -174,8 +239,10 @@ blob 虽使用不同文件，却共同组成一份恢复契约。
 `<HOME>/state/provider-model-transaction.json` 用于闭合 `config.yaml` 中 default model 与
 `application.db` 中 Thread selected model 之间的原子性缺口。这两类资源无法加入同一个
 database transaction。因此 model mutation 会先写入包含旧值与目标 model identity 的持久
-`prepared` 记录，再替换并 reload 配置、更新 Thread、验证两侧状态，将记录改为
-`committed`，最后才移除 journal。
+`prepared` 记录；该记录还带有唯一 transaction identity。随后系统替换并 reload 配置、
+更新 Thread、验证两侧状态，将记录改为 `committed`，最后才移除 journal。若 callback
+失败，系统会保留 `prepared` 证据，直到 SQLite 明确完成 rollback，且新的 transaction
+重新验证两侧旧值。
 
 启动时，`prepared` 记录会回滚到旧值，`committed` 记录会向前完成到目标值。
 Reconciliation 是幂等的，只有两侧均验证通过后才清除 journal。journal 格式错误或无法恢复
@@ -228,6 +295,15 @@ reconciliation 所需、按内容寻址的 before/after byte。写入使用 temp
 读取会在返回内容前重新计算 digest。Metadata 和 pending intent 位于 `application.db`；两部分
 单独存在时，都不足以提供完整 undo 历史。
 
+`/export` 把确定性的公开 Thread 投影写入 Workspace 相对的 Markdown 或 JSON 文件。有引用的
+Markdown assistant entry 保留自己的 Sources 区域，而 JSON assistant entry 始终带
+`citations` list；workspace key 与内部 entry metadata 会被排除。
+输出上限为 5 MiB，渲染在 event loop 外执行。写入使用共享的 identity-bound filesystem
+primitive；规范化路径必须在 mutation 前满足 1–1,000 字符。创建与更新文件会产生 Change
+Journal 证据并支持 `/undo`；字节相同的导出报告为 unchanged，且不创建 ChangeSet。失败且
+reconciliation 后没有 evidence 的尝试不会发布空 ChangeSet；若字节已经落盘，恢复会保留其
+evidence。
+
 每个 ChangeSet 限制为 1,000 个 node 和 50 MiB。Shell 执行会记录为不可逆 observation，
 而不是虚构的 filesystem snapshot。见[变更指南](../user-guide/changes.zh-CN.md)。
 
@@ -245,20 +321,29 @@ Awesome 对一字节 `.state.lock` 文件使用 non-blocking filesystem lock：
 `operation_busy`，而不是并发运行 recovery 或 mutation。这些 lock directory 是协调 artifact，
 不是用户配置；Awesome 运行时不要删除它们。
 
-## Schema 兼容性与重置
+## Schema 兼容性、迁移与重置
 
 正常访问 database 前，Awesome 会执行只读预检：
 
 | 观察到的状态 | 行为 |
 | --- | --- |
-| 没有 database，或 version 0 的空 SQLite | 在 exclusive lease 下初始化 schema 7，然后降级为 shared ownership。 |
-| Schema 7 | 正常打开。 |
-| Schema 1–6 | 询问用户是否重置本地状态；不执行自动 migration。 |
-| Schema 大于 7 | 拒绝并返回 `state_created_by_newer_version`。 |
+| 没有 database，或 version 0 的空 SQLite | 在 exclusive lease 下初始化 schema 8，然后降级为 shared ownership。 |
+| Schema 8 | 正常打开。 |
+| Schema 7 | 先备份 database，再在 exclusive lease 下迁移到 schema 8。 |
+| Schema 1–6 | Migration 不可用；询问用户是否重置本地状态或退出。 |
+| Schema 大于 8 | 拒绝并返回 `state_created_by_newer_version`。 |
 | 非空 version 0、无效 SQLite 或未知格式 | 以未知/不可用状态拒绝。 |
 
-本 release 刻意没有原地 database migration layer。重置必须显式进行，因为静默解释旧恢复数据
-可能比丢失本地对话历史更危险。
+生产 migration registry 的 floor 是 7、current 是 8。7→8 step 会添加可空的 Thread
+lineage 字段，不重写现有 conversation 数据。未来受支持的升级必须继续扩展这条
+相邻线性链。启动时先在 shared lease 下 preflight，再取得 exclusive state lease、重新检查
+schema，并用 SQLite Backup API 创建
+`<HOME>/state/application.db.pre-migration.bak`，然后在一个 transaction 内执行完整链。降级为
+shared ownership 后才初始化 repository。
+
+Migration 前会独立重新打开并检查 backup。任一步骤失败都会回滚全部 schema 与数据变更，
+并保留 backup 供手动恢复。启动绝不会自动 restore 该 backup 或 reset 状态。更新、未知、损坏、
+不可读和锁定状态都会 fail closed。
 
 确认后，reset 会验证精确的 `<HOME>/state` 边界不是 symlink，将其重命名到同父 staging
 directory，初始化新的 `application.db`，然后移除 staging。初始化失败会恢复旧目录。清理失败
@@ -289,3 +374,7 @@ journal 与 backup、`ui.json`、User Skills、Local Memory 文档/设置和已�
 一致备份。基于同样原因，应把整个已停止状态快照作为一个单元恢复，并使用接受其 Application
 schema 的产品版本。如果只需要 preferences 或 Skills，请单独复制这些用户拥有的文件，并
 有意排除 `.env`。
+
+`application.db.pre-migration.bak` 是能够感知 WAL、供手动 migration recovery 使用的安全
+快照，而不是完整 Awesome backup：它不包含 checkpoint database、Change Journal blob、
+配置或凭据。

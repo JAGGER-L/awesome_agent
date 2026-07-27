@@ -83,6 +83,22 @@ A successful answer confirms the Workspace, Thread, model, context, streaming,
 and read-tool path without changing project files. Run `/context`, `/tools`,
 and `/status` to inspect what Awesome used.
 
+## Run One Turn from a Script
+
+After model setup, the same read-only check can run without Ink:
+
+```text
+awesome run "Analyze this project's structure and tell me where I should start reading." --trust-workspace
+```
+
+The command creates a new Thread by default and writes only the final answer to
+stdout. Add `--format json` for one versioned JSON document, or
+`--thread <id>` to target an existing Thread. Diagnostics use stderr. Required
+trust, approval, state recovery, or another unresolved interaction produces no
+partial stdout and exits with code 3. SIGINT requests Turn cancellation before
+the process exits with code 130. See the [CLI reference](../reference/cli.md)
+for the full contract.
+
 ## Where to Go Next
 
 - Learn the lifecycle in [Workspace, Thread, Turn, and Operation](../concepts/workspace-thread-turn.md).

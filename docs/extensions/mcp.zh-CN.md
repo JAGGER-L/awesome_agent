@@ -13,7 +13,7 @@ MCP 服务器及其输出是不受信任的扩展。服务器成功连接并不�
 在 `<AWESOME_HOME>/config.yaml` 中添加服务器：
 
 ```yaml
-version: 1
+version: 2
 mcp_servers:
   - id: issue-tracker
     command: python

@@ -20,6 +20,7 @@ class AwesomePaths:
     memory_dir: Path
     user_memory_file: Path
     workspaces_dir: Path
+    logs_dir: Path
     state_dir: Path
     application_db: Path
     checkpoint_db: Path
@@ -79,6 +80,7 @@ class AwesomePaths:
             memory_dir=resolved_home / "memory",
             user_memory_file=resolved_home / "memory" / "USER.md",
             workspaces_dir=resolved_home / "workspaces",
+            logs_dir=resolved_home / "logs",
             state_dir=state_dir,
             application_db=state_dir / "application.db",
             checkpoint_db=state_dir / "checkpoints.db",

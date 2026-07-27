@@ -3,6 +3,7 @@ import type {
   CommandPayload,
   CommandSecretPrompt,
   CommandSelection,
+  ThreadRetryOperation,
 } from "../protocol/commands.js";
 import type {
   MethodName,
@@ -25,6 +26,11 @@ interface CommandRpc {
     | { readonly ok: true; readonly value: MethodValue[Method] }
     | { readonly ok: false; readonly error: ProductError }
   >;
+  activateThreadRetry?(
+    operation: ThreadRetryOperation,
+    generation: number,
+  ): void;
+  rejectThreadRetry?(message: string): never;
 }
 
 type OperationAccepted =
@@ -173,6 +179,23 @@ export class CommandController {
 
   async refreshApplication() {
     return await this.rpc.request("application.getState", {});
+  }
+
+  activateThreadRetry(
+    operation: ThreadRetryOperation,
+    generation: number,
+  ): void {
+    if (!this.rpc.activateThreadRetry) {
+      throw new Error("Thread retry activation is unavailable");
+    }
+    this.rpc.activateThreadRetry(operation, generation);
+  }
+
+  rejectThreadRetry(message: string): never {
+    if (!this.rpc.rejectThreadRetry) {
+      throw new Error(message);
+    }
+    return this.rpc.rejectThreadRetry(message);
   }
 
   async select(

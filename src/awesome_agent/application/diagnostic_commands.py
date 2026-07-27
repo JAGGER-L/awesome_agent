@@ -30,9 +30,10 @@ from awesome_agent.core.tools.permissions import (
 )
 from awesome_agent.core.tools.registry import ToolRegistry
 
-type StatusReader = Callable[[], StatusSnapshot | None]
-type UsageReader = Callable[[], UsageSummary | None]
+type StatusReader = Callable[[], Awaitable[StatusSnapshot | None]]
+type UsageReader = Callable[[], Awaitable[UsageSummary | None]]
 type ProviderDoctor = Callable[[], Awaitable[dict[str, str]]]
+type ReadinessReader = Callable[[], Awaitable[bool | None]]
 type WorkspaceInstructionDiagnosticReader = Callable[
     [], WorkspaceInstructionDiagnostic | None
 ]
@@ -51,6 +52,9 @@ class DiagnosticCommandService:
         usage_reader: UsageReader,
         credential_statuses: Callable[[], ProviderCredentialStatuses],
         provider_doctor: ProviderDoctor,
+        configuration_ready: ReadinessReader,
+        sqlite_ready: ReadinessReader,
+        checkpoints_ready: ReadinessReader,
         workspace_instruction_diagnostic: WorkspaceInstructionDiagnosticReader,
     ) -> None:
         self._workspace_path = workspace_path
@@ -60,6 +64,9 @@ class DiagnosticCommandService:
         self._usage_reader = usage_reader
         self._credential_statuses = credential_statuses
         self._provider_doctor = provider_doctor
+        self._configuration_ready = configuration_ready
+        self._sqlite_ready = sqlite_ready
+        self._checkpoints_ready = checkpoints_ready
         self._workspace_instruction_diagnostic = workspace_instruction_diagnostic
         self._policy = PermissionPolicy()
 
@@ -100,7 +107,7 @@ class DiagnosticCommandService:
     async def status(self, intent: CommandIntent) -> CommandOutcome:
         if intent.arguments:
             return error("invalid_arguments", "Usage: /status")
-        snapshot = self._status_reader()
+        snapshot = await self._status_reader()
         if snapshot is None:
             return error("thread_not_found", "Select a Thread first.")
         return result(StatusCommandPayload(snapshot=snapshot))
@@ -108,7 +115,7 @@ class DiagnosticCommandService:
     async def usage(self, intent: CommandIntent) -> CommandOutcome:
         if intent.arguments:
             return error("invalid_arguments", "Usage: /usage")
-        usage = self._usage_reader()
+        usage = await self._usage_reader()
         if usage is None:
             return error("thread_not_found", "Select a Thread first.")
         return result(UsageCommandPayload(usage=usage))
@@ -118,9 +125,9 @@ class DiagnosticCommandService:
             return error("invalid_arguments", "Usage: /doctor")
         providers = await self._provider_doctor()
         checks = [
-            DoctorCheck(name="Configuration", status="ok"),
-            DoctorCheck(name="SQLite", status="ok"),
-            DoctorCheck(name="Checkpoints", status="ok"),
+            await self._readiness_check("Configuration", self._configuration_ready),
+            await self._readiness_check("SQLite", self._sqlite_ready),
+            await self._readiness_check("Checkpoints", self._checkpoints_ready),
         ]
         workspace_diagnostic = self._workspace_instruction_diagnostic()
         if workspace_diagnostic is not None:
@@ -165,6 +172,26 @@ class DiagnosticCommandService:
                 )
             )
         return result(DoctorCommandPayload(checks=tuple(checks)))
+
+    @staticmethod
+    async def _readiness_check(name: str, reader: ReadinessReader) -> DoctorCheck:
+        try:
+            ready = await reader()
+        except Exception:
+            ready = None
+        if ready is True:
+            return DoctorCheck(name=name, status="ok")
+        if ready is False:
+            return DoctorCheck(
+                name=name,
+                status="error",
+                detail=f"{name} is not ready.",
+            )
+        return DoctorCheck(
+            name=name,
+            status="unverified",
+            detail=f"{name} readiness could not be verified.",
+        )
 
     async def config(self, intent: CommandIntent) -> CommandOutcome:
         if intent.arguments:

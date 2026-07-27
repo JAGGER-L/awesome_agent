@@ -181,6 +181,9 @@ class ModelGateway:
         return completed[0]
 
 
+type GatewayFactory = Callable[[ProviderId, str], ModelGateway]
+
+
 def _with_retry_usage(event: TurnCompleted, retries: int) -> TurnCompleted:
     if retries == 0:
         return event

@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     JsonValue,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
 from awesome_agent.config.models import BudgetConfig
+from awesome_agent.core.citations import Citation, CitationAllocator
 
 _MAX_JSON_SAFE_INTEGER = 9_007_199_254_740_991
 
@@ -47,6 +52,14 @@ class ToolActivityOutcome(StrEnum):
     CANCELLED = "cancelled"
 
 
+class ThreadLineage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    kind: Literal["fork", "retry"]
+    source_thread_id: str = Field(min_length=1, max_length=128)
+    source_turn_id: str = Field(min_length=1, max_length=128)
+
+
 class UsageSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
@@ -59,6 +72,7 @@ class UsageSummary(BaseModel):
     tool_calls: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
     provider_retries: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
     compressions: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
+    web_requests: int = Field(default=0, ge=0, le=_MAX_JSON_SAFE_INTEGER)
     active_execution_seconds: float = Field(default=0.0, ge=0.0)
 
     def __add__(self, other: UsageSummary) -> UsageSummary:
@@ -72,6 +86,7 @@ class UsageSummary(BaseModel):
             tool_calls=self.tool_calls + other.tool_calls,
             provider_retries=self.provider_retries + other.provider_retries,
             compressions=self.compressions + other.compressions,
+            web_requests=self.web_requests + other.web_requests,
             active_execution_seconds=(
                 self.active_execution_seconds + other.active_execution_seconds
             ),
@@ -88,6 +103,7 @@ class Thread(BaseModel):
     current_model: str | None = Field(default=None, max_length=200)
     thinking_enabled: bool = True
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)
+    lineage: ThreadLineage | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -97,6 +113,33 @@ class Thread(BaseModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("timestamps must include a timezone")
         return value
+
+    @model_serializer(mode="wrap")
+    def serialize_with_nullable_lineage(
+        self,
+        handler: SerializerFunctionWrapHandler,
+        info: SerializationInfo,
+    ) -> object:
+        serialized = handler(self)
+        if (
+            isinstance(serialized, dict)
+            and "lineage" not in serialized
+            and _serialization_includes_field(info.include, "lineage")
+            and not _serialization_excludes_field(info.exclude, "lineage")
+        ):
+            serialized["lineage"] = None
+        return serialized
+
+
+class AssistantEntryMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    citations: tuple[Citation, ...] = Field(default=(), strict=False, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_citation_sequence(self) -> Self:
+        CitationAllocator(self.citations)
+        return self
 
 
 class ThreadEntry(BaseModel):
@@ -114,6 +157,23 @@ class ThreadEntry(BaseModel):
     )
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     created_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_assistant_metadata(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+        kind = value.get("kind")
+        if kind not in {
+            ThreadEntryKind.ASSISTANT_MESSAGE,
+            ThreadEntryKind.ASSISTANT_MESSAGE.value,
+        }:
+            return value
+        normalized = dict(value)
+        normalized["metadata"] = AssistantEntryMetadata.model_validate(
+            value.get("metadata", {})
+        ).model_dump(mode="json")
+        return normalized
 
     @model_validator(mode="after")
     def validate_direct_command_bound(self) -> Self:
@@ -242,3 +302,21 @@ class ThreadPage(BaseModel):
         ge=1,
         le=_MAX_JSON_SAFE_INTEGER,
     )
+
+
+def _serialization_excludes_field(exclude: object, field: str) -> bool:
+    if isinstance(exclude, set):
+        return field in exclude
+    if isinstance(exclude, dict):
+        return field in exclude
+    return False
+
+
+def _serialization_includes_field(include: object, field: str) -> bool:
+    if include is None:
+        return True
+    if isinstance(include, set):
+        return field in include
+    if isinstance(include, dict):
+        return field in include
+    return True

@@ -21,8 +21,12 @@ describe("protocol inventory", () => {
   it("contains the complete product method inventory", () => {
     expect(methodNames).toEqual([
       "initialize",
+      "skill.list",
+      "skill.install",
+      "skill.remove",
       "application.getState",
       "thread.list",
+      "thread.search",
       "thread.read",
       "turn.submit",
       "direct.execute",
@@ -93,9 +97,14 @@ describe("protocol inventory", () => {
   });
 
   it("freezes command ownership and excludes removed commands", () => {
-    expect(applicationCommandNames).toHaveLength(21);
+    expect(applicationCommandNames).toHaveLength(26);
+    expect(applicationCommandNames).toContain("fork");
+    expect(applicationCommandNames).toContain("retry");
     expect(applicationCommandNames).toContain("auth");
     expect(applicationCommandNames).toContain("permissions");
+    expect(applicationCommandNames).toContain("web");
+    expect(applicationCommandNames).toContain("search");
+    expect(applicationCommandNames).toContain("export");
     expect(inkCommandNames).toEqual(["help", "theme", "copy", "quit"]);
     expect(commandNameSchema.safeParse("init").success).toBe(false);
     expect(commandNameSchema.safeParse("editor").success).toBe(false);
@@ -167,6 +176,18 @@ describe("strict wire boundaries", () => {
       methodSchemas["command.execute"].params.safeParse({ name: "status" })
         .success,
     ).toBe(true);
+  });
+
+  it("matches the direct execute transport and tool command limit", () => {
+    const schema = methodSchemas["direct.execute"].params;
+    expect(
+      schema.safeParse({ thread_id: "thread_1", command: "x".repeat(8_000) })
+        .success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({ thread_id: "thread_1", command: "x".repeat(8_001) })
+        .success,
+    ).toBe(false);
   });
 
   it("rejects unknown result branches", () => {

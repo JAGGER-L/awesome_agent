@@ -28,6 +28,15 @@ recovery rules.
 The resettable boundary is exactly `<AWESOME_HOME>/state`. Configuration,
 credentials, Memory, Skills, UI preferences, and project files are outside it.
 
+Deterministic Thread exports are project files outside that resettable boundary.
+Application projects public transcript fields only, writes through the
+identity-bound safe filesystem path, and journals created or updated bytes for
+undo. The normalized destination is checked against the 1–1,000-character
+contract before mutation, rendering runs away from the event loop, and output
+is capped at 5 MiB. A byte-identical export is unchanged and has no ChangeSet;
+a failed attempt with no reconciled evidence publishes no empty ChangeSet.
+Neither export format contains workspace keys or internal metadata.
+
 ## Why two SQLite databases
 
 Application SQLite stores product facts: a user accepted a message, a Turn is
@@ -46,6 +55,26 @@ Application SQLite uses WAL. Multi-query reads use deferred transactions so a
 Thread page observes one coherent snapshot without reserving the only writer.
 Mutations use `BEGIN IMMEDIATE`, obtaining the writer reservation before
 validating and changing product state.
+
+One process-level `ApplicationSQLite` owns a bounded FIFO worker thread and one
+long-lived connection. Application-facing repositories expose async methods;
+their synchronous transaction callbacks run on that worker and may return only
+detached domain values, never a SQLite connection, cursor, or row. A cancelled
+read may stop waiting while the admitted read finishes in the background.
+Durable write, initialize, reset, suspend, and close operations instead wait for
+a known worker result before propagating the caller's first cancellation. This
+keeps SQLite ownership and transaction state unambiguous while leaving the
+event loop available for urgent control requests. If SQLite cannot confirm a
+rollback, the owner closes and fails the worker instead of reusing a connection
+whose transaction state is unknown.
+
+Thread search remains a bounded read on this same owner. It uses literal
+substring predicates over titles and durable entry content, isolates every query
+to one Workspace, and orders by `updated_at DESC, id DESC`. Each query, including
+selection revalidation, has a 5,000,000 SQLite VM-op budget; exhaustion becomes
+the stable `result_too_large` error instead of monopolizing the owner without a
+bound. The opaque page cursor hash-binds the Workspace and normalized query;
+there is no FTS index, parallel search database, or relevance state to recover.
 
 One important transaction is first-message acceptance:
 
@@ -66,10 +95,32 @@ credential values are not product history. The Application database stores
 bounded activity summaries. Full observations needed for unfinished execution
 remain in the checkpoint.
 
+## Materialized Thread lineage
+
+Every Schema 8 Thread stores `lineage_json`: root Threads use SQL `NULL`, while
+a forked or retried Thread stores one strict immediate-parent record containing
+`kind`, `source_thread_id`, and `source_turn_id`. This is provenance, not a
+shared-history pointer: the destination receives new Thread, Entry, Turn,
+client-message, and checkpoint-key identities.
+
+Fork and Retry both require a terminal source Turn. Fork copies the durable
+transcript prefix through that Turn. Retry copies the prefix before that Turn,
+then appends the same user input and creates one fresh in-progress Turn with
+the source Turn's provider, model, Thinking, Skill mode, and budgets. Cloned
+terminal Turns retain their public outcome and usage but clear context
+manifests. Neither operation copies summaries, ToolActivity, checkpoints, or
+ChangeSets; Retry never replays old tool calls and never undoes their effects.
+
+Conversation prepares an immutable destination plus a hash of every source
+Thread, Entry, and Turn fact that can affect materialization. Storage rechecks
+the terminal target and source fingerprint inside one `BEGIN IMMEDIATE`
+transaction before inserting the complete destination. A source race therefore
+publishes no partial Thread and returns a conflict for an explicit retry.
+
 ## Schema identity
 
 Application schema identity is independent from the product version. The
-current bootstrap schema is Schema 7. Schema identity changes only when a
+current bootstrap schema is Schema 8. Schema identity changes only when a
 required table, payload interpretation, or cross-record invariant can no
 longer be read safely by the current code, and identities increase
 monotonically.
@@ -79,9 +130,12 @@ meaning. Change mutation identity and separate before/after node types follow
 this rule. Completed older records without mutation IDs remain readable;
 ambiguous crash-window evidence remains pending for diagnosis.
 
-Awesome intentionally has no generic migration framework or historical adapter
-chain. That reduces hidden compatibility behavior, but means an older schema
-requires an explicit reset rather than an automatic migration.
+Awesome has one deliberately small forward-migration registry. It accepts only
+adjacent `N -> N+1` steps and requires one complete linear path from the support
+floor to the current schema. The production floor is 7 and the current identity
+is 8. The sole `7 -> 8` step adds nullable `threads.lineage_json`; existing
+Threads therefore remain roots without rewriting product history. Schemas 1–6
+remain migration-unavailable.
 
 ## Read-only startup preflight
 
@@ -92,12 +146,42 @@ Storage classifies an existing Application database:
 | --- | --- |
 | new | create current schema under an exclusive state lease |
 | current | retain shared state lease and continue |
-| older | present reset-or-exit interaction |
+| migration required | run the complete registered chain under an exclusive state lease |
+| migration unavailable | present reset-or-exit interaction |
 | newer | stop and ask the user to upgrade |
 | unknown/corrupt/unreadable/locked | stop with a diagnostic |
 
-Only an older schema offers reset. Treating a newer or unknown schema as
-disposable could destroy state the current binary simply does not understand.
+Only migration-unavailable old state offers reset. Treating newer, unknown, or
+corrupt state as disposable could destroy state the current binary simply does
+not understand.
+
+## Non-destructive migration path
+
+```text
+shared-lease read-only preflight
+  -> acquire exclusive state lease
+  -> recheck compatibility and database identity
+  -> source quick_check
+  -> SQLite Backup API snapshot
+     <AWESOME_HOME>/state/application.db.pre-migration.bak
+  -> independently reopen and validate the backup
+  -> BEGIN IMMEDIATE
+  -> apply the complete adjacent migration chain
+  -> final quick_check -> COMMIT
+  -> downgrade to shared lease
+  -> initialize Application repositories
+```
+
+The source path must remain the private, regular, non-linked database owned by
+the exclusive lease. The backup is written through a same-directory temporary
+file, permission-restricted, flushed, and atomically replaced. SQLite's Backup
+API includes committed WAL state; no `immutable=1` shortcut is used.
+
+The whole found-to-current chain is one transaction. Failure in any step rolls
+back every schema and data change. The fixed backup remains for manual recovery,
+including when migration fails; Awesome never automatically restores it and
+never converts a migration failure into an automatic reset. An unprovable
+rollback outcome fails the database worker closed.
 
 ## State leases and reset
 
@@ -111,7 +195,7 @@ typed state-reset confirmation
   -> acquire exclusive state lease
   -> validate target == <AWESOME_HOME>/state
   -> atomically rename old state directory
-  -> create and validate fresh Schema 7
+  -> create and validate fresh Schema 8
   -> remove replaced state
   -> downgrade to shared lease
   -> continue to workspace trust
@@ -157,7 +241,7 @@ Recovery validates more than “JSON parses”:
 - context manifest shape, content hashes, token estimates, and transcript
   coverage;
 - whether final answer and termination fields form a legal state;
-- whether a pending tool can represent an uncertain external result.
+- whether a pending side-effecting tool can represent an uncertain result.
 
 An invalid checkpoint fails that Turn with a stable code. It is never repaired
 by guessing a missing graph transition.
@@ -292,15 +376,15 @@ The coordinator classifies an unfinished Turn:
 - completed valid graph state: finish product persistence and delete the
   checkpoint;
 - valid unfinished state: offer or perform the bounded resume flow;
-- uncertain `execute` or MCP boundary: require explicit Abort/Retry with Abort
-  first;
+- uncertain file mutation, `execute`, MCP, or Web boundary: require explicit
+  Abort/Retry with Abort first;
 - missing, corrupt, inconsistent, or unrecoverable state: mark failed with a
   stable diagnostic;
 - checkpoint belonging to an already-terminal Turn: remove stale checkpoint.
 
-Retry is never implied by opening a Thread. Replaying an uncertain shell or MCP
-call could duplicate an external effect, so the choice is bound to that Thread
-and Turn and must be made explicitly.
+Retry is never implied by opening a Thread. Replaying an uncertain file
+mutation, shell, MCP, or Web call could duplicate a side effect, so the choice
+is bound to that Thread and Turn and must be made explicitly.
 
 ## Change Journal durability
 
@@ -308,11 +392,13 @@ Change metadata and pending intents live in Application SQLite; blobs live in
 `state/change-journal`; effects happen in the project filesystem. These three
 locations cannot share a single transaction.
 
-The journal writes content blobs before publishing their IDs, persists intent
-before mutation, verifies the result, then records the committed change. Undo
-and redo persist all intents before their first restore and commit one lifecycle
-transition after all restores succeed. Startup reconciliation uses pending
-evidence to finalize or roll back what it can prove.
+The journal writes content blobs before publishing their IDs. Each ordinary
+mutation then follows one durable order: commit the pending intent, mutate the
+workspace, commit the ChangeSet result, and finally commit deletion of the
+pending intent. Undo and redo persist all intents before their first restore
+and commit one lifecycle transition after all restores succeed. Startup
+reconciliation uses pending evidence to finalize or roll back what it can
+prove.
 
 SQLite uses WAL with `synchronous=NORMAL`. Blob files are synchronized before
 replacement, but the database, blob directory, and workspace have no shared
@@ -335,7 +421,10 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 | Provider credential journal is `COMMITTED` | target `.env` hash and source identity | verify the target file and roll the source forward |
 | Provider credential evidence is invalid or cannot reconcile | journal/backup remains; runtime stays unpublished or fenced | fail with `recovery_required`; do not load the half-state |
 | mutation intent persists, effect uncertain | PendingMutation + blobs | verify, finalize, or roll back |
-| shell/MCP transport fails after dispatch | conservative observation / uncertain tool state | explicit Abort or Retry |
+| materialization source changes before commit | no destination rows | return conflict; explicitly retry the command |
+| side-effecting tool fails after dispatch | conservative observation / uncertain tool state | explicit Abort or Retry |
+| migration step fails and rolls back | fixed pre-migration SQLite backup | fail startup; preserve backup for manual recovery |
+| migration rollback cannot be proved | fixed backup plus fenced database worker | fail closed; require manual diagnosis |
 | state reset fresh initialization fails | renamed original directory | restore original namespace |
 
 ## Design tradeoffs
@@ -344,8 +433,8 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
   locking part of the product contract.
 - Separate product/checkpoint databases preserve boundaries but require strict
   convergence.
-- Explicit destructive reset is less convenient than migration, but avoids
-  silently reinterpreting state.
+- Explicit destructive reset for pre-floor state is less convenient than
+  migration, but avoids silently reinterpreting unsupported state.
 - WAL and `synchronous=NORMAL` favor interactive performance over a claim of
   power-loss atomicity across databases and workspace files.
 - Conservative pending evidence may require manual diagnosis; deleting it
@@ -354,10 +443,11 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 ## Source and test map
 
 - Database schema: `storage/database.py`
+- Application SQLite owner: `storage/application_sqlite.py`
 - Conversations and trust: `storage/conversations.py`, `storage/trust.py`
 - Checkpoints: `storage/checkpoints.py`
-- Compatibility and reset: `storage/compatibility.py`,
-  `storage/state_recovery.py`
+- Compatibility, migration, and reset: `storage/compatibility.py`,
+  `storage/migrations.py`, `storage/state_recovery.py`
 - Cross-process lease: `storage/state_lease.py`
 - Change persistence: `storage/changes.py`, `core/changes/`
 - Turn recovery: `application/turns.py`
@@ -365,7 +455,8 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
   `application/provider_configuration.py`
 - Provider credential transaction: `config/credential_transaction.py`,
   `config/credentials.py`, `application/provider_configuration.py`
-- Tests: `tests/unit/storage/`, `tests/integration/test_sqlite_checkpoints.py`,
+- Tests: `tests/unit/storage/test_application_sqlite.py`,
+  `tests/unit/storage/`, `tests/integration/test_sqlite_checkpoints.py`,
   `tests/integration/test_agent_recovery.py`,
   `tests/unit/config/test_model_transaction.py`,
   `tests/unit/config/test_credential_transaction.py`,

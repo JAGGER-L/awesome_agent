@@ -27,12 +27,20 @@ bounds because malformed or mismatched local components must not corrupt state.
 Both inbound and outbound frames enforce the same strict 1 MiB UTF-8 JSON
 boundary, as described below.
 
-## Protocol v3 contract
+## Protocol v4 contract
 
-Initialization requires literal `protocol_version: 3`, client name `awesome`,
-and the same product version as Core. A v2 client fails explicitly even if its
+Initialization requires literal `protocol_version: 4`, client name `awesome`,
+and the same product version as Core. A v3 client fails explicitly even if its
 product version matches. Protocol and product versions answer different
 questions: wire compatibility versus release identity.
+
+The numeric contract identity is not copied manually between the two
+processes. `contract-versions.json` generates dependency-free literal bindings
+in `src/awesome_agent/contract_versions.py` and
+`tui/src/contract-versions.ts`; runtime code imports those bindings and never
+loads the catalog. `VERSION` remains the separate product-version owner. A
+release combines both sources into its artifact-only `compatibility.json`
+tuple instead of forcing their numbers to match.
 
 Request IDs are JSON/JavaScript-safe integers or 1–128 Unicode-scalar strings
 without unpaired UTF-16 surrogates. Numeric IDs must be integral, finite,
@@ -52,8 +60,12 @@ The current request methods are:
 | Method | Purpose |
 | --- | --- |
 | `initialize` | negotiate identity and perform startup/bootstrap |
+| `skill.list` | list valid installed User Skill packages before initialization |
+| `skill.install` | validate and install or replace one local User Skill package before initialization |
+| `skill.remove` | remove one installed User Skill package before initialization |
 | `application.getState` | read authoritative Application state |
 | `thread.list` | page workspace Threads |
+| `thread.search` | page workspace-isolated conversation substring matches |
 | `thread.read` | page one Thread and transcript projection |
 | `turn.submit` | admit natural-language foreground work |
 | `direct.execute` | admit a direct shell Operation |
@@ -68,16 +80,35 @@ cover Operation and Turn lifecycle, assistant text/reasoning deltas, provider
 retry, tool lifecycle, context preparation/compression, usage, Memory status,
 interactions, and warnings.
 
+`thread.search` deliberately reuses `ThreadListResult`, so surfaces need no
+parallel Thread-card model. The query is trimmed and bounded before Application
+SQLite performs literal substring matching under a 5,000,000 VM-op scan budget;
+the opaque cursor binds both the active Workspace and query hash and keeps RPC
+keyset pagination available. `/search` reuses the generic selection
+continuation but presents only the 50 newest matches, with a prompt to refine
+the query when more exist. An exhausted scan returns `result_too_large`.
+`/export` adds only a strict `thread_export` result whose path is 1–1,000
+characters and whose nonempty `change_set_id` is present exactly when bytes
+changed; the exhaustive presenter does not read raw files or private metadata.
+
+`/fork` reuses `thread_transition` with reason `fork`; `/retry` uses one strict
+combined `thread_retry` payload containing both a retry transition and its
+accepted Operation. Every Thread projection carries required nullable lineage,
+so root, fork, and retry identities remain explicit across Python, fixtures,
+Zod, effects, and hydration without adding another RPC or surface model.
+
 ## Cross-language evidence
 
 Python owns serialization of method results, `CommandOutcome` variants, and
 events. `scripts/generate_protocol_fixtures.py` writes deterministic valid and
-invalid fixtures under `protocol/fixtures/v3/`. TypeScript Zod schemas validate
+invalid fixtures under `protocol/fixtures/v4/`. TypeScript Zod schemas validate
 the same corpus.
 
 ```text
+contract-versions.json
+  -> generated Python + TypeScript literal bindings
 Python Pydantic contracts
-  -> generated v3 fixtures + manifest hashes
+  -> generated v4 fixtures + manifest hashes
   -> TypeScript strict Zod schemas
   -> protocol contract tests
   -> exhaustive reducers/presenters
@@ -90,29 +121,57 @@ at compile time.
 
 ## Handshake state machine
 
-The stdio Host gates Application access:
+`LocalApplication` owns the only `ApplicationBootstrap` and the only mutable
+`BootstrapPhase`. The state machine is therefore an Application lifecycle
+component, not stdio Host state:
 
 ```text
 UNINITIALIZED
-  -> initialize in flight: INITIALIZING
-  -> ready result: READY
-  -> trust_required/state_reset_required: BOOTSTRAP_INTERACTION
-  -> failure: previous state
+  -> skill.* starts: PREINITIALIZE_ACTIVE
+  -> initialize starts: INITIALIZING
 
-BOOTSTRAP_INTERACTION
-  -> matching interaction.respond
-  -> trust accepted: READY
-  -> reset accepted: initialize again
+PREINITIALIZE_ACTIVE (guard; BootstrapPhase remains UNINITIALIZED)
+  -> result/error/cancellation after the owned worker converges: UNINITIALIZED
+  -> another skill.* or initialize: reject
+
+INITIALIZING
+  -> ready result: READY
+  -> trust_required result: TRUST_REQUIRED
+  -> state_reset_required result: STATE_RESET_REQUIRED
+  -> failure/cancellation: previous phase
+
+TRUST_REQUIRED
+  -> matching trust accepted after activation: READY
+
+STATE_RESET_REQUIRED
+  -> matching reset accepted: remain non-ready
+  -> initialize again
 ```
 
-Before `READY`, ordinary requests receive a stable server-not-initialized or
-server-not-ready error. A second concurrent initialize receives
-`initialization_in_progress`. During bootstrap, only the matching interaction,
-another initialize, cancellation, and shutdown are admitted. A malformed or v2
-initialize never opens the gate.
+Before dispatch, the Host maps the method to the closed
+`ApplicationOperation` set and asks Application for an admission decision. It
+only translates a rejection to the wire; it does not maintain another phase
+enum or inspect serialized request/result payloads to advance readiness.
+
+The three private `skill.*` methods are the only ordinary-looking methods
+available at plain `UNINITIALIZED`. They share one Application-owned
+pre-initialize guard, are mutually exclusive with one another and with
+`initialize`, and never initialize Application themselves. After one completes,
+a private client may initialize the same Core and discovery observes the changed
+User package tree. The official `awesome skills` CLI instead performs one
+request and closes Core. Neither path hot-updates an already initialized
+Session's immutable catalog.
+
+Before `READY`, all other ordinary requests receive a stable
+server-not-initialized or server-not-ready error. Once initialization starts,
+`skill.*` is no longer admitted. A second concurrent initialize receives
+`initialization_in_progress`; the matching bootstrap interaction, cancellation,
+and shutdown retain their defined control paths. A malformed or v3 initialize
+never advances the Application phase.
 
 Initialization remains repeatable after `READY` so a surface retry can observe
-the current snapshot without creating a second Application.
+the current snapshot without creating a second Application. These ownership
+rules preserve one Application-owned Protocol v4 request, result, status, and error shape.
 
 ## Framing and dispatch bounds
 
@@ -155,6 +214,16 @@ race the matching response. The TUI installs the event consumer before issuing
 requests and treats event correlation IDs as authoritative, so early events do
 not depend on response-first buffering.
 
+Retry adds one local ordering gate because its events name a Thread the surface
+cannot install until the combined response arrives. `ConnectedSurface` opens
+the gate before `command.execute`, buffers the event stream in sequence, and
+releases it only after the authoritative retry transition has incremented the
+Thread generation and the returned Operation identity has been bound to that
+generation. The local gate is capped at 1,024 events and 4 MiB of encoded
+content. A capacity or Operation/Thread/Turn identity violation is fatal
+protocol desynchronization. A rejected retry replays valid source-Thread
+events instead of dropping them.
+
 `thread.read` first shrinks its page under its application byte budget. The
 writer is the final invariant boundary for every method and event: if any
 request result still exceeds 1 MiB, Core sends a bounded `result_too_large`
@@ -173,7 +242,7 @@ Core sends facts, not preformatted terminal widgets:
 
 ```text
 Application fact
-  -> Protocol v3 payload
+  -> Protocol v4 payload
   -> optional authoritative Surface effect
   -> exhaustive presentCommandPayload()
   -> CommandPresentation
@@ -190,6 +259,14 @@ Shared components own borders, wrapping, alignment, symbols, and semantic
 colors. They do not accept arbitrary records for stringification. This costs
 more code for a new command but prevents accidental leakage of internal JSON or
 secrets.
+
+Protocol v4 makes citations part of the same durable projection rather than a
+parallel event stream. Assistant-entry metadata carries ordered strict
+`Citation` values; transcript hydration preserves them, reconciliation rejects
+stale replacements, and `BlockView` links only markers whose IDs exist in that
+entry's catalog. Unknown `[[S...]]` markers remain plain text. Finalization has
+already appended a bounded Sources section when Web was used without any valid
+marker.
 
 ## Surface state versus presentation state
 
@@ -208,6 +285,54 @@ They do not enter the protocol or product database.
 The distinction prevents restoring a Thread from also restoring stale UI
 controls. A new surface can adapt the same facade/events while choosing a
 different presentation model.
+
+## Session-local orchestration
+
+Two concrete controllers keep request sequencing out of large React
+components without introducing a global store or a second product runtime:
+
+- `StartupSessionController` binds one connected Surface and launch intent. It
+  continues typed trust, state-reset, and startup Thread-selection outcomes by
+  calling the existing startup protocol functions. It does not own or infer
+  Application bootstrap phases.
+- `SubmissionCoordinator` owns the transaction for one promoted terminal
+  input: parse at promotion time, capture the Thread generation, correlate an
+  optimistic `client_message_id`, request Core admission, and reject late
+  projection after a Thread replacement.
+
+Composer history, modal selection, notices, and the pending-input queue remain
+React presentation state. The coordinator never drains input independently;
+Core still admits the single foreground Operation.
+
+## Headless surface
+
+`awesome run` is a second presentation mode of the same TypeScript launcher,
+not a second product runtime. It connects one `ConnectedSurface`, invokes the
+same `beginStartup` flow through `StartupSessionController`, selects or creates
+a Thread through existing commands, submits through Protocol v4, and hydrates
+the durable final assistant entry with `thread.read`. Python Application remains
+the only lifecycle and mutation authority.
+
+The runner does not render Ink or consume terminal input. Parent stdout is
+reserved for one successful final text value or one versioned JSON document;
+diagnostics use parent stderr. Core child stdout remains private NDJSON and is
+never forwarded as command output. This separation makes redirected output
+deterministic while reusing Protocol v4.
+
+JSON output version 2 contains the durable text, ordered `citations`,
+`usage.web_requests`, IDs, termination reason, and the other usage counters.
+Text mode renders the already-finalized answer, including any Sources section.
+
+An unresolved interaction is a terminal headless outcome: the runner requests
+cancellation of an admitted Operation and returns code 3 instead of inventing
+an approval. SIGINT follows the same urgent `operation.cancel` method, makes a
+bounded cancellation attempt, suppresses result output, and returns 130. The
+launcher then performs bounded Surface/Core shutdown, including forced
+process-tree termination when graceful close cannot complete.
+
+The parsed `--allow-network` value is process-local authority for one exact
+`network.read` interaction belonging to the active headless Turn. It resolves
+that prompt as `allow_once`; it cannot create a Thread grant or bypass denial.
 
 ## Input ownership
 
@@ -237,15 +362,26 @@ Composer uses Ink's physical cursor, not a printed block glyph:
 ```text
 grapheme-aware logical cursor
   -> display-width-aware viewport row/column
+  -> current Ink Yoga layout in the Composer insertion phase
   -> React TerminalFrameMetrics
-  -> InkCursorBridge
-  -> useCursor physical terminal position
+  -> InkCursorBridge fullscreen adjustment
+  -> ancestor useCursor physical terminal position
 ```
 
-The bridge isolates an Ink 7.1 fullscreen convention where a frame filling the
-viewport omits a trailing newline. Terminal frame metrics remain local
-presentation state. A future Ink upgrade can remove the bridge only after
-below-, equal-, and above-viewport ANSI regressions still pass.
+`TerminalSurfaceLayout` owns `useCursor`. On every commit with an active
+Composer, the descendant insertion effect recomputes the current Ink Yoga
+layout after host mutations and publishes that position before the ancestor
+cursor effect runs. Streaming content and its cursor therefore come from the
+same layout; cached `useBoxMetrics` coordinates only gate initial readiness and
+request the first ancestor cursor commit, and never position a current frame.
+
+The bridge also isolates an Ink 7.1 fullscreen convention where a frame
+filling the viewport omits a trailing newline. The synchronous layout pass adds
+one extra Yoga calculation while the Composer is active, but preserves natural
+terminal flow and terminal-host IME rendering. Terminal frame metrics remain
+local presentation state. A future Ink upgrade can remove either workaround
+only after per-frame cursor regressions below, equal to, and above the viewport,
+plus resize and Composer remount regressions, still pass.
 
 IME preedit remains a responsibility of the terminal host. Composer logic
 operates on submitted grapheme input rather than attempting to render platform
@@ -265,7 +401,8 @@ terminal inputs. The queue is deliberately session-only:
 - each head is parsed only when promoted;
 - an empty Composer can recall the tail with Up;
 - a picker or approval pauses promotion;
-- `/new` and `/resume` change which Thread receives the following item;
+- `/new`, `/resume`, `/fork`, and `/retry` change which Thread receives the
+  following item;
 - queued `/quit` is an ordered terminal barrier;
 - a retryable busy race requeues the same identity at the head.
 
@@ -283,6 +420,11 @@ detail, duration, and error code.
 entries. Thread replacement increments a generation, clears the active frame,
 installs the authoritative Application/Thread snapshot, and rejects late events
 from the previous generation. Event sequence detects duplicates and gaps.
+
+For retry, replacement is installed before any buffered event is projected.
+The accepted Operation's start and later deltas therefore enter the new
+generation even when they arrived on stdio before the command response; they
+can never appear on the source Thread.
 
 After reconnect or resume, `thread.read` is the durable source. Live projections
 are merged by stable identity instead of appended blindly, preventing duplicate
@@ -336,8 +478,9 @@ their filesystem or network access.
 
 - Python schemas and methods: `protocol/jsonrpc.py`
 - Host framing and dispatch: `protocol/stdio.py`
-- Fixtures: `protocol/fixtures/v3/`, `scripts/generate_protocol_fixtures.py`
+- Fixtures: `protocol/fixtures/v4/`, `scripts/generate_protocol_fixtures.py`
 - Core process adapter: `tui/src/core/process.ts`
+- Headless runner: `tui/src/cli/headless.ts`, `tui/src/cli/main.tsx`
 - TypeScript schemas: `tui/src/protocol/`
 - Surface reducer: `tui/src/state/`
 - Input modes: `tui/src/interaction/`, `tui/src/components/Composer.tsx`

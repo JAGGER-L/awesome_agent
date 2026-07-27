@@ -1,5 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startCore } from "../../src/core/process.js";
 import { PRODUCT_VERSION } from "../../src/version.js";
 import { createCoreWrapper } from "../fixtures/core-wrapper.js";
+import { createCanonicalTemporaryRoot } from "../fixtures/temporary-root.js";
 
 const temporary: string[] = [];
 
@@ -23,7 +23,7 @@ describe("real Python stdio channel ownership", () => {
     "deepseek",
     "kimi",
   ])("keeps %s protocol on Core stdout and logs on Core stderr", async (provider) => {
-    const root = await mkdtemp(join(tmpdir(), "awesome-stdio-"));
+    const root = await createCanonicalTemporaryRoot("awesome-stdio-");
     temporary.push(root);
     const home = join(root, "home");
     const workspace = join(root, "workspace");
@@ -52,7 +52,7 @@ describe("real Python stdio channel ownership", () => {
 
     try {
       const initialized = await session.rpc.request("initialize", {
-        protocol_version: 3,
+        protocol_version: 4,
         client_name: "awesome",
         client_version: PRODUCT_VERSION,
       });

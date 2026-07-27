@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -28,10 +28,10 @@ from awesome_agent.config import (
     missing_provider_credential_statuses,
 )
 from awesome_agent.config.loader import read_user_config_document
-from awesome_agent.config.resource_lock import exclusive_resource_lock
 from awesome_agent.context import ContextBuilder
 from awesome_agent.conversation import ConversationService, UsageSummary
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
+from awesome_agent.core.resource_lock import exclusive_resource_lock
 from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
@@ -52,8 +52,19 @@ from awesome_agent.memory import (
     MemoryScope,
 )
 from awesome_agent.paths import AwesomePaths
-from awesome_agent.storage import SQLiteMcpEnablementStore
+from awesome_agent.storage import ApplicationSQLite, SQLiteMcpEnablementStore
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+
+
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    paths = AwesomePaths.from_home(tmp_path / "home")
+    database = ApplicationSQLite(paths.application_db)
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
 
 
 def _config() -> TurnConfig:
@@ -94,15 +105,16 @@ def _fill_registry(registry: ToolRegistry, count: int) -> None:
 @pytest.mark.asyncio
 async def test_local_memory_command_lock_wait_keeps_event_loop_schedulable(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
     paths = AwesomePaths.from_home(tmp_path / "home")
     conversation = ConversationService(
-        store=SQLiteConversationRepositories(paths.application_db)
+        store=SQLiteConversationRepositories(application_database)
     )
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     registry = ToolRegistry()
     memory = LocalMemoryService(
         paths=paths,
@@ -110,15 +122,14 @@ async def test_local_memory_command_lock_wait_keeps_event_loop_schedulable(
         enabled=True,
         id_factory=lambda: "memory_11111111111111111111111111111111",
     )
-    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    enablements = SQLiteMcpEnablementStore(application_database)
     extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=SkillCatalog((), ()),
         manager=McpManager(
             configs=(),
-            workspace_key=workspace.key,
             workspace_trusted=True,
-            enablements=enablements,
+            enablements=await enablements.snapshot(workspace.key),
             registry=registry,
         ),
         enablements=enablements,
@@ -161,28 +172,28 @@ async def test_local_memory_command_lock_wait_keeps_event_loop_schedulable(
 @pytest.mark.asyncio
 async def test_local_memory_enable_capacity_failure_changes_no_state(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
     paths = AwesomePaths.from_home(tmp_path / "home")
     conversation = ConversationService(
-        store=SQLiteConversationRepositories(paths.application_db)
+        store=SQLiteConversationRepositories(application_database)
     )
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     registry = ToolRegistry()
     _fill_registry(registry, 125)
     before = registry.specifications()
     local_memory = LocalMemoryService(paths=paths, workspace_key=workspace.key)
-    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    enablements = SQLiteMcpEnablementStore(application_database)
     extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=SkillCatalog((), ()),
         manager=McpManager(
             configs=(),
-            workspace_key=workspace.key,
             workspace_trusted=True,
-            enablements=enablements,
+            enablements=await enablements.snapshot(workspace.key),
             registry=registry,
         ),
         enablements=enablements,
@@ -211,29 +222,29 @@ async def test_local_memory_enable_capacity_failure_changes_no_state(
 async def test_local_memory_enable_config_failure_changes_no_runtime_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
     paths = AwesomePaths.from_home(tmp_path / "home")
     conversation = ConversationService(
-        store=SQLiteConversationRepositories(paths.application_db)
+        store=SQLiteConversationRepositories(application_database)
     )
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     registry = ToolRegistry()
     _fill_registry(registry, 1)
     before = registry.specifications()
     local_memory = LocalMemoryService(paths=paths, workspace_key=workspace.key)
     writer = UserConfigWriter(paths.config_file)
-    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    enablements = SQLiteMcpEnablementStore(application_database)
     extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=SkillCatalog((), ()),
         manager=McpManager(
             configs=(),
-            workspace_key=workspace.key,
             workspace_trusted=True,
-            enablements=enablements,
+            enablements=await enablements.snapshot(workspace.key),
             registry=registry,
         ),
         enablements=enablements,
@@ -267,28 +278,28 @@ async def test_local_memory_enable_config_failure_changes_no_runtime_state(
 async def test_cancelled_local_memory_disable_commits_one_coherent_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
     paths = AwesomePaths.from_home(tmp_path / "home")
     conversation = ConversationService(
-        store=SQLiteConversationRepositories(paths.application_db)
+        store=SQLiteConversationRepositories(application_database)
     )
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     registry = ToolRegistry()
     _fill_registry(registry, 1)
     local_memory = LocalMemoryService(paths=paths, workspace_key=workspace.key)
     writer = UserConfigWriter(paths.config_file)
-    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    enablements = SQLiteMcpEnablementStore(application_database)
     extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=SkillCatalog((), ()),
         manager=McpManager(
             configs=(),
-            workspace_key=workspace.key,
             workspace_trusted=True,
-            enablements=enablements,
+            enablements=await enablements.snapshot(workspace.key),
             registry=registry,
         ),
         enablements=enablements,
@@ -342,14 +353,15 @@ async def test_cancelled_local_memory_disable_commits_one_coherent_state(
 @pytest.mark.asyncio
 async def test_offline_command_tool_context_conflict_and_restart_flow(
     tmp_path: Path,
+    application_database: ApplicationSQLite,
 ) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
     paths = AwesomePaths.from_home(tmp_path / "home")
-    repositories = SQLiteConversationRepositories(paths.application_db)
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     ids = iter(f"memory_{index:032x}" for index in range(1, 10))
     memory = LocalMemoryService(
         paths=paths,
@@ -359,18 +371,18 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
     registry = ToolRegistry()
     register_read_tools(registry)
     catalog = SkillCatalog((), ())
+    enablements = SQLiteMcpEnablementStore(application_database)
 
     extensions = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
         manager=McpManager(
             configs=(),
-            workspace_key=workspace.key,
             workspace_trusted=True,
-            enablements=SQLiteMcpEnablementStore(paths.application_db),
+            enablements=await enablements.snapshot(workspace.key),
             registry=registry,
         ),
-        enablements=SQLiteMcpEnablementStore(paths.application_db),
+        enablements=enablements,
         workspace_key=workspace.key,
         registry=registry,
         current_thread_id=lambda: thread.id,
@@ -425,7 +437,7 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
     entries = listed.payload.entries
     assert entries[0].content == "Prefer concise answers."
 
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread.id,
         "remember editor preference",
         _config(),
@@ -453,14 +465,14 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
                 workspace_key=workspace.key,
                 sink=CollectingEventSink(),
             ),
-            activity_writer=repositories.tool_activities,
+            activity_writer=repositories,
             monotonic=time.monotonic,
         ),
     )
     assert tool_result.status is ToolStatus.SUCCESS
-    assert conversation.read_thread(thread.id).tool_activities[-1].tool_name == (
-        "memory_add"
-    )
+    assert (await conversation.read_thread(thread.id)).tool_activities[
+        -1
+    ].tool_name == "memory_add"
 
     context_service = ApplicationContextService(
         conversation=conversation,
@@ -513,9 +525,9 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
         )
     )
     assert any(item["kind"] == "user_memory" for item in frozen.manifest)
-    conversation.complete_turn(turn.id, "done", UsageSummary(), "completed")
+    await conversation.complete_turn(turn.id, "done", UsageSummary(), "completed")
 
-    next_turn = conversation.begin_turn(
+    next_turn = await conversation.begin_turn(
         thread.id, "next", _config(), client_message_id="client_next"
     )
     context_service.prepare_turn(next_turn, "next")
@@ -546,28 +558,31 @@ async def test_offline_command_tool_context_conflict_and_restart_flow(
 
 
 @pytest.mark.asyncio
-async def test_memory_command_grammar_and_mem0_are_explicit(tmp_path: Path) -> None:
+async def test_memory_command_grammar_and_mem0_are_explicit(
+    tmp_path: Path,
+    application_database: ApplicationSQLite,
+) -> None:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
     workspace = resolve_workspace(workspace_path)
     paths = AwesomePaths.from_home(tmp_path / "home")
-    repositories = SQLiteConversationRepositories(paths.application_db)
+    repositories = SQLiteConversationRepositories(application_database)
     conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     catalog = SkillCatalog((), ())
     registry = ToolRegistry()
+    enablements = SQLiteMcpEnablementStore(application_database)
 
     service = ApplicationExtensionService(
         conversation=conversation,
         catalog=catalog,
         manager=McpManager(
             configs=(),
-            workspace_key=workspace.key,
             workspace_trusted=True,
-            enablements=SQLiteMcpEnablementStore(paths.application_db),
+            enablements=await enablements.snapshot(workspace.key),
             registry=registry,
         ),
-        enablements=SQLiteMcpEnablementStore(paths.application_db),
+        enablements=enablements,
         workspace_key=workspace.key,
         registry=registry,
         current_thread_id=lambda: thread.id,

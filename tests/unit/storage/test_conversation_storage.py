@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import threading
+from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import awesome_agent.storage.conversations as conversation_storage_module
 from awesome_agent.config import BudgetConfig
 from awesome_agent.conversation import (
     ConversationConflict,
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadLineage,
+    ThreadSearchLimitExceeded,
     ThreadSummary,
     ThreadTitleSource,
     ToolActivity,
@@ -25,12 +30,26 @@ from awesome_agent.conversation import (
     UsageSummary,
 )
 from awesome_agent.core.tools import ToolActivityDraft, ToolExecutionOrigin
-from awesome_agent.storage.conversations import SQLiteConversationRepositories
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
+from awesome_agent.storage.conversations import (
+    SQLiteConversationRepositories,
+    SQLiteThreadEntryRepository,
+    SQLiteThreadRepository,
+    SQLiteThreadSummaryRepository,
+    SQLiteToolActivityRepository,
+    SQLiteTurnRepository,
+)
 from awesome_agent.storage.database import (
     APPLICATION_SCHEMA_VERSION,
-    application_connection,
-    initialize_application_database,
 )
+
+pytestmark = pytest.mark.asyncio
+
+_THREADS = SQLiteThreadRepository()
+_ENTRIES = SQLiteThreadEntryRepository()
+_TURNS = SQLiteTurnRepository()
+_SUMMARIES = SQLiteThreadSummaryRepository()
+_ACTIVITIES = SQLiteToolActivityRepository()
 
 
 def _now() -> datetime:
@@ -64,7 +83,9 @@ def _entry(
         client_message_id=(
             f"client_{identifier}" if kind is ThreadEntryKind.USER_MESSAGE else None
         ),
-        metadata={"z": 1, "a": True},
+        metadata=(
+            {} if kind is ThreadEntryKind.ASSISTANT_MESSAGE else {"z": 1, "a": True}
+        ),
         created_at=_now(),
     )
 
@@ -92,29 +113,110 @@ def _turn(
     )
 
 
-def test_application_schema_creates_only_product_state_tables(
-    tmp_path: Path,
+@pytest.fixture
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "application.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
+
+
+async def _wait_for(event: threading.Event) -> None:
+    for _ in range(1_000):
+        if event.is_set():
+            return
+        await asyncio.sleep(0.001)
+    pytest.fail("worker operation did not start")
+
+
+async def _create_thread(database: ApplicationSQLite, thread: Thread) -> Thread:
+    return await database.write(
+        lambda connection: _THREADS.create(thread, connection=connection)
+    )
+
+
+async def _append_entry(
+    database: ApplicationSQLite,
+    entry: ThreadEntry,
+) -> ThreadEntry:
+    return await database.write(
+        lambda connection: _ENTRIES.append(entry, connection=connection)
+    )
+
+
+async def _create_turn(database: ApplicationSQLite, turn: Turn) -> Turn:
+    return await database.write(
+        lambda connection: _TURNS.create(turn, connection=connection)
+    )
+
+
+async def _get_thread(
+    database: ApplicationSQLite,
+    thread_id: str,
+) -> Thread | None:
+    return await database.read(
+        lambda connection: _THREADS.get(thread_id, connection=connection)
+    )
+
+
+async def _list_entries(
+    database: ApplicationSQLite,
+    thread_id: str,
+) -> Sequence[ThreadEntry]:
+    return await database.read(
+        lambda connection: _ENTRIES.list(thread_id, connection=connection)
+    )
+
+
+async def _get_turn(database: ApplicationSQLite, turn_id: str) -> Turn | None:
+    return await database.read(
+        lambda connection: _TURNS.get(turn_id, connection=connection)
+    )
+
+
+async def _append_activity(
+    database: ApplicationSQLite,
+    activity: ToolActivity,
+) -> ToolActivity:
+    return await database.write(
+        lambda connection: _ACTIVITIES.append(activity, connection=connection)
+    )
+
+
+async def test_application_schema_creates_only_product_state_tables(
+    application_database: ApplicationSQLite,
 ) -> None:
-    path = tmp_path / "application.db"
-
-    initialize_application_database(path)
-
-    with application_connection(path) as connection:
+    def inspect(
+        connection: sqlite3.Connection,
+    ) -> tuple[int, set[str], set[str], list[str]]:
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         tables = {
-            row[0]
+            str(row[0])
             for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             ).fetchall()
         }
         indexes = {
-            row[0]
+            str(row[0])
             for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'index'"
             ).fetchall()
         }
+        thread_index_columns = [
+            str(row[2])
+            for row in connection.execute(
+                "PRAGMA index_info(idx_threads_workspace_updated)"
+            ).fetchall()
+        ]
+        return int(version), tables, indexes, thread_index_columns
 
-    assert version == APPLICATION_SCHEMA_VERSION == 7
+    version, tables, indexes, thread_index_columns = await application_database.read(
+        inspect
+    )
+
+    assert version == APPLICATION_SCHEMA_VERSION == 8
     assert {
         "trusted_workspaces",
         "change_sets",
@@ -134,173 +236,190 @@ def test_application_schema_creates_only_product_state_tables(
         "idx_tool_activities_thread_turn",
     } <= indexes
     assert not {"runs", "jobs", "leases", "attempts", "event_store"} & tables
-    with application_connection(path) as connection:
-        thread_index_columns = [
-            row[2]
-            for row in connection.execute(
-                "PRAGMA index_info(idx_threads_workspace_updated)"
-            ).fetchall()
-        ]
     assert thread_index_columns == ["workspace_key", "updated_at", "thread_id"]
 
 
-def test_current_schema_accepts_new_identity_and_rejects_duplicate(
-    tmp_path: Path,
+async def test_current_schema_accepts_new_identity_and_rejects_duplicate(
+    application_database: ApplicationSQLite,
 ) -> None:
-    path = tmp_path / "application.db"
-    repositories = SQLiteConversationRepositories(path)
-    repositories.threads.create(_thread())
+    await _create_thread(application_database, _thread())
 
-    repositories.entries.append(_entry("entry_new", sequence=1))
+    await _append_entry(application_database, _entry("entry_new", sequence=1))
 
     with pytest.raises(ConversationConflict):
-        repositories.entries.append(
+        await _append_entry(
+            application_database,
             _entry(
                 "entry_duplicate",
                 sequence=2,
-            ).model_copy(update={"client_message_id": "client_entry_new"})
+            ).model_copy(update={"client_message_id": "client_entry_new"}),
         )
 
 
-def test_repositories_persist_and_reopen_ordered_thread_state(tmp_path: Path) -> None:
-    path = tmp_path / "application.db"
-    repositories = SQLiteConversationRepositories(path)
-    repositories.threads.create(_thread())
-    repositories.entries.append(_entry("entry_2", sequence=2))
-    repositories.entries.append(_entry("entry_1", sequence=1))
-    repositories.turns.create(_turn())
+async def test_thread_lineage_round_trips_and_survives_updates(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    lineage = ThreadLineage(
+        kind="fork",
+        source_thread_id="thread_source",
+        source_turn_id="turn_source",
+    )
+    thread = _thread().model_copy(update={"lineage": lineage})
 
-    reopened = SQLiteConversationRepositories(path)
-    reopened_thread = reopened.threads.get("thread_1")
+    await repositories.create_thread(thread)
+    updated = await repositories.set_thread_model(
+        thread.id,
+        "deepseek/updated",
+        updated_at=thread.updated_at + timedelta(seconds=1),
+    )
+    reopened = await repositories.read_thread(thread.id)
 
-    assert reopened_thread == _thread_from_store(repositories)
-    assert reopened_thread is not None
+    assert updated.lineage == lineage
+    assert reopened.thread.lineage == lineage
+
+
+async def test_repositories_persist_and_reopen_ordered_thread_state(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    expected_thread = _thread()
+    await _create_thread(application_database, expected_thread)
+    await _append_entry(application_database, _entry("entry_2", sequence=2))
+    await _append_entry(application_database, _entry("entry_1", sequence=1))
+    await _create_turn(application_database, _turn())
+
+    reopened = SQLiteConversationRepositories(application_database)
+    reopened_view = await reopened.read_thread("thread_1")
+    original_view = await repositories.read_thread("thread_1")
+    reopened_thread = reopened_view.thread
+
+    assert reopened_thread == original_view.thread == expected_thread
     assert reopened_thread.title_source is ThreadTitleSource.AUTOMATIC
-    assert [entry.id for entry in reopened.entries.list("thread_1")] == [
+    assert [entry.id for entry in reopened_view.entries] == [
         "entry_1",
         "entry_2",
     ]
-    assert reopened.turns.get("turn_1") == repositories.turns.get("turn_1")
+    assert reopened_view.turns == original_view.turns
 
 
-def _thread_from_store(repositories: SQLiteConversationRepositories) -> Thread:
-    thread = repositories.threads.get("thread_1")
-    assert thread is not None
-    return thread
-
-
-def test_entry_sequence_is_unique_per_thread(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    repositories.threads.create(_thread())
-    repositories.entries.append(_entry("entry_1", sequence=1))
+async def test_entry_sequence_is_unique_per_thread(
+    application_database: ApplicationSQLite,
+) -> None:
+    await _create_thread(application_database, _thread())
+    await _append_entry(application_database, _entry("entry_1", sequence=1))
 
     with pytest.raises(ConversationConflict):
-        repositories.entries.append(_entry("entry_2", sequence=1))
+        await _append_entry(application_database, _entry("entry_2", sequence=1))
 
 
-def test_only_one_in_progress_turn_exists_per_thread(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    repositories.threads.create(_thread())
-    repositories.entries.append(_entry("entry_1", sequence=1))
-    repositories.entries.append(_entry("entry_2", sequence=2))
-    repositories.turns.create(_turn())
+async def test_only_one_in_progress_turn_exists_per_thread(
+    application_database: ApplicationSQLite,
+) -> None:
+    await _create_thread(application_database, _thread())
+    await _append_entry(application_database, _entry("entry_1", sequence=1))
+    await _append_entry(application_database, _entry("entry_2", sequence=2))
+    await _create_turn(application_database, _turn())
 
     with pytest.raises(TurnBusy):
-        repositories.turns.create(_turn("turn_2", user_entry_id="entry_2"))
+        await _create_turn(
+            application_database,
+            _turn("turn_2", user_entry_id="entry_2"),
+        )
 
-    repositories.threads.create(_thread("thread_2"))
-    repositories.entries.append(_entry("entry_other", thread_id="thread_2", sequence=1))
-    other = repositories.turns.create(
+    await _create_thread(application_database, _thread("thread_2"))
+    await _append_entry(
+        application_database,
+        _entry("entry_other", thread_id="thread_2", sequence=1),
+    )
+    other = await _create_turn(
+        application_database,
         _turn(
             "turn_other",
             thread_id="thread_2",
             user_entry_id="entry_other",
-        )
+        ),
     )
     assert other.thread_id == "thread_2"
 
 
-def test_foreign_keys_reject_cross_thread_turn_entry(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    repositories.threads.create(_thread())
-    repositories.threads.create(_thread("thread_2"))
-    repositories.entries.append(_entry("entry_other", thread_id="thread_2", sequence=1))
+async def test_foreign_keys_reject_cross_thread_turn_entry(
+    application_database: ApplicationSQLite,
+) -> None:
+    await _create_thread(application_database, _thread())
+    await _create_thread(application_database, _thread("thread_2"))
+    await _append_entry(
+        application_database,
+        _entry("entry_other", thread_id="thread_2", sequence=1),
+    )
 
     with pytest.raises(ConversationConflict):
-        repositories.turns.create(_turn(user_entry_id="entry_other"))
+        await _create_turn(application_database, _turn(user_entry_id="entry_other"))
 
 
-def test_repository_transaction_rolls_back_multirow_failure(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-
-    with (
-        pytest.raises(RuntimeError, match="rollback"),
-        repositories.transaction() as connection,
-    ):
-        repositories.threads.create(_thread(), connection=connection)
-        repositories.entries.append(
+async def test_repository_transaction_rolls_back_multirow_failure(
+    application_database: ApplicationSQLite,
+) -> None:
+    def fail_transaction(connection: sqlite3.Connection) -> None:
+        _THREADS.create(_thread(), connection=connection)
+        _ENTRIES.append(
             _entry("entry_1", sequence=1),
             connection=connection,
         )
         raise RuntimeError("rollback")
 
-    assert repositories.threads.get("thread_1") is None
+    with pytest.raises(RuntimeError, match="rollback"):
+        await application_database.write(fail_transaction)
+
+    assert await _get_thread(application_database, "thread_1") is None
 
 
 @pytest.mark.parametrize("reader", ("full", "page"))
-def test_thread_snapshot_reads_do_not_compete_for_the_sqlite_writer_lock(
-    tmp_path: Path,
+async def test_thread_snapshot_reads_queue_without_blocking_the_event_loop(
+    application_database: ApplicationSQLite,
     reader: str,
 ) -> None:
-    path = tmp_path / f"snapshot-{reader}.db"
-    writer = SQLiteConversationRepositories(path)
-    snapshot = SQLiteConversationRepositories(path)
-    writer.threads.create(_thread())
-    completed = threading.Event()
-    observed: list[object] = []
-    errors: list[BaseException] = []
+    snapshot = SQLiteConversationRepositories(application_database)
+    await _create_thread(application_database, _thread())
+    writer_started = threading.Event()
+    release_writer = threading.Event()
 
-    def read_snapshot() -> None:
-        try:
-            if reader == "full":
-                observed.append(snapshot.read_thread("thread_1"))
-            else:
-                observed.append(
-                    snapshot.read_thread_page(
-                        "thread_1",
-                        before_sequence=None,
-                        limit=10,
-                    )
-                )
-        except BaseException as error:
-            errors.append(error)
-        finally:
-            completed.set()
+    def reserve_writer(_connection: sqlite3.Connection) -> None:
+        writer_started.set()
+        release_writer.wait()
 
-    with writer.transaction():
-        reader_thread = threading.Thread(target=read_snapshot)
-        reader_thread.start()
-        completed_while_writer_reserved = completed.wait(timeout=0.5)
+    writer = asyncio.create_task(application_database.write(reserve_writer))
+    await _wait_for(writer_started)
 
-    reader_thread.join(timeout=5)
+    async def read_snapshot() -> object:
+        if reader == "full":
+            return await snapshot.read_thread("thread_1")
+        return await snapshot.read_thread_page(
+            "thread_1",
+            before_sequence=None,
+            limit=10,
+        )
 
-    assert completed_while_writer_reserved
-    assert not reader_thread.is_alive()
-    assert errors == []
-    assert len(observed) == 1
+    read = asyncio.create_task(read_snapshot())
+    await asyncio.sleep(0.01)
+
+    assert read.done() is False
+
+    release_writer.set()
+    await writer
+    observed = await read
+    assert observed is not None
 
 
 @pytest.mark.parametrize("winner", ("manifest", "cancel"))
-def test_turn_manifest_and_terminal_writes_are_monotonic_across_connections(
-    tmp_path: Path,
+async def test_turn_manifest_and_terminal_writes_are_monotonic_in_worker_order(
+    application_database: ApplicationSQLite,
     winner: str,
 ) -> None:
-    path = tmp_path / f"turn-race-{winner}.db"
-    first = SQLiteConversationRepositories(path)
-    second = SQLiteConversationRepositories(path)
-    first.threads.create(_thread())
-    first.entries.append(_entry("entry_1", sequence=1))
-    original = first.turns.create(_turn())
+    second = SQLiteConversationRepositories(application_database)
+    await _create_thread(application_database, _thread())
+    await _append_entry(application_database, _entry("entry_1", sequence=1))
+    original = await _create_turn(application_database, _turn())
     updated_manifest = ({"kind": "current_input", "order": 2},)
     manifest_update = original.model_copy(
         update={
@@ -318,52 +437,36 @@ def test_turn_manifest_and_terminal_writes_are_monotonic_across_connections(
             }
         ).model_dump()
     )
-    winner_locked = threading.Event()
+    winner_started = threading.Event()
     release_winner = threading.Event()
-    loser_started = threading.Event()
-    loser_finished = threading.Event()
-    loser_errors: list[BaseException] = []
 
-    def commit_winner() -> None:
-        with first.transaction() as connection:
-            winner_locked.set()
-            assert release_winner.wait(timeout=5)
-            first.turns.update(
-                manifest_update if winner == "manifest" else cancelled,
-                connection=connection,
+    def commit_winner(connection: sqlite3.Connection) -> None:
+        winner_started.set()
+        assert release_winner.wait(timeout=5)
+        _TURNS.update(
+            manifest_update if winner == "manifest" else cancelled,
+            connection=connection,
+        )
+
+    winner_task = asyncio.create_task(application_database.write(commit_winner))
+    await _wait_for(winner_started)
+    if winner == "manifest":
+        loser_task = asyncio.create_task(second.update_terminal_turn(cancelled))
+    else:
+        loser_task = asyncio.create_task(
+            second.update_in_progress_turn(
+                manifest_update,
+                expected_context_manifest=original.context_manifest,
             )
-
-    def commit_loser() -> None:
-        loser_started.set()
-        try:
-            if winner == "manifest":
-                second.update_terminal_turn(cancelled)
-            else:
-                second.update_in_progress_turn(
-                    manifest_update,
-                    expected_context_manifest=original.context_manifest,
-                )
-        except BaseException as error:
-            loser_errors.append(error)
-        finally:
-            loser_finished.set()
-
-    winner_thread = threading.Thread(target=commit_winner)
-    loser_thread = threading.Thread(target=commit_loser)
-    winner_thread.start()
-    assert winner_locked.wait(timeout=5)
-    loser_thread.start()
-    assert loser_started.wait(timeout=5)
-    assert not loser_finished.wait(timeout=0.1)
+        )
+    await asyncio.sleep(0.01)
+    assert loser_task.done() is False
     release_winner.set()
-    winner_thread.join(timeout=5)
-    loser_thread.join(timeout=5)
+    await winner_task
+    with pytest.raises(ConversationConflict):
+        await loser_task
 
-    assert not winner_thread.is_alive()
-    assert not loser_thread.is_alive()
-    assert len(loser_errors) == 1
-    assert isinstance(loser_errors[0], ConversationConflict)
-    stored = first.turns.get(original.id)
+    stored = await _get_turn(application_database, original.id)
     assert stored is not None
     if winner == "manifest":
         assert stored.status is TurnStatus.IN_PROGRESS
@@ -373,91 +476,95 @@ def test_turn_manifest_and_terminal_writes_are_monotonic_across_connections(
         assert stored.context_manifest == original.context_manifest
 
 
-def test_begin_turn_rolls_back_title_and_entry_when_turn_write_fails(
-    tmp_path: Path,
+async def test_begin_turn_rolls_back_title_and_entry_when_turn_write_fails(
+    application_database: ApplicationSQLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     thread = _thread().model_copy(
         update={
             "title": "New conversation",
             "title_source": ThreadTitleSource.AUTOMATIC,
         }
     )
-    repositories.threads.create(thread)
+    await repositories.create_thread(thread)
     updated = thread.model_copy(
         update={"title": "calculate cube", "updated_at": _now()}
     )
 
-    def fail_turn_write(*args: object, **kwargs: object) -> None:
+    def fail_turn_write(
+        _repository: SQLiteTurnRepository,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
         raise RuntimeError("turn write failed")
 
-    monkeypatch.setattr(repositories.turns, "create", fail_turn_write)
+    monkeypatch.setattr(SQLiteTurnRepository, "create", fail_turn_write)
 
     with pytest.raises(RuntimeError, match="turn write failed"):
-        repositories.begin_turn(
+        await repositories.begin_turn(
             _entry("entry_1", sequence=1),
             _turn(),
             automatic_title=updated.title,
             updated_at=updated.updated_at,
         )
 
-    view = repositories.read_thread(thread.id)
+    view = await repositories.read_thread(thread.id)
     assert view.thread.title == "New conversation"
     assert view.entries == ()
     assert view.turns == ()
 
 
-def test_begin_turn_preserves_a_manual_title_selected_after_stale_read(
-    tmp_path: Path,
+async def test_begin_turn_preserves_a_manual_title_selected_after_stale_read(
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     thread = _thread().model_copy(
         update={
             "title": "New conversation",
             "title_source": ThreadTitleSource.AUTOMATIC,
         }
     )
-    repositories.threads.create(thread)
-    repositories.rename_thread(
+    await repositories.create_thread(thread)
+    await repositories.rename_thread(
         thread.id,
         "Manual title",
         updated_at=_now(),
     )
 
-    repositories.begin_turn(
+    await repositories.begin_turn(
         _entry("entry_1", sequence=1),
         _turn(),
         automatic_title="stale automatic suggestion",
         updated_at=_now(),
     )
 
-    stored = repositories.read_thread(thread.id).thread
+    stored = (await repositories.read_thread(thread.id)).thread
     assert stored.title == "Manual title"
     assert stored.title_source is ThreadTitleSource.MANUAL
 
 
-def test_begin_turn_only_applies_automatic_title_without_prior_entries(
-    tmp_path: Path,
+async def test_begin_turn_only_applies_automatic_title_without_prior_entries(
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     thread = _thread().model_copy(
         update={
             "title": "Existing automatic title",
             "title_source": ThreadTitleSource.AUTOMATIC,
         }
     )
-    repositories.threads.create(thread)
-    repositories.entries.append(_entry("entry_1", sequence=1))
+    await repositories.create_thread(thread)
+    await _append_entry(application_database, _entry("entry_1", sequence=1))
 
-    repositories.begin_turn(
+    await repositories.begin_turn(
         _entry("entry_2", sequence=2),
         _turn(user_entry_id="entry_2"),
         automatic_title="stale first-turn suggestion",
         updated_at=_now(),
     )
 
-    stored = repositories.read_thread(thread.id).thread
+    stored = (await repositories.read_thread(thread.id)).thread
     assert stored.title == "Existing automatic title"
     assert stored.title_source is ThreadTitleSource.AUTOMATIC
 
@@ -476,8 +583,8 @@ def test_begin_turn_only_applies_automatic_title_without_prior_entries(
         ("skill", "off", "debug", "skill_mode"),
     ),
 )
-def test_thread_field_commits_never_move_updated_at_backwards(
-    tmp_path: Path,
+async def test_thread_field_commits_never_move_updated_at_backwards(
+    application_database: ApplicationSQLite,
     first_offset: int,
     second_offset: int,
     mutation: str,
@@ -485,54 +592,53 @@ def test_thread_field_commits_never_move_updated_at_backwards(
     second_value: str | bool,
     field: str,
 ) -> None:
-    path = tmp_path / f"thread-{mutation}-{first_offset}-{second_offset}.db"
-    first = SQLiteConversationRepositories(path)
-    second = SQLiteConversationRepositories(path)
+    first = SQLiteConversationRepositories(application_database)
+    second = SQLiteConversationRepositories(application_database)
     base = datetime(2026, 7, 26, 1, 0, tzinfo=UTC)
     thread = _thread().model_copy(update={"created_at": base, "updated_at": base})
-    first.threads.create(thread)
+    await first.create_thread(thread)
     first_time = base + timedelta(seconds=first_offset)
     second_time = base + timedelta(seconds=second_offset)
 
-    def mutate(
+    async def mutate(
         repositories: SQLiteConversationRepositories,
         value: str | bool,
         updated_at: datetime,
     ) -> Thread:
         if mutation == "model":
             assert isinstance(value, str)
-            return repositories.set_thread_model(
+            return await repositories.set_thread_model(
                 thread.id,
                 value,
                 updated_at=updated_at,
             )
         if mutation == "rename":
             assert isinstance(value, str)
-            return repositories.rename_thread(
+            return await repositories.rename_thread(
                 thread.id,
                 value,
                 updated_at=updated_at,
             )
         if mutation == "thinking":
             assert isinstance(value, bool)
-            return repositories.set_thread_thinking(
+            return await repositories.set_thread_thinking(
                 thread.id,
                 value,
                 updated_at=updated_at,
             )
         assert mutation == "skill"
         assert isinstance(value, str)
-        return repositories.set_thread_skill_mode(
+        return await repositories.set_thread_skill_mode(
             thread.id,
             value,
             updated_at=updated_at,
         )
 
-    first_result = mutate(first, first_value, first_time)
-    second_result = mutate(second, second_value, second_time)
+    first_result = await mutate(first, first_value, first_time)
+    second_result = await mutate(second, second_value, second_time)
 
     expected_time = max(first_time, second_time)
-    stored = first.read_thread(thread.id).thread
+    stored = (await first.read_thread(thread.id)).thread
     assert first_result.updated_at == first_time
     assert second_result.updated_at == expected_time
     assert stored.updated_at == expected_time
@@ -546,14 +652,13 @@ def test_thread_field_commits_never_move_updated_at_backwards(
     ((20, 10), (10, 20)),
     ids=("newer-field-commits-first", "older-field-commits-first"),
 )
-def test_begin_turn_never_moves_thread_updated_at_backwards(
-    tmp_path: Path,
+async def test_begin_turn_never_moves_thread_updated_at_backwards(
+    application_database: ApplicationSQLite,
     field_offset: int,
     turn_offset: int,
 ) -> None:
-    path = tmp_path / f"begin-turn-{field_offset}-{turn_offset}.db"
-    field_writer = SQLiteConversationRepositories(path)
-    turn_writer = SQLiteConversationRepositories(path)
+    field_writer = SQLiteConversationRepositories(application_database)
+    turn_writer = SQLiteConversationRepositories(application_database)
     base = datetime(2026, 7, 26, 2, 0, tzinfo=UTC)
     thread = _thread().model_copy(
         update={
@@ -563,23 +668,23 @@ def test_begin_turn_never_moves_thread_updated_at_backwards(
             "updated_at": base,
         }
     )
-    field_writer.threads.create(thread)
+    await field_writer.create_thread(thread)
     field_time = base + timedelta(seconds=field_offset)
     turn_time = base + timedelta(seconds=turn_offset)
-    field_writer.set_thread_model(
+    await field_writer.set_thread_model(
         thread.id,
         "deepseek/newer-selection",
         updated_at=field_time,
     )
 
-    turn_writer.begin_turn(
+    await turn_writer.begin_turn(
         _entry("entry_1", sequence=1),
         _turn(),
         automatic_title="First accepted request",
         updated_at=turn_time,
     )
 
-    view = field_writer.read_thread(thread.id)
+    view = await field_writer.read_thread(thread.id)
     assert view.thread.updated_at == max(field_time, turn_time)
     assert view.thread.current_model == "deepseek/newer-selection"
     assert view.thread.title == "First accepted request"
@@ -588,9 +693,10 @@ def test_begin_turn_never_moves_thread_updated_at_backwards(
     assert len(view.turns) == 1
 
 
-def test_summary_upsert_and_tool_activity_idempotency(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    repositories.threads.create(_thread())
+async def test_summary_upsert_and_tool_activity_idempotency(
+    application_database: ApplicationSQLite,
+) -> None:
+    await _create_thread(application_database, _thread())
     summary = ThreadSummary(
         thread_id="thread_1",
         content="summary",
@@ -618,21 +724,33 @@ def test_summary_upsert_and_tool_activity_idempotency(tmp_path: Path) -> None:
         created_at=_now(),
     )
 
-    assert repositories.summaries.upsert(summary) == summary
-    assert repositories.summaries.get("thread_1") == summary
-    assert repositories.tool_activities.append(activity) == activity
-    assert repositories.tool_activities.append(activity) == activity
+    assert (
+        await application_database.write(
+            lambda connection: _SUMMARIES.upsert(summary, connection=connection)
+        )
+        == summary
+    )
+    assert (
+        await application_database.read(
+            lambda connection: _SUMMARIES.get("thread_1", connection=connection)
+        )
+        == summary
+    )
+    assert await _append_activity(application_database, activity) == activity
+    assert await _append_activity(application_database, activity) == activity
 
     changed = activity.model_copy(update={"result_summary": "different"})
     with pytest.raises(ConversationConflict):
-        repositories.tool_activities.append(changed)
+        await _append_activity(application_database, changed)
 
 
-def test_tool_activity_writer_finalizes_one_terminal_record(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    repositories.threads.create(_thread())
-    repositories.entries.append(_entry("entry_1", sequence=1))
-    repositories.turns.create(_turn())
+async def test_tool_activity_writer_finalizes_one_terminal_record(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    await _create_thread(application_database, _thread())
+    await _append_entry(application_database, _entry("entry_1", sequence=1))
+    await _create_turn(application_database, _turn())
     draft = ToolActivityDraft(
         thread_id="thread_1",
         turn_id="turn_1",
@@ -647,17 +765,19 @@ def test_tool_activity_writer_finalizes_one_terminal_record(tmp_path: Path) -> N
         change_set_id=None,
     )
 
-    repositories.tool_activities.finalize(draft)
-    repositories.tool_activities.finalize(draft.model_copy(update={"duration_ms": 99}))
+    await repositories.finalize(draft)
+    await repositories.finalize(draft.model_copy(update={"duration_ms": 99}))
 
-    activities = repositories.tool_activities.list("thread_1")
+    activities = (await repositories.read_thread("thread_1")).tool_activities
     assert len(activities) == 1
     assert activities[0].duration_ms == 12
 
 
-def test_summary_compare_and_swap_rejects_stale_coverage(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    repositories.threads.create(_thread())
+async def test_summary_compare_and_swap_rejects_stale_coverage(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    await repositories.create_thread(_thread())
     first = ThreadSummary(
         thread_id="thread_1",
         content="first",
@@ -678,20 +798,20 @@ def test_summary_compare_and_swap_rejects_stale_coverage(tmp_path: Path) -> None
         }
     )
 
-    assert repositories.compare_and_swap_summary(first, expected=None) == first
-    assert repositories.compare_and_swap_summary(second, expected=first) == second
+    assert await repositories.compare_and_swap_summary(first, expected=None) == first
+    assert await repositories.compare_and_swap_summary(second, expected=first) == second
     with pytest.raises(ConversationConflict):
-        repositories.compare_and_swap_summary(first, expected=None)
+        await repositories.compare_and_swap_summary(first, expected=None)
 
 
-def test_json_columns_use_canonical_compact_encoding(tmp_path: Path) -> None:
-    path = tmp_path / "application.db"
-    repositories = SQLiteConversationRepositories(path)
-    repositories.threads.create(_thread())
-    repositories.entries.append(_entry("entry_1", sequence=1))
-    repositories.turns.create(_turn())
+async def test_json_columns_use_canonical_compact_encoding(
+    application_database: ApplicationSQLite,
+) -> None:
+    await _create_thread(application_database, _thread())
+    await _append_entry(application_database, _entry("entry_1", sequence=1))
+    await _create_turn(application_database, _turn())
 
-    with application_connection(path) as connection:
+    def read_json(connection: sqlite3.Connection) -> tuple[str, str, str]:
         metadata = connection.execute(
             "SELECT metadata_json FROM thread_entries WHERE entry_id = ?",
             ("entry_1",),
@@ -704,6 +824,9 @@ def test_json_columns_use_canonical_compact_encoding(tmp_path: Path) -> None:
             "SELECT budgets_json FROM turns WHERE turn_id = ?",
             ("turn_1",),
         ).fetchone()[0]
+        return str(metadata), str(usage), str(budgets)
+
+    metadata, usage, budgets = await application_database.read(read_json)
 
     assert metadata == '{"a":true,"z":1}'
     assert json.loads(usage)["model_calls"] == 1
@@ -712,44 +835,54 @@ def test_json_columns_use_canonical_compact_encoding(tmp_path: Path) -> None:
     assert ": " not in budgets
 
 
-def test_timestamps_are_normalized_to_utc_iso_8601(tmp_path: Path) -> None:
-    path = tmp_path / "application.db"
-    repositories = SQLiteConversationRepositories(path)
+async def test_timestamps_are_normalized_to_utc_iso_8601(
+    application_database: ApplicationSQLite,
+) -> None:
     offset_time = datetime(2026, 7, 10, 16, 0, tzinfo=timezone(timedelta(hours=8)))
-    repositories.threads.create(
+    await _create_thread(
+        application_database,
         Thread(
             id="thread_utc",
             workspace_key="workspace_1",
             title="UTC",
             created_at=offset_time,
             updated_at=offset_time,
-        )
+        ),
     )
 
-    with application_connection(path) as connection:
-        stored = connection.execute(
-            "SELECT created_at FROM threads WHERE thread_id = ?",
-            ("thread_utc",),
-        ).fetchone()[0]
+    stored = await application_database.read(
+        lambda connection: str(
+            connection.execute(
+                "SELECT created_at FROM threads WHERE thread_id = ?",
+                ("thread_utc",),
+            ).fetchone()[0]
+        )
+    )
 
     assert stored == "2026-07-10T08:00:00+00:00"
 
 
-def test_repositories_translate_sqlite_integrity_errors(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-
+async def test_repositories_translate_sqlite_integrity_errors(
+    application_database: ApplicationSQLite,
+) -> None:
     with pytest.raises(ConversationConflict) as raised:
-        repositories.entries.append(_entry("missing_parent", sequence=1))
+        await _append_entry(
+            application_database,
+            _entry("missing_parent", sequence=1),
+        )
 
     assert not isinstance(raised.value.__cause__, sqlite3.IntegrityError)
 
 
-def test_thread_pages_are_bounded_stable_and_workspace_scoped(tmp_path: Path) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+async def test_thread_pages_are_bounded_stable_and_workspace_scoped(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
     timestamp = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
-    with repositories.transaction() as connection:
+
+    def seed(connection: sqlite3.Connection) -> None:
         for index in range(205):
-            repositories.threads.create(
+            _THREADS.create(
                 Thread(
                     id=f"thread_{index:03d}",
                     workspace_key="workspace_1",
@@ -759,7 +892,7 @@ def test_thread_pages_are_bounded_stable_and_workspace_scoped(tmp_path: Path) ->
                 ),
                 connection=connection,
             )
-        repositories.threads.create(
+        _THREADS.create(
             Thread(
                 id="thread_foreign",
                 workspace_key="workspace_2",
@@ -770,8 +903,9 @@ def test_thread_pages_are_bounded_stable_and_workspace_scoped(tmp_path: Path) ->
             connection=connection,
         )
 
-    first = repositories.list_threads_page("workspace_1", cursor=None, limit=200)
-    second = repositories.list_threads_page(
+    await application_database.write(seed)
+    first = await repositories.list_threads_page("workspace_1", cursor=None, limit=200)
+    second = await repositories.list_threads_page(
         "workspace_1",
         cursor=(first.threads[-1].updated_at, first.threads[-1].id),
         limit=200,
@@ -797,20 +931,185 @@ def test_thread_pages_are_bounded_stable_and_workspace_scoped(tmp_path: Path) ->
     }
 
 
-def test_thread_entry_pages_read_tail_and_traverse_without_overlap(
-    tmp_path: Path,
+async def test_thread_search_is_literal_scoped_and_keyset_paginated(
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    with repositories.transaction() as connection:
-        repositories.threads.create(_thread(), connection=connection)
+    repositories = SQLiteConversationRepositories(application_database)
+    timestamp = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
+
+    def seed(connection: sqlite3.Connection) -> None:
+        threads = (
+            Thread(
+                id="thread_title",
+                workspace_key="workspace_1",
+                title="Needle in title",
+                created_at=timestamp,
+                updated_at=timestamp + timedelta(seconds=3),
+            ),
+            Thread(
+                id="thread_entry",
+                workspace_key="workspace_1",
+                title="Entry match",
+                created_at=timestamp,
+                updated_at=timestamp + timedelta(seconds=2),
+            ),
+            Thread(
+                id="thread_hidden",
+                workspace_key="workspace_1",
+                title="Hidden fields only",
+                created_at=timestamp,
+                updated_at=timestamp + timedelta(seconds=1),
+            ),
+            Thread(
+                id="thread_percent",
+                workspace_key="workspace_1",
+                title="100% complete",
+                created_at=timestamp,
+                updated_at=timestamp,
+            ),
+            Thread(
+                id="thread_foreign",
+                workspace_key="workspace_2",
+                title="Needle in another workspace",
+                created_at=timestamp,
+                updated_at=timestamp + timedelta(seconds=4),
+            ),
+        )
+        for thread in threads:
+            _THREADS.create(thread, connection=connection)
+        _ENTRIES.append(
+            _entry(
+                "entry_direct",
+                thread_id="thread_entry",
+                sequence=1,
+                kind=ThreadEntryKind.DIRECT_COMMAND,
+            ).model_copy(update={"content": "echo NEEDLE"}),
+            connection=connection,
+        )
+        _ENTRIES.append(
+            _entry(
+                "entry_hidden",
+                thread_id="thread_hidden",
+                sequence=1,
+                kind=ThreadEntryKind.DIRECT_COMMAND,
+            ).model_copy(
+                update={
+                    "content": "irrelevant",
+                    "metadata": {"hidden": "needle"},
+                }
+            ),
+            connection=connection,
+        )
+        _SUMMARIES.upsert(
+            ThreadSummary(
+                thread_id="thread_hidden",
+                content="needle appears only in the summary",
+                content_hash="a" * 64,
+                covered_entry_sequence=1,
+                covered_turn_count=0,
+                estimated_tokens=1,
+                provider="deepseek",
+                model="deepseek/deepseek-v4-flash",
+                updated_at=timestamp,
+            ),
+            connection=connection,
+        )
+
+    await application_database.write(seed)
+    first = await repositories.search_threads_page(
+        "workspace_1",
+        query="needle",
+        cursor=None,
+        limit=1,
+    )
+    second = await repositories.search_threads_page(
+        "workspace_1",
+        query="needle",
+        cursor=(first.threads[-1].updated_at, first.threads[-1].id),
+        limit=1,
+    )
+    literal_percent = await repositories.search_threads_page(
+        "workspace_1",
+        query="%",
+        cursor=None,
+        limit=50,
+    )
+
+    assert [thread.id for thread in first.threads] == ["thread_title"]
+    assert first.has_more is True
+    assert [thread.id for thread in second.threads] == ["thread_entry"]
+    assert second.has_more is False
+    assert [thread.id for thread in literal_percent.threads] == ["thread_percent"]
+    assert await repositories.thread_matches_search(
+        "workspace_1",
+        query="needle",
+        thread_id="thread_entry",
+    )
+    assert not await repositories.thread_matches_search(
+        "workspace_1",
+        query="needle",
+        thread_id="thread_hidden",
+    )
+    assert not await repositories.thread_matches_search(
+        "workspace_1",
+        query="needle",
+        thread_id="thread_foreign",
+    )
+
+
+@pytest.mark.parametrize("operation", ["page", "match"])
+async def test_thread_search_opcode_limit_is_typed_and_handler_is_reset(
+    application_database: ApplicationSQLite,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    await _create_thread(application_database, _thread())
+    monkeypatch.setattr(
+        conversation_storage_module,
+        "_THREAD_SEARCH_OPCODE_BUDGET",
+        1,
+    )
+
+    with pytest.raises(ThreadSearchLimitExceeded):
+        if operation == "page":
+            await repositories.search_threads_page(
+                "workspace_1",
+                query="missing",
+                cursor=None,
+                limit=50,
+            )
+        else:
+            await repositories.thread_matches_search(
+                "workspace_1",
+                query="missing",
+                thread_id="thread_1",
+            )
+
+    # A failed bounded scan must not leave its progress handler on the owner.
+    assert [thread.id for thread in await repositories.list_threads("workspace_1")] == [
+        "thread_1"
+    ]
+
+
+async def test_thread_entry_pages_read_tail_and_traverse_without_overlap(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+
+    def seed(connection: sqlite3.Connection) -> None:
+        _THREADS.create(_thread(), connection=connection)
         for sequence in range(1, 506):
-            repositories.entries.append(
+            _ENTRIES.append(
                 _entry(f"entry_{sequence}", sequence=sequence),
                 connection=connection,
             )
 
-    tail = repositories.read_thread_page("thread_1", before_sequence=None, limit=500)
-    older = repositories.read_thread_page(
+    await application_database.write(seed)
+    tail = await repositories.read_thread_page(
+        "thread_1", before_sequence=None, limit=500
+    )
+    older = await repositories.read_thread_page(
         "thread_1",
         before_sequence=tail.next_before_sequence,
         limit=500,
@@ -824,26 +1123,23 @@ def test_thread_entry_pages_read_tail_and_traverse_without_overlap(
     assert older.next_before_sequence is None
 
 
-def test_thread_entry_page_contains_only_associated_turns_and_tools(
-    tmp_path: Path,
+async def test_thread_entry_page_contains_only_associated_turns_and_tools(
+    application_database: ApplicationSQLite,
 ) -> None:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
+    repositories = SQLiteConversationRepositories(application_database)
     now = _now()
     direct_entry = _entry(
         "entry_2",
         sequence=2,
         kind=ThreadEntryKind.DIRECT_COMMAND,
     ).model_copy(update={"metadata": {"operation_id": "operation_direct"}})
-    with repositories.transaction() as connection:
-        repositories.threads.create(_thread(), connection=connection)
-        repositories.entries.append(
-            _entry("entry_1", sequence=1), connection=connection
-        )
-        repositories.entries.append(direct_entry, connection=connection)
-        repositories.entries.append(
-            _entry("entry_3", sequence=3), connection=connection
-        )
-        repositories.entries.append(
+
+    def seed(connection: sqlite3.Connection) -> None:
+        _THREADS.create(_thread(), connection=connection)
+        _ENTRIES.append(_entry("entry_1", sequence=1), connection=connection)
+        _ENTRIES.append(direct_entry, connection=connection)
+        _ENTRIES.append(_entry("entry_3", sequence=3), connection=connection)
+        _ENTRIES.append(
             _entry(
                 "entry_4",
                 sequence=4,
@@ -851,7 +1147,7 @@ def test_thread_entry_page_contains_only_associated_turns_and_tools(
             ),
             connection=connection,
         )
-        repositories.turns.create(
+        _TURNS.create(
             Turn(
                 id="turn_1",
                 thread_id="thread_1",
@@ -868,7 +1164,7 @@ def test_thread_entry_page_contains_only_associated_turns_and_tools(
             ),
             connection=connection,
         )
-        repositories.tool_activities.append(
+        _ACTIVITIES.append(
             ToolActivity(
                 id="activity_agent",
                 thread_id="thread_1",
@@ -884,7 +1180,7 @@ def test_thread_entry_page_contains_only_associated_turns_and_tools(
             ),
             connection=connection,
         )
-        repositories.tool_activities.append(
+        _ACTIVITIES.append(
             ToolActivity(
                 id="activity_direct",
                 thread_id="thread_1",
@@ -901,8 +1197,11 @@ def test_thread_entry_page_contains_only_associated_turns_and_tools(
             connection=connection,
         )
 
-    recent = repositories.read_thread_page("thread_1", before_sequence=None, limit=2)
-    older = repositories.read_thread_page("thread_1", before_sequence=3, limit=2)
+    await application_database.write(seed)
+    recent = await repositories.read_thread_page(
+        "thread_1", before_sequence=None, limit=2
+    )
+    older = await repositories.read_thread_page("thread_1", before_sequence=3, limit=2)
 
     assert [turn.id for turn in recent.view.turns] == ["turn_1"]
     assert [item.id for item in recent.view.tool_activities] == ["activity_agent"]

@@ -11,9 +11,14 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 
 from awesome_agent.core.tools.context import ToolExecutionContext
-from awesome_agent.core.tools.contracts import ToolErrorCode, ToolOutput, ToolSpec
+from awesome_agent.core.tools.contracts import (
+    ToolErrorCode,
+    ToolInvocationDescription,
+    ToolOutput,
+    ToolSpec,
+)
 from awesome_agent.core.tools.errors import ExpectedToolFailure
-from awesome_agent.core.tools.registry import RegisteredTool
+from awesome_agent.core.tools.registry import RegisteredTool, ToolReplaySafety
 from awesome_agent.extensions.mcp.catalog import CompiledMcpTool, McpCatalog
 from awesome_agent.extensions.mcp.errors import McpCallUncertain, McpUnavailable
 
@@ -199,6 +204,21 @@ class McpToolAdapter:
                 },
             )
 
+        def describe(arguments: BaseModel) -> ToolInvocationDescription:
+            del arguments
+            return ToolInvocationDescription(
+                verb="Use MCP Tool",
+                display_target=namespace_name,
+                approval_operation="use",
+                approval_target=namespace_name,
+            )
+
+        def admit(
+            arguments: BaseModel,
+            context: ToolExecutionContext,
+        ) -> None:
+            del arguments, context
+
         return RegisteredTool(
             spec=ToolSpec(
                 name=namespace_name,
@@ -210,6 +230,9 @@ class McpToolAdapter:
             ),
             input_model=input_model,
             handler=handler,
+            describe=describe,
+            admit=admit,
+            replay_safety=ToolReplaySafety.NON_REPLAYABLE,
             timeout_resolver=_mcp_executor_timeout,
         )
 

@@ -59,7 +59,28 @@ These tests turn high-value architecture decisions into immediate failures. If
 you add a package, table, command, dependency, or graph field, update the test
 only after explaining why the architecture changed.
 
-## Protocol v3 change workflow
+## Contract version catalog
+
+`contract-versions.json` is the single manually maintained catalog for public
+contract identifiers. It excludes the product version, which remains owned by
+`VERSION`, and excludes same-release recovery markers and other internal record
+versions. Generated Python and TypeScript constants keep the runtime path free
+of JSON loading.
+
+When a covered contract changes incompatibly:
+
+1. change its catalog entry together with the owning behavior and migration or
+   rejection policy;
+2. regenerate the bindings with
+   `uv run python scripts/release/contract_versions.py --write`;
+3. inspect both generated files rather than editing them;
+4. run `uv run python scripts/release/contract_versions.py` plus the
+   affected Python, TUI, fixture, persistence, or output tests.
+
+The catalog is a release tuple, not a shared counter. Increment only the
+contract that actually became incompatible.
+
+## Protocol v4 change workflow
 
 Protocol fixtures are the bidirectional Python/TypeScript evidence. To change a
 method, result, event, command outcome, or projection:
@@ -72,13 +93,16 @@ method, result, event, command outcome, or projection:
    uv run python scripts/generate_protocol_fixtures.py
    ```
 
-4. Inspect `protocol/fixtures/v3/` and manifest hashes; never hand-edit them.
-5. Update strict Zod schemas under `tui/src/protocol/`.
-6. Update reducer/effect code for authoritative state changes.
-7. Update exhaustive Presenter/components for visible facts.
-8. Run:
+4. Inspect `protocol/fixtures/v4/` and manifest hashes; never hand-edit them.
+5. For a breaking change, update the Protocol entry in
+   `contract-versions.json` and regenerate its bindings.
+6. Update strict Zod schemas under `tui/src/protocol/`.
+7. Update reducer/effect code for authoritative state changes.
+8. Update exhaustive Presenter/components for visible facts.
+9. Run:
 
    ```powershell
+   uv run python scripts/release/contract_versions.py
    uv run python scripts/generate_protocol_fixtures.py --check
    uv run pytest -q tests/unit/protocol tests/e2e/test_stdio_product.py
    npm --prefix tui run typecheck
@@ -93,13 +117,13 @@ old same-version component from handshaking.
 ## Command contract
 
 `CommandName` and `COMMAND_OWNERS` in `application/commands.py` are runtime
-authority. The current catalog has 21 Application commands and four Ink-local
+authority. The current catalog has 22 Application commands and four Ink-local
 commands:
 
 ```text
 Application:
   new rename resume context compact auth model thinking workspace
-  diff undo redo tools skills mcp memory status usage doctor config permissions
+  diff undo redo tools skills mcp web memory status usage doctor config permissions
 
 Ink:
   help theme copy quit
@@ -117,6 +141,8 @@ For a command change, verify:
 - no slash command submits a hidden Agent Turn;
 - one discriminated result/interaction/error is returned;
 - authoritative effects and pure presentation remain separate;
+- citation values remain identical across tool result, Agent checkpoint,
+  Conversation, fixture, TUI hydration, and headless JSON;
 - empty, invalid, unavailable, busy, and interaction states are visible;
 - foreground observation classification is explicit;
 - Help, Presenter, transcript, and focused UI tests agree.

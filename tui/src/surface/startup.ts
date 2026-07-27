@@ -4,8 +4,13 @@ import type {
   MethodParams,
   MethodValue,
 } from "../protocol/methods.js";
+import { PROTOCOL_VERSION } from "../protocol/version.js";
 import type { LaunchIntent } from "../cli/args.js";
 import type { CommandOutcome, CommandSelection } from "../protocol/commands.js";
+import {
+  credentialConfigured,
+  modelProviderCredentialStatus,
+} from "../protocol/product-projections.js";
 import type { SurfaceStore } from "../state/index.js";
 import { PRODUCT_VERSION } from "../version.js";
 
@@ -53,7 +58,7 @@ export type StartupResult =
 export interface StartupDiagnostic {
   readonly code: "configuration_invalid" | "provider_not_configured";
   readonly model: string;
-  readonly environmentVariable?: "DEEPSEEK_API_KEY" | "MOONSHOT_API_KEY";
+  readonly environmentVariable?: string;
   readonly messages: readonly string[];
 }
 
@@ -98,7 +103,7 @@ export async function beginStartup(
 ): Promise<StartupResult> {
   surface.store?.dispatch({ type: "connection.handshaking" });
   const initialized = await surface.request("initialize", {
-    protocol_version: 3,
+    protocol_version: PROTOCOL_VERSION,
     client_name: "awesome",
     client_version: PRODUCT_VERSION,
   });
@@ -331,8 +336,12 @@ function startupDiagnostic(
   }
   if (
     model.length === 0 &&
-    !credentialConfigured(application.provider_credentials.deepseek) &&
-    !credentialConfigured(application.provider_credentials.kimi)
+    application.model_catalog.providers.every(
+      (provider) =>
+        !credentialConfigured(
+          modelProviderCredentialStatus(application, provider),
+        ),
+    )
   ) {
     return {
       code: "provider_not_configured",
@@ -340,39 +349,21 @@ function startupDiagnostic(
       messages: [],
     };
   }
-  if (
-    model.startsWith("deepseek/") &&
-    !application.secret_status.deepseek_api_key
-  ) {
+  const provider = application.model_catalog.providers.find(
+    (candidate) => candidate.id === application.model_identity?.provider,
+  );
+  const credential = provider
+    ? modelProviderCredentialStatus(application, provider)
+    : undefined;
+  if (provider && !credentialConfigured(credential)) {
     return {
       code: "provider_not_configured",
       model,
-      environmentVariable: "DEEPSEEK_API_KEY",
-      messages: [],
-    };
-  }
-  if (
-    model.startsWith("kimi/") &&
-    !application.secret_status.moonshot_api_key
-  ) {
-    return {
-      code: "provider_not_configured",
-      model,
-      environmentVariable: "MOONSHOT_API_KEY",
+      ...(credential
+        ? { environmentVariable: credential.environment_variable }
+        : {}),
       messages: [],
     };
   }
   return undefined;
-}
-
-function credentialConfigured(status: {
-  selected_source?: "environment" | "awesome" | null | undefined;
-  environment_configured: boolean;
-  awesome_configured: boolean;
-}): boolean {
-  return status.selected_source === "environment"
-    ? status.environment_configured
-    : status.selected_source === "awesome"
-      ? status.awesome_configured
-      : false;
 }

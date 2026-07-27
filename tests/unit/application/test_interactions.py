@@ -62,6 +62,19 @@ def test_delete_and_shell_approval_never_offer_thread_write_grant(
     ]
 
 
+def test_network_approval_choices_cover_search_queries_and_fetch_urls() -> None:
+    choices = tool_approval_choices("network.read")
+
+    assert [choice.decision for choice in choices] == [
+        InteractionDecision.DENY,
+        InteractionDecision.ALLOW_ONCE,
+        InteractionDecision.ALLOW_THREAD_NETWORK,
+    ]
+    rendered = " ".join(choice.description or "" for choice in choices)
+    assert "search query or URL" in rendered
+    assert "Web search and fetch requests" in rendered
+
+
 def test_state_reset_choices_are_explicit_and_can_be_validated_without_resolving() -> (
     None
 ):

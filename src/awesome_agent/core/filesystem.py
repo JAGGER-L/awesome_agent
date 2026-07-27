@@ -4,10 +4,12 @@ import ctypes
 import importlib
 import os
 import stat
+import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
+from functools import lru_cache
 from os import stat_result
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -26,6 +28,10 @@ _WINDOWS_FILE_SHARE_WRITE = 0x00000002
 _WINDOWS_OPEN_EXISTING = 3
 _WINDOWS_FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 _WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+_LINUX_AT_FDCWD = -100
+_LINUX_AT_SYMLINK_NOFOLLOW = 0x100
+_LINUX_AT_EMPTY_PATH = 0x1000
+_LINUX_STATX_MNT_ID = 0x1000
 
 
 class MutationTargetChanged(RuntimeError):
@@ -40,12 +46,22 @@ class WorkspaceFileTooLarge(ValueError):
     pass
 
 
+class DirectoryEntryLimitExceeded(ValueError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class FileIdentity:
     device: int
     inode: int
     file_type: int
     reparse: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MountIdentity:
+    scheme: Literal["device", "linux-mnt-id", "windows-reparse"]
+    value: int
 
 
 type SafeNodeKind = Literal["file", "directory"]
@@ -71,6 +87,7 @@ class DirectoryPin:
     identity: FileIdentity
     parent: DirectoryPin | None
     name: str | None
+    mount_identity: MountIdentity | None = None
     closed: bool = False
 
     def close(self) -> None:
@@ -91,6 +108,19 @@ class DirectoryPin:
         if is_link_or_reparse(info) or identity(info) != self.identity:
             raise MutationTargetChanged(
                 "A workspace directory changed after path validation."
+            )
+        if (
+            self.mount_identity is not None
+            and _path_mount_identity(
+                self.path,
+                parent=self.parent,
+                name=self.name,
+                status=info,
+            )
+            != self.mount_identity
+        ):
+            raise UnsafeWorkspacePath(
+                "A workspace path crossed its filesystem mount boundary."
             )
 
 
@@ -118,12 +148,147 @@ def identity(info: stat_result) -> FileIdentity:
     )
 
 
+class _LinuxStatxTimestamp(ctypes.Structure):
+    _fields_ = [
+        ("seconds", ctypes.c_int64),
+        ("nanoseconds", ctypes.c_uint32),
+        ("reserved", ctypes.c_int32),
+    ]
+
+
+class _LinuxStatx(ctypes.Structure):
+    _fields_ = [
+        ("mask", ctypes.c_uint32),
+        ("block_size", ctypes.c_uint32),
+        ("attributes", ctypes.c_uint64),
+        ("link_count", ctypes.c_uint32),
+        ("uid", ctypes.c_uint32),
+        ("gid", ctypes.c_uint32),
+        ("mode", ctypes.c_uint16),
+        ("spare_zero", ctypes.c_uint16),
+        ("inode", ctypes.c_uint64),
+        ("size", ctypes.c_uint64),
+        ("blocks", ctypes.c_uint64),
+        ("attributes_mask", ctypes.c_uint64),
+        ("accessed", _LinuxStatxTimestamp),
+        ("created", _LinuxStatxTimestamp),
+        ("changed", _LinuxStatxTimestamp),
+        ("modified", _LinuxStatxTimestamp),
+        ("rdev_major", ctypes.c_uint32),
+        ("rdev_minor", ctypes.c_uint32),
+        ("dev_major", ctypes.c_uint32),
+        ("dev_minor", ctypes.c_uint32),
+        ("mount_id", ctypes.c_uint64),
+        ("dio_memory_align", ctypes.c_uint32),
+        ("dio_offset_align", ctypes.c_uint32),
+        ("spare", ctypes.c_uint64 * 12),
+    ]
+
+
+@lru_cache(maxsize=1)
+def _linux_statx_function() -> Any:
+    runtime = ctypes.CDLL(None, use_errno=True)
+    function = getattr(runtime, "statx", None)
+    if function is None:
+        raise UnsafeWorkspacePath(
+            "This platform cannot verify filesystem mount boundaries."
+        )
+    function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_uint,
+        ctypes.POINTER(_LinuxStatx),
+    ]
+    function.restype = ctypes.c_int
+    return function
+
+
+def _linux_mount_identity(
+    descriptor: int,
+    path: bytes,
+    *,
+    flags: int,
+) -> MountIdentity:
+    status = _LinuxStatx()
+    try:
+        result = _linux_statx_function()(
+            descriptor,
+            path,
+            flags,
+            _LINUX_STATX_MNT_ID,
+            ctypes.byref(status),
+        )
+    except UnsafeWorkspacePath:
+        raise
+    except BaseException as error:
+        raise UnsafeWorkspacePath(
+            "This platform cannot verify filesystem mount boundaries."
+        ) from error
+    if result != 0 or not status.mask & _LINUX_STATX_MNT_ID:
+        error_number = ctypes.get_errno()
+        raise UnsafeWorkspacePath(
+            "This platform cannot verify filesystem mount boundaries."
+        ) from OSError(error_number, os.strerror(error_number))
+    return MountIdentity("linux-mnt-id", int(status.mount_id))
+
+
+def _path_mount_identity(
+    path: Path,
+    *,
+    parent: DirectoryPin | None,
+    name: str | None,
+    status: stat_result,
+) -> MountIdentity:
+    if os.name == "nt":
+        return MountIdentity("windows-reparse", int(status.st_dev))
+    if sys.platform.startswith("linux"):
+        if parent is None:
+            return _linux_mount_identity(
+                _LINUX_AT_FDCWD,
+                os.fsencode(path),
+                flags=_LINUX_AT_SYMLINK_NOFOLLOW,
+            )
+        if name is None:
+            raise UnsafeWorkspacePath("A mounted child name is required.")
+        return _linux_mount_identity(
+            parent.descriptor,
+            os.fsencode(name),
+            flags=_LINUX_AT_SYMLINK_NOFOLLOW,
+        )
+    if sys.platform == "darwin":
+        return MountIdentity("device", int(status.st_dev))
+    raise UnsafeWorkspacePath(
+        "This platform cannot verify filesystem mount boundaries."
+    )
+
+
+def _descriptor_mount_identity(
+    descriptor: int,
+    status: stat_result,
+) -> MountIdentity:
+    if os.name == "nt":
+        return MountIdentity("windows-reparse", int(status.st_dev))
+    if sys.platform.startswith("linux"):
+        return _linux_mount_identity(
+            descriptor,
+            b"",
+            flags=_LINUX_AT_EMPTY_PATH,
+        )
+    if sys.platform == "darwin":
+        return MountIdentity("device", int(status.st_dev))
+    raise UnsafeWorkspacePath(
+        "This platform cannot verify filesystem mount boundaries."
+    )
+
+
 def open_directory(
     path: Path,
     *,
     parent: DirectoryPin | None = None,
     name: str | None = None,
     expected_identity: FileIdentity | None = None,
+    establish_mount_boundary: bool = False,
 ) -> DirectoryPin:
     try:
         before = os.lstat(path) if parent is None else lstat_child(parent, name or "")
@@ -141,6 +306,23 @@ def open_directory(
         raise MutationTargetChanged(
             "A bound workspace directory was replaced before it was opened."
         )
+    inherited_mount = parent.mount_identity if parent is not None else None
+    expected_mount: MountIdentity | None = None
+    if establish_mount_boundary or inherited_mount is not None:
+        observed_before_mount = _path_mount_identity(
+            path,
+            parent=parent,
+            name=name,
+            status=before,
+        )
+        if inherited_mount is not None and not establish_mount_boundary:
+            if observed_before_mount != inherited_mount:
+                raise UnsafeWorkspacePath(
+                    "A workspace path crossed its filesystem mount boundary."
+                )
+            expected_mount = inherited_mount
+        else:
+            expected_mount = observed_before_mount
 
     if os.name == "nt":
         descriptor = windows_open_descriptor(path, directory=True)
@@ -171,12 +353,24 @@ def open_directory(
         raise MutationTargetChanged(
             "A workspace directory changed while it was being opened."
         )
+    if expected_mount is not None:
+        try:
+            opened_mount = _descriptor_mount_identity(descriptor, opened)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if opened_mount != expected_mount:
+            os.close(descriptor)
+            raise UnsafeWorkspacePath(
+                "A workspace path crossed its filesystem mount boundary."
+            )
     return DirectoryPin(
         path=path,
         descriptor=descriptor,
         identity=identity(opened),
         parent=parent,
         name=name,
+        mount_identity=expected_mount,
     )
 
 
@@ -214,6 +408,19 @@ def open_regular_file(
         raise UnsafeWorkspacePath("A workspace path is not a regular file.")
     if int(before.st_nlink) != 1:
         raise UnsafeWorkspacePath("Hard-linked files cannot be opened safely.")
+    if (
+        parent.mount_identity is not None
+        and _path_mount_identity(
+            parent.path / name,
+            parent=parent,
+            name=name,
+            status=before,
+        )
+        != parent.mount_identity
+    ):
+        raise UnsafeWorkspacePath(
+            "A workspace path crossed its filesystem mount boundary."
+        )
     if os.name == "nt":
         descriptor = windows_open_descriptor(parent.path / name, directory=False)
     else:
@@ -241,6 +448,17 @@ def open_regular_file(
     ):
         os.close(descriptor)
         raise MutationTargetChanged("A workspace file changed while it was opened.")
+    if parent.mount_identity is not None:
+        try:
+            opened_mount = _descriptor_mount_identity(descriptor, opened)
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if opened_mount != parent.mount_identity:
+            os.close(descriptor)
+            raise UnsafeWorkspacePath(
+                "A workspace path crossed its filesystem mount boundary."
+            )
     return descriptor, opened
 
 
@@ -513,6 +731,29 @@ def list_directory_entries(
     )
 
 
+def bounded_directory_names(
+    directory: DirectoryPin,
+    *,
+    max_entries: int,
+) -> tuple[str, ...]:
+    """Return a stable name snapshot without materializing beyond the limit."""
+
+    if max_entries < 0:
+        raise ValueError("max_entries must be non-negative")
+    directory.verify_reachable()
+    listing_path: int | Path = (
+        directory.path if os.name == "nt" else directory.descriptor
+    )
+    names: list[str] = []
+    with os.scandir(listing_path) as entries:
+        for entry in entries:
+            if len(names) >= max_entries:
+                raise DirectoryEntryLimitExceeded
+            names.append(entry.name)
+    directory.verify_reachable()
+    return tuple(sorted(names, key=lambda value: (value.casefold(), value)))
+
+
 def iter_directory_entries(
     directory: DirectoryPin,
     *,
@@ -586,6 +827,19 @@ def assert_child_identity(
         raise MutationTargetChanged("A workspace file changed before mutation.")
     if is_link_or_reparse(current) and not allow_reparse:
         raise MutationTargetChanged("A workspace file changed before mutation.")
+    if (
+        parent.mount_identity is not None
+        and _path_mount_identity(
+            parent.path / name,
+            parent=parent,
+            name=name,
+            status=current,
+        )
+        != parent.mount_identity
+    ):
+        raise UnsafeWorkspacePath(
+            "A workspace path crossed its filesystem mount boundary."
+        )
 
 
 def atomic_replace_child(

@@ -59,6 +59,7 @@ CREATE TABLE threads (
     current_model TEXT,
     thinking_enabled INTEGER NOT NULL CHECK (thinking_enabled IN (0, 1)),
     skill_mode TEXT NOT NULL,
+    lineage_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -198,12 +199,20 @@ class ApplicationStateUnknown(RuntimeError):
 def _connect(path: Path) -> sqlite3.Connection:
     database_path = path.expanduser().resolve()
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(database_path, timeout=5.0)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA busy_timeout = 5000")
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA synchronous = NORMAL")
+    connection = sqlite3.connect(
+        database_path,
+        timeout=5.0,
+        check_same_thread=True,
+    )
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = NORMAL")
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
@@ -212,7 +221,8 @@ def initialize_application_database(path: Path) -> None:
     if preflight.compatibility is StateCompatibility.CURRENT:
         return
     if preflight.compatibility in {
-        StateCompatibility.OLDER,
+        StateCompatibility.MIGRATION_REQUIRED,
+        StateCompatibility.MIGRATION_UNAVAILABLE,
         StateCompatibility.NEWER,
     }:
         assert preflight.found_schema is not None

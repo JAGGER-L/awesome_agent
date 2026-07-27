@@ -39,7 +39,7 @@ The current source order is:
 
 1. product instructions;
 2. root workspace instructions;
-3. selected Skill;
+3. the bounded automatic Skill catalog or one selected Skill;
 4. user memory;
 5. workspace memory;
 6. Mem0 recall;
@@ -55,11 +55,12 @@ base sources. Changing enum order therefore changes prompt behavior and frozen
 manifest validation.
 
 The following sources are mandatory once selected: product and model identity,
-workspace instructions, the selected Skill, explicit paths, current input, and
-an open tool chain. They are never silently truncated to make a prompt fit. If
-mandatory plus reserved context exceeds the effective input limit, the Turn
-fails with a context overflow instead of changing instruction meaning or
-dropping a tool observation.
+workspace instructions, the bounded automatic Skill catalog or selected Skill,
+explicit paths, current input, and an open tool chain. They are never silently
+truncated to make a prompt fit. The Skill catalog is bounded before it becomes
+mandatory. If mandatory plus reserved context exceeds the effective input
+limit, the Turn fails with a context overflow instead of changing instruction
+meaning or dropping a tool observation.
 
 ## Budget calculation
 
@@ -86,7 +87,9 @@ directory-entry, and path-count bounds.
 
 Every retained source produces a `ContextManifestItem` containing kind,
 source ID, order, estimated tokens, truncation, SHA-256 content hash, and any
-covered transcript sequence range.
+covered transcript sequence range. Skill sources additionally carry a strict
+tuple of versioned package identities and descriptive `allowed-tools` values.
+That tuple is persisted on the Turn and checkpoint and survives compression.
 
 Content deduplication applies only where semantics permit it:
 
@@ -145,16 +148,66 @@ provider_id
 stream(ModelRequest) -> async ModelStreamEvent sequence
 ```
 
+The frozen, provider-neutral model directory has one shape and one instance:
+
+```text
+MODEL_CATALOG
+  -> ProviderDescriptor
+       -> ModelProfile
+```
+
+It is the sole source of supported model identities, capabilities, context
+limits, provider-local defaults, supported regions, and credential association.
+The current directory contains exactly two Providers and four model profiles:
+
+| Provider | `credential_id` | Regions (default) | Model | Context | Tools | Reasoning | Provider default |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `deepseek` | `deepseek` | none | `deepseek/deepseek-v4-flash` | 262,144 | yes | yes | yes |
+| `deepseek` | `deepseek` | none | `deepseek/deepseek-v4-pro` | 262,144 | yes | yes | no |
+| `kimi` | `kimi` | `cn`, `global` (`cn`) | `kimi/kimi-k2.6` | 262,144 | yes | yes | yes |
+| `kimi` | `kimi` | `cn`, `global` (`cn`) | `kimi/kimi-k2.5` | 262,144 | yes | yes | no |
+
+The catalog does not say that a credential is present or choose the active
+model or region. Credential source and presence, `providers.default_model`, the
+Thread selection, and the configured Kimi region remain dynamic
+Application/configuration state. A catalog default is only the deterministic
+fallback when exactly one model Provider is configured.
+
 Concrete DeepSeek and Kimi adapters live in `providers/` and are instantiated
 only by Application composition. They translate SDK payloads into neutral
 events and normalize errors; Agent and Context never import the OpenAI client
 or a provider adapter.
+
+Provider resource composition also stays in `providers/`. One managed factory
+captures the candidate configuration and creates at most one reusable async SDK
+client per configured provider. `RuntimeResources` caches the neutral
+`ModelGateway` by provider and model, so multiple models share their provider
+client without reading mutable Application state. Candidate retirement closes
+the owned clients; an injected gateway factory remains borrowed. Credential
+validation uses a separate client per attempt and closes it on success, error,
+timeout, or cancellation within a bounded cleanup deadline.
 
 `ModelGateway` freezes one catalog selection and enforces stream behavior. It
 retries only a retryable failure that occurs before any visible output or
 completion, reports retry events, preserves cancellation, and requires exactly
 one matching completed model Turn. Once text, reasoning, or a tool call is
 visible, transparent replay would duplicate observable work and is forbidden.
+
+The catalog describes supported models; it does not construct clients. The
+concrete factory and adapter dispatch remain in `providers/`, with the explicit
+official endpoints `https://api.deepseek.com`, `https://api.moonshot.cn/v1`,
+and `https://api.moonshot.ai/v1`. This is not a provider registry or DI
+container, and no speculative third model Provider exists. Web Provider
+selection and catalog concerns remain in the separate Web/configuration
+boundary; Tavily Web search/fetch capability never appears in `ModelCatalog`.
+
+Application publishes the catalog through Protocol v4 `ApplicationState`
+beside dynamic `provider_credentials`. The TUI validates and derives startup
+and credential setup from those fields instead of copying a model or Provider
+enum. Application derives `/model` options from the same catalog as a
+`CommandSelection`, which the TUI renders generically. At the Python boundary,
+dependency direction is `config -> modeling`; `modeling/` no longer imports
+configuration. Application combines both with the concrete Provider factory.
 
 The curated catalog is closed rather than accepting arbitrary provider/model
 strings. This limits flexibility, but it lets configuration, capabilities,
@@ -164,7 +217,9 @@ context limits, identity reporting, and tests agree on the supported product.
 
 Skills provide bounded instruction packages. Discovery precedence is bundled,
 then user, then workspace; a later source with the same name shadows the
-earlier descriptor and emits a diagnostic. Disabled names are excluded.
+earlier descriptor and emits a diagnostic. Disabled names are excluded. Every
+effective descriptor receives a versioned identity derived from normalized
+metadata and the pinned `SKILL.md` fingerprint and content.
 
 Workspace Skills are more strictly handled because their path is controlled by
 the trusted project:
@@ -181,8 +236,10 @@ Every component must be a plain directory or file, never a symlink, junction,
 or other reparse point. Discovery stores anchor, root, package identities, and
 the initial `SKILL.md` fingerprint. Load and resource reads reopen the pinned
 tree, verify those identities and containment, then perform a bounded UTF-8
-read. Replacing a package after discovery therefore fails closed. One invalid
-package produces a diagnostic without suppressing valid packages.
+read. Bundled and User packages pin their package and `SKILL.md` identities;
+Workspace packages additionally pin the complete trusted-anchor chain.
+Replacing a package after discovery therefore fails closed. One invalid package
+produces a diagnostic without suppressing valid packages.
 
 The discovery fingerprint applies to `SKILL.md`, not to every resource. A
 resource traversal proves that its components are plain, contained, and stable
@@ -190,13 +247,51 @@ across that individual checked open, but it does not compare ordinary nested
 directories or resource content with a discovery-time identity. A safe
 replacement completed before the resource read can therefore be observed.
 
-Bundled and user Skills retain their existing, less restrictive source
-behavior. The strict reparse policy is intentionally scoped to workspace
-content so user-managed extension layouts are not redefined accidentally.
+Local User package management is an Application use case, not an Agent tool or
+a second discovery implementation:
 
-A selected Skill becomes mandatory system context. Its `allowed-tools`
-metadata describes intended compatibility but never grants permission or
-bypasses the shared Tool Executor.
+```text
+awesome skills CLI
+  -> argument parsing + optional TTY confirmation
+  -> private Protocol v4 skill.list / skill.install / skill.remove
+  -> Application SkillManagementService
+  -> one blocking worker operation
+  -> SkillPackageManager validation + recoverable package transaction
+  -> <AWESOME_HOME>/skills
+```
+
+The package RPCs are admitted only while Application is exactly
+`UNINITIALIZED`; one Application-owned pre-initialize guard makes them mutually
+exclusive with each other and with `initialize`. The RPC itself never constructs
+a `WorkspaceRuntime`, Thread, Turn, graph, model, or Tool Executor and leaves the
+phase unchanged. The Node launcher owns only command syntax, stable output, and
+removal confirmation; Core alone owns manifest, archive, path, size, identity,
+locking, and recovery rules. The official CLI receives one bounded product
+result and closes the private Core. A different private client may mutate the
+same still-uninitialized Core and then initialize it; discovery sees the changed
+package. Once a Session is initialized, its catalog remains immutable and is
+never hot-updated.
+
+Fresh install publishes a fully validated stage to an absent target with one
+same-directory no-replace rename. Replace is a recoverable sequence of two
+forward renames—target to quarantine, then stage to target—not one atomic
+replacement. Remove likewise quarantines the target before published cleanup.
+The marker drives rollback before publication and roll-forward cleanup after
+publication. Caller cancellation waits for the owned worker to converge without
+a wall-clock cleanup deadline, then re-raises cancellation.
+
+`auto` freezes a deterministic catalog of at most 64 identities and exposes
+`load_skill` plus `read_skill_resource`; it does not execute a Skill. `off`
+freezes no Skill source and exposes neither tool. A named mode eagerly freezes
+the body and identity as mandatory system context and exposes only
+`read_skill_resource` for that package.
+
+Both tools use `context.read`. Registration-owned hard admission matches the
+operation and package identity against the frozen Turn scope before permission
+policy, and the handler checks the identity again before returning content.
+Recovery therefore keeps the checkpoint's authority even if a rebuilt Runtime
+discovers a different package. `allowed-tools` describes intended compatibility
+but never grants permission or bypasses the shared Tool Executor.
 
 ## Local and cloud Memory
 
@@ -210,6 +305,37 @@ Recall is query-bounded, identity-scoped, deduplicated against local memory,
 and represented as untrusted context. Cloud failure becomes a diagnostic; it
 does not make the whole Turn configuration invalid. Post-answer distillation
 uses a separate policy and never uploads raw transcript by implication.
+
+`memory/finalization.py` owns `Mem0PostAnswerFinalizer`, the Memory-side
+implementation of Agent's generic `PostAnswerFinalizer` port. Application wires
+it only for an enabled, complete Mem0 session; otherwise it injects Agent's
+disabled implementation. The adapter translates Mem0 identities, distillation
+statuses, and `Mem0Diagnostic` values inside the Memory boundary. It returns
+the original answer, the distiller's model-call/usage accounting, and generic
+`PostAnswerDiagnostic` values whose codes are retained and whose message is the
+fixed `Optional memory operation did not complete.`. After constructing that
+result, it attempts to project the enabled Memory status. A failed status
+projection is retained as `memory_status_projection_failed` with the fixed
+message `Optional memory status projection failed.` and does not discard the
+answer or accounting. Status-projection cancellation is not converted into a
+diagnostic: the original cancellation propagates to the Agent boundary. Agent
+sees none of the Mem0-specific types.
+
+The generic request can carry ordered tool citations, but the current Mem0
+implementation does not consume them, rewrite citation markers, or alter the
+answer. Invalid output, budget overrun, and unexpected failure become Agent
+warnings while preserving the already-generated answer. Cancellation that
+escapes the adapter preserves the prior checkpointed answer and is immediately
+re-raised by Agent without another warning projection; see
+[Application and Agent](application-and-agent.md#post-answer-finalizer-port).
+
+The Mem0 SDK currently performs synchronous credential validation in its async
+client constructor. Awesome runs that constructor in a cancellation-aware worker
+instead of blocking the event loop, then registers only an internally created
+client with the runtime exit stack. An injected client is borrowed. If the SDK
+constructor outlives the bounded cancellation cleanup, Python cannot stop that
+worker, so Awesome returns cancellation without waiting indefinitely and closes
+the eventual client through a late-completion cleanup hook.
 
 Memory tools have their own memory policy. Enabling Memory does not grant
 workspace, shell, or MCP capabilities.
@@ -310,7 +436,7 @@ Every extension must preserve these rules:
 - Models: `modeling/`, `providers/deepseek.py`, `providers/kimi.py`
 - Skills: `extensions/skills/discovery.py`, `loader.py`
 - MCP: `extensions/mcp/catalog.py`, `manager.py`, `adapter.py`, `stdio.py`
-- Memory: `memory/`
+- Memory: `memory/finalization.py`, `memory/`
 - Tests: `tests/unit/context/`, `tests/integration/test_context_pipeline.py`,
   `tests/integration/test_skills_mcp.py`,
   `tests/structural/test_context_architecture.py`,

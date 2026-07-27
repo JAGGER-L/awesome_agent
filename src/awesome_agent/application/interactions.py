@@ -20,6 +20,7 @@ class InteractionDecision(StrEnum):
     RESET_STATE = "reset_state"
     ALLOW_ONCE = "allow_once"
     ALLOW_THREAD_WRITES = "allow_thread_writes"
+    ALLOW_THREAD_NETWORK = "allow_thread_network"
     ENABLE_FULL_ACCESS = "enable_full_access"
     RETRY = "retry"
     ABORT = "abort"
@@ -92,6 +93,24 @@ def state_reset_choices() -> tuple[InteractionChoice, ...]:
 
 
 def tool_approval_choices(capability: str) -> tuple[InteractionChoice, ...]:
+    if capability == "network.read":
+        return (
+            InteractionChoice(
+                decision=InteractionDecision.DENY,
+                label="Deny",
+                description="Do not send this search query or URL to Tavily.",
+            ),
+            InteractionChoice(
+                decision=InteractionDecision.ALLOW_ONCE,
+                label="Allow once",
+                description="Send this search query or URL to Tavily once.",
+            ),
+            InteractionChoice(
+                decision=InteractionDecision.ALLOW_THREAD_NETWORK,
+                label="Allow for this Thread",
+                description="Allow Web search and fetch requests for this Thread.",
+            ),
+        )
     choices = [InteractionChoice(decision=InteractionDecision.ALLOW_ONCE, label="Yes")]
     if capability == "workspace.write":
         choices.append(

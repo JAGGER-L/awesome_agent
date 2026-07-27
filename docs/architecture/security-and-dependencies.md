@@ -15,7 +15,8 @@ Awesome is designed to resist or fail safely for:
 
 - accidental activation of project-controlled instructions before trust;
 - replacement, alias, link, and reparse attacks on identity-pinned workspace
-  roots, filesystem tools, `AGENTS.md`, and Workspace Skills;
+  roots, filesystem tools, `.awesome/config.yaml`, `AGENTS.md`, and Workspace
+  Skills;
 - common structured-filesystem path escapes and sensitive-file requests;
 - known catastrophic shell commands and wrappers;
 - stale approvals crossing Threads, Turns, Operations, or permission modes;
@@ -36,8 +37,6 @@ The current design does not claim to resist:
   dependency distribution channel;
 - rollback of every external shell, MCP, network, or service side effect;
 - power-loss atomicity across SQLite, blob directories, and workspace files.
-- adversarial size/link/replacement behavior in the current trusted-workspace
-  `.awesome/config.yaml` reader.
 
 If the required threat model includes untrusted code execution, use an external
 OS/container sandbox and do not treat Awesome's Full access mode as equivalent.
@@ -85,13 +84,12 @@ and the path/entity leases are live-session guards, not part of the durable
 trust record. Neither form of binding grants authority to arbitrary content
 later reached through a link.
 
-The trust gate prevents pre-consent access; it does not make every later reader
-equally hardened. The current `.awesome/config.yaml` loader uses a normal
-`is_file()` plus unbounded text read, so it can follow a link/reparse point,
-observe a replacement between check and read, or consume an oversized YAML
-document. Unlike `AGENTS.md` and Workspace Skills, it has no no-follow open or
-post-open identity check. Treat trusted workspace configuration as privileged
-input and record this as a runtime hardening gap.
+After trust, `.awesome/config.yaml` uses the same Core no-follow reader boundary
+as workspace instructions and Skills. It accepts one plain UTF-8 file up to
+1 MiB, rejects NUL, links/reparse points, hard links, and non-regular nodes, and
+pins and rechecks the opened directory and file identities. A replacement or
+oversized document fails configuration activation instead of redirecting or
+truncating project-controlled input.
 
 ## Workspace instructions
 
@@ -111,6 +109,12 @@ invalid.
 The three permission modes govern known built-in capabilities as documented in
 [Tools and changes](tools-and-changes.md). MCP and unknown capabilities always
 ask once, including in Full access.
+
+`network.read` also asks on first use in every mode. Its approval can apply
+once or to the active Thread only; selecting another Thread, rebuilding the
+runtime, changing permission mode, `/web revoke`, `/web off`, and shutdown
+clear the Thread grant. Headless `--allow-network` can resolve only the exact
+active Turn prompt as allow-once and cannot bypass hard denial.
 
 Approval is bound to the authority that requested it:
 
@@ -192,6 +196,28 @@ Process ownership addresses orphan cleanup. It does not limit filesystem,
 network, device, credential-store, or child-process access while the command is
 running. A deliberately daemonized POSIX process can leave the owned group.
 
+## Web network boundary
+
+Web is user-enabled and defaults off. Only a valid `TAVILY_API_KEY` plus
+`web.enabled: true` publishes `web_search` and `web_fetch`; Workspace
+configuration cannot turn it on or select credentials. The provider-neutral handlers use one reusable
+Tavily adapter and an explicit `httpx.AsyncClient` with `trust_env=False`,
+redirects disabled, a bounded response, and no opaque retry. Ambient proxy
+variables are ignored; only validated `AWESOME_WEB_PROXY_URL` or its selected
+Awesome secret is accepted.
+
+Awesome contacts only Tavily's fixed `https://api.tavily.com/search` and
+`https://api.tavily.com/extract` endpoints. Search sends its query and exclusion
+list; Fetch sends one strictly validated public HTTPS URL. Tavily's cloud
+service connects to that target and returns basic Markdown, while Awesome Core
+never connects to it. Fetch has no browser, Cookie, login, JavaScript, PDF,
+binary, local-fetch, cache, or backend-fallback surface. Enabling and first
+approval disclose the [Tavily Privacy Policy](https://www.tavily.com/privacy)
+and [Platform Terms](https://www.tavily.com/terms). The diagnostics allowlist
+never includes query, URL, response, or credential text. Strict HTTPS citations
+are untrusted display data and become links only when their ID matches the
+Turn's validated source catalog.
+
 ## Extension and context boundary
 
 Workspace instructions, Skills, Memory, MCP descriptions/results, explicit
@@ -233,6 +259,23 @@ command can read host data available to the user, and a prompt can ask a model
 to reveal content it was intentionally given. Avoid placing secrets in the
 workspace or passing them as tool arguments.
 
+### Application diagnostic log boundary
+
+Application invocation logs are built from a closed field allowlist, not by
+redacting an arbitrary request or result after serialization. A record contains
+only `version`, `timestamp`, `session_id`, `correlation_id`, `operation`,
+`outcome`, `duration_ms`, and optional `error_code` and bounded `usage`.
+Prompt text, model or Tool bodies, query text, URLs, filesystem paths, secrets,
+exception text, and arbitrary payloads are excluded at construction time.
+
+The process/session-owned writer is nonblocking and fail-open. Its bounded
+queue and five-file, 5 MiB-per-file rotation limit resource use, while an
+unavailable or full diagnostic sink cannot alter the observed Application
+result. These records are operational metadata, not product history and not a
+substitute for Turn lifecycle or audit records. Treat the files as local data
+and inspect them before sharing even though their schema excludes supported
+content-bearing fields.
+
 ## Dependency direction
 
 Package dependencies encode authority, but the actual import contract is not a
@@ -249,6 +292,7 @@ Important framework ownership is also fixed:
 | External framework | Allowed owner |
 | --- | --- |
 | `jsonschema` | Extensions/MCP |
+| `httpx` | Web/Tavily adapter |
 | `mcp` SDK | Extensions |
 | `openai` SDK | concrete Providers |
 | `sqlite3` | Storage |
@@ -264,6 +308,7 @@ Awesome keeps a small explicit production set:
 | Dependency | Owned use |
 | --- | --- |
 | `pydantic` | typed cross-boundary models and validation; strictness is contract-specific |
+| `httpx` | one bounded async Tavily Web client with explicit proxy ownership |
 | `langgraph`, `langgraph-checkpoint-sqlite` | one Agent graph and its checkpoint saver |
 | `openai` | DeepSeek/Kimi-compatible provider clients behind adapters |
 | `mcp` | stdio MCP client behind Extensions |
@@ -328,7 +373,8 @@ For any new tool, provider, extension, storage format, or process path:
   `core/tools/process.py`, `core/process_lifetime.py`
 - Permissions/interactions: `core/tools/permissions.py`,
   `application/interactions.py`
-- Redaction: `safety/redaction.py`
+- Redaction and invocation diagnostics: `safety/redaction.py`,
+  `application/diagnostics.py`, `application/middleware.py`
 - Dependency tests: `tests/structural/test_dependency_architecture.py`,
   `tests/structural/test_product_architecture.py`
 - Security-sensitive tests: `tests/unit/core/`, `tests/unit/extensions/`,

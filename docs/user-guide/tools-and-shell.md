@@ -36,9 +36,34 @@ Awesome initially registers:
 - deletion: `delete`;
 - host execution: `execute`.
 
+When Web is enabled and configured, the same registry also contains
+`web_search` and `web_fetch`. They are provider-neutral to the model, pass the
+same strict validation/policy/approval/audit path, and are non-replayable.
+
 The total catalog can grow through Memory and MCP. Namespaced extension tools
 still use the executor. Exact argument schemas, bounds, and result fields are
 in [Built-in tools](../reference/built-in-tools.md).
+
+### Using Web Search and Fetch
+
+Set `TAVILY_API_KEY`, run `/web on`, then ask for current information or provide
+one public HTTPS page whose readable content you need. The first `network.read`
+call asks even in Full access; choose deny (the default), allow once, or allow
+for this Thread. `/web status` shows readiness and disclosure, `/web revoke`
+clears the active Thread grant, and `/web off` removes both tools from the
+rebuilt runtime.
+
+Awesome sends the Search query or requested Fetch URL to Tavily under its
+[Privacy Policy](https://www.tavily.com/privacy) and
+[Platform Terms](https://www.tavily.com/terms). For Fetch, Tavily's cloud
+service connects to the page and returns basic Markdown; Awesome Core does not
+connect to the target. Awesome assigns `S1...` citations and preserves them in
+the final answer, transcript, headless JSON, and checkpoint. Search and Fetch
+share the default limit of eight requests per Turn. Fetch accepts one public
+HTTPS URL and returns at most 24,000 characters; it is not a browser and does
+not provide Cookie, login, JavaScript, PDF/binary, local-fetch, cache, or
+backend-fallback behavior. See the [exact tool
+contract](../reference/built-in-tools.md#public-web-tools).
 
 ## Model-Driven Versus Direct Shell
 

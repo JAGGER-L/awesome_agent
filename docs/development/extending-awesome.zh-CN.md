@@ -15,7 +15,7 @@ permission system 或 database owner。
 4. 哪些输入不受信，它们在哪里校验并受限？
 5. Timeout、cancellation、partial output 和 process crash 时会怎样？
 6. 外部作用是否可安全重试，还是必须标记为 uncertain？
-7. 这会改变 Protocol v3、storage schema、permission 或 packaging 吗？
+7. 这会改变 Protocol v4、storage schema、permission 或 packaging 吗？
 
 优先在当前契约后实现具体功能。不要为一个假设实现创建通用 provider/backend/plugin 层。
 
@@ -128,32 +128,41 @@ Read tool 使用共享 workspace policy 和有界、校验身份的 reader。Wri
 
 ### 4. 只注册一次
 
-在 built-in registry composition 中注册 `ToolSpec`、input model、handler、capability、
-read-only 标志、display verb 和可选内部 timeout resolver。名称必须匹配共享 tool-name
-pattern，且不能与 built-in 或 extension namespace 冲突。
+在 built-in registry composition 中注册一个完整工具，其中包含 `ToolSpec`、严格 input
+model、handler、类型化 operation description、hard admission、replay-safety 分类和可选内部
+timeout resolver，以及可选 handler cancellation grace。Capability、read-only 状态与展示
+metadata 属于 spec。名称必须匹配共享 tool-name pattern，且不能与 built-in 或 extension
+namespace 冲突。
 
-模型可见 schema 来自 input model。内部清理预算不能伪装成模型参数。
+模型可见 schema 来自 input model。内部清理预算不能伪装成模型参数。Hard admission
+消费已校验参数与执行 context，拒绝不可关闭的不安全情况。只有它成功后，operation
+description 才恰好运行一次，返回展示与审批所需的有界事实。它可以为已准入操作执行有界
+metadata inspection，但仍发生在审批、handler 或任何外部作用之前。Admission 与 capability
+policy 保持分离；权限模式或临时 grant 不能覆盖它。
 
 ### 5. 定义生命周期行为
 
 记录并测试：
 
-- 审批前的 argument 与 path validation；
-- mode grant 之前的 hard-deny rule；
+- 唯一执行顺序：resolve、strict validation、hard admission、一次 typed description、
+  capability policy、approval、deadline、handler，再到 result/event/audit；
+- 审批、handler 执行或外部作用前的 argument 与 path validation；
+- mode grant 之前的 hard-admission rule；
 - 从已校验 operation fact 派生的审批文本；
 - 总 timeout 和 handler cancellation grace；
 - output/content/presentation 边界；
 - 一条 ToolActivity 和一个终态 event；
 - 不可逆作用前是否记录 attempt；
 - 作用完全、部分或完全不可逆；
+- replay 是否可被证明安全，未知分类必须 fail closed；
 - 崩溃与启动恢复证据。
 
 ### 工具测试
 
-为 schema、正常 result、预期 error、未知 capability、所有 permission mode、hard denial、
-timeout、cancellation 和 output bound 添加单元测试。工具涉及 workspace identity、Change
-Journal、进程、Application approval、transcript activity 或 recovery 时添加集成测试。
-在所属 OS 上测试真实平台 primitive。
+为 schema、正常 result、预期 error、类型化描述、未知 capability、所有 permission mode、
+hard admission、replay safety、timeout、cancellation 和 output bound 添加单元测试。工具
+涉及 workspace identity、Change Journal、进程、Application approval、transcript activity
+或 recovery 时添加集成测试。在所属 OS 上测试真实平台 primitive。
 
 ## 扩展 shell 行为
 
@@ -211,6 +220,10 @@ Skill 指令属于 context。`allowed-tools` 表示兼容性，不授权工具�
 Workspace Skill 代码必须保留 anchor/package identity 重校验。不要为了支持 linked
 package 而削弱它；如果用户有意管理 linked layout，请使用 user Skill。
 
+内置 Skill 工具注册项会在派生 target 前 hard-admit catalog membership、可移植词法资源
+路径以及 no-follow plain-file 边界。Handler 会在读取时重复安全检查；Workspace Skill 还会
+比较 discovery 时捕获的 package identity，并在其被替换时 fail closed。
+
 ## 通过 MCP 集成
 
 MCP 是独立运营工具的首选边界。Server 配置不含 secret：只有 command、argument、
@@ -243,6 +256,10 @@ namespace。诊断绝不能暴露原始 catalog 数据。
 MCP input validation error 必须是通用错误，不能暴露原始 argument 或 schema。Output
 validation 与 JSON traversal 在各自 byte、node、depth 和 content-block 边界内执行。
 
+每个 MCP 注册项都显式标记为 non-replayable。恢复通过同一个 Registry 契约消费该
+metadata，不得从 `mcp.` 前缀推断安全性。注册项缺失或未知时会 fail closed，进入同一
+interaction。两种情况都不会自动重试；只有用户显式选择 Retry 才可继续旧 checkpoint。
+
 ## 添加 Memory provider
 
 Awesome 当前有本地 Markdown Memory 和一个可选 Mem0 Cloud adapter。第二个外部 provider
@@ -262,10 +279,21 @@ Memory 不能 grant Tool capability，也不能成为隐藏 provider fallback。
 
 ## 变更存储或恢复
 
-Storage 变更不只是添加 column。应判断字段缺失在 Schema 7 中是否有安全解释。如果没有，
-则递增 schema identity 并定义旧/新状态的产品行为。Awesome 没有自动 migration framework，
-因此新 schema 必须更新 preflight、reset verification、packaging check、docs 和 recovery
-test。
+Storage 变更不只是添加 column。应判断字段缺失在当前 Schema 8 中是否有安全解释。如果
+没有，则递增 schema identity 并定义旧/新状态的产品行为。把每个受支持的升级作为一个相邻
+`N -> N+1` operation 加入 Storage 所属的 migration registry。Registry 必须从显式 floor
+到 current 始终保持一条完整线性链；不要添加 branch、gap、历史 adapter，也不要把
+migration 逻辑放到该 owner 之外。当前生产链的 floor 是 7、current 是 8，且有一个增加可空
+Thread lineage 的 `7 -> 8` step；Schema 1–6 仍然不可迁移。
+
+Migration code 必须保持启动协议：shared-lease read-only preflight、exclusive lease、重新检查
+兼容性、在 `application.db.pre-migration.bak` 创建并校验能感知 WAL 的 SQLite backup，然后
+在一个 transaction 内执行完整链。只有成功后，启动才能降级 lease 并初始化 repository。
+Migration step 只能获得受限的 schema/data connection facade；不得自行 commit、rollback、
+创建 savepoint、attach 其它 database，或运行管理 transaction 的 script。步骤失败会回滚
+整条链，并保留 backup 供手动恢复；绝不能自动 reset 或 restore 状态。应使用
+synthetic multi-step schema 测试 registry，包括数据保留、backup 校验、rollback 和 rollback
+结果未知。相同 schema 变更中还要更新 preflight、release contract、双语文档与 recovery test。
 
 为每个新持久化事实说明：
 
@@ -281,7 +309,7 @@ test。
 
 ## 添加 protocol 或 TUI 界面事实
 
-遵循完整 Protocol v3 链：
+遵循完整 Protocol v4 链：
 
 ```text
 Python strict model
@@ -301,8 +329,9 @@ Python strict model
 
 - [ ] 一个现有 package 负责新行为。
 - [ ] 没有第二 graph、executor、command runtime、policy 或 storage owner。
-- [ ] Input 在审批/外部 I/O 前严格且有界。
-- [ ] Capability 与 hard-deny 行为显式。
+- [ ] Input 在审批、handler 执行或外部作用前严格且有界。
+- [ ] Hard admission 与 capability policy 显式且保持分离。
+- [ ] Replay safety 显式，metadata 缺失或未知时 fail closed。
 - [ ] Timeout、cancellation、cleanup 与 uncertain outcome 已测试。
 - [ ] 持久化事实和恢复规则已有文档。
 - [ ] Secret 与原始 payload 不能进入 event、audit、fixture 或 log。

@@ -1,0 +1,678 @@
+{
+  "cases": [
+    {
+      "method": "initialize",
+      "name": "initialize.ready",
+      "params": {
+        "client_name": "awesome",
+        "client_version": "1.3.0",
+        "protocol_version": 4
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "capabilities": [
+            "threads",
+            "turns",
+            "commands",
+            "web",
+            "citations"
+          ],
+          "product_version": "1.3.0",
+          "protocol_version": 4,
+          "session_id": "session_11111111111111111111111111111111",
+          "status": "ready",
+          "workspace": {
+            "branch": "feature/fixtures",
+            "display_path": "C:\\workspace"
+          }
+        }
+      }
+    },
+    {
+      "method": "initialize",
+      "name": "initialize.state_reset_required",
+      "params": {
+        "client_name": "awesome",
+        "client_version": "1.3.0",
+        "protocol_version": 4
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "capabilities": [
+            "threads",
+            "turns",
+            "commands",
+            "web",
+            "citations"
+          ],
+          "interaction_id": "interaction_state_reset",
+          "product_version": "1.3.0",
+          "protocol_version": 4,
+          "session_id": "session_11111111111111111111111111111111",
+          "status": "state_reset_required",
+          "workspace": {
+            "display_path": "C:\\workspace"
+          }
+        }
+      }
+    },
+    {
+      "method": "skill.list",
+      "name": "skill.list",
+      "params": {},
+      "result": {
+        "ok": true,
+        "value": {
+          "skills": [
+            {
+              "description": "Review code safely",
+              "name": "review"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "skill.install",
+      "name": "skill.install.installed",
+      "params": {
+        "replace": false,
+        "source_path": "C:\\packages\\review"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "name": "review",
+          "status": "installed"
+        }
+      }
+    },
+    {
+      "method": "skill.install",
+      "name": "skill.install.replaced",
+      "params": {
+        "replace": true,
+        "source_path": "C:\\packages\\review.zip"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "name": "review",
+          "status": "replaced"
+        }
+      }
+    },
+    {
+      "method": "skill.remove",
+      "name": "skill.remove",
+      "params": {
+        "name": "review"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "name": "review",
+          "status": "removed"
+        }
+      }
+    },
+    {
+      "method": "application.getState",
+      "name": "application.get_state",
+      "params": {},
+      "result": {
+        "ok": true,
+        "value": {
+          "configuration_diagnostics": [],
+          "configuration_valid": true,
+          "current_thread_id": "thread_11111111111111111111111111111111",
+          "initialized": true,
+          "mcp_status": [],
+          "memory_status": {},
+          "model_catalog": {
+            "providers": [
+              {
+                "credential_id": "deepseek",
+                "id": "deepseek",
+                "models": [
+                  {
+                    "context_limit": 262144,
+                    "id": "deepseek/deepseek-v4-flash",
+                    "is_default": true,
+                    "supports_reasoning": true,
+                    "supports_tools": true
+                  },
+                  {
+                    "context_limit": 262144,
+                    "id": "deepseek/deepseek-v4-pro",
+                    "is_default": false,
+                    "supports_reasoning": true,
+                    "supports_tools": true
+                  }
+                ],
+                "supported_regions": []
+              },
+              {
+                "credential_id": "kimi",
+                "default_region": "cn",
+                "id": "kimi",
+                "models": [
+                  {
+                    "context_limit": 262144,
+                    "id": "kimi/kimi-k2.6",
+                    "is_default": true,
+                    "supports_reasoning": true,
+                    "supports_tools": true
+                  },
+                  {
+                    "context_limit": 262144,
+                    "id": "kimi/kimi-k2.5",
+                    "is_default": false,
+                    "supports_reasoning": true,
+                    "supports_tools": true
+                  }
+                ],
+                "supported_regions": [
+                  "cn",
+                  "global"
+                ]
+              }
+            ]
+          },
+          "model_identity": {
+            "configured_model": "deepseek/deepseek-v4-flash",
+            "effective_model": "deepseek/deepseek-v4-flash",
+            "fallback_active": false,
+            "provider": "deepseek",
+            "runtime_name": "Awesome Agent"
+          },
+          "permission_mode": "accept_edits",
+          "provider_credentials": {
+            "deepseek": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "DEEPSEEK_API_KEY",
+              "provider": "deepseek"
+            },
+            "kimi": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "MOONSHOT_API_KEY",
+              "provider": "kimi"
+            },
+            "mem0": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "MEM0_API_KEY",
+              "provider": "mem0"
+            }
+          },
+          "secret_status": {
+            "deepseek_api_key": true,
+            "mem0_api_key": false,
+            "moonshot_api_key": false
+          },
+          "session_id": "session_11111111111111111111111111111111",
+          "skill_mode": "auto",
+          "thinking_enabled": true,
+          "usage": {
+            "active_execution_seconds": 0.5
+          },
+          "workspace": {
+            "branch": "feature/fixtures",
+            "display_path": "C:\\workspace"
+          },
+          "workspace_instruction_diagnostic": {
+            "code": "workspace_instructions_too_large",
+            "message": "AGENTS.md was ignored because it exceeds the 32 KiB limit.",
+            "source_id": "AGENTS.md"
+          },
+          "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "workspace_trusted": true
+        }
+      }
+    },
+    {
+      "method": "thread.list",
+      "name": "thread.list",
+      "params": {
+        "limit": 50
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "has_more": false,
+          "threads": [
+            {
+              "created_at": "2026-07-11T08:00:00Z",
+              "current_model": "deepseek/deepseek-v4-flash",
+              "id": "thread_11111111111111111111111111111111",
+              "lineage": null,
+              "skill_mode": "auto",
+              "thinking_enabled": true,
+              "title": "Fixture Thread",
+              "title_source": "automatic",
+              "updated_at": "2026-07-11T08:00:00Z",
+              "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "thread.search",
+      "name": "thread.search",
+      "params": {
+        "limit": 50,
+        "query": "  fixture source  "
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "has_more": false,
+          "threads": [
+            {
+              "created_at": "2026-07-11T08:00:00Z",
+              "current_model": "deepseek/deepseek-v4-flash",
+              "id": "thread_11111111111111111111111111111111",
+              "lineage": null,
+              "skill_mode": "auto",
+              "thinking_enabled": true,
+              "title": "Fixture Thread",
+              "title_source": "automatic",
+              "updated_at": "2026-07-11T08:00:00Z",
+              "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "thread.read",
+      "name": "thread.read",
+      "params": {
+        "limit": 50,
+        "thread_id": "thread_11111111111111111111111111111111"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "change_sets": [
+            {
+              "change_set_id": "change_11111111111111111111111111111111",
+              "changes": [
+                {
+                  "additions": 16,
+                  "change_kind": "updated",
+                  "deletions": 2,
+                  "kind": "text_file",
+                  "path": "src/main.py"
+                },
+                {
+                  "after_bytes": 20,
+                  "before_bytes": 12,
+                  "change_kind": "updated",
+                  "kind": "binary_file",
+                  "path": "assets/logo.bin"
+                },
+                {
+                  "change_kind": "created",
+                  "kind": "directory",
+                  "path": "generated"
+                },
+                {
+                  "change_kind": "updated",
+                  "kind": "symlink",
+                  "path": "current"
+                }
+              ],
+              "created_at": "2026-07-11T08:00:00Z",
+              "lifecycle": "applied",
+              "operation_id": "operation_33333333333333333333333333333333",
+              "sealed_at": "2026-07-11T08:00:00Z",
+              "turn_id": "turn_22222222222222222222222222222222"
+            }
+          ],
+          "has_more": false,
+          "view": {
+            "entries": [
+              {
+                "client_message_id": "client_44444444444444444444444444444444",
+                "content": "Inspect the repository.",
+                "created_at": "2026-07-11T08:00:00Z",
+                "id": "entry_55555555555555555555555555555555",
+                "kind": "user_message",
+                "metadata": {},
+                "sequence": 1,
+                "thread_id": "thread_11111111111111111111111111111111"
+              },
+              {
+                "content": "The source confirms the result. [[S1]]",
+                "created_at": "2026-07-11T08:00:00Z",
+                "id": "entry_66666666666666666666666666666666",
+                "kind": "assistant_message",
+                "metadata": {
+                  "citations": [
+                    {
+                      "id": "S1",
+                      "title": "Fixture source",
+                      "url": "https://example.com/source"
+                    }
+                  ]
+                },
+                "sequence": 2,
+                "thread_id": "thread_11111111111111111111111111111111"
+              }
+            ],
+            "thread": {
+              "created_at": "2026-07-11T08:00:00Z",
+              "current_model": "deepseek/deepseek-v4-flash",
+              "id": "thread_11111111111111111111111111111111",
+              "lineage": null,
+              "skill_mode": "auto",
+              "thinking_enabled": true,
+              "title": "Fixture Thread",
+              "title_source": "automatic",
+              "updated_at": "2026-07-11T08:00:00Z",
+              "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "tool_activities": [],
+            "turns": [
+              {
+                "assistant_entry_id": "entry_66666666666666666666666666666666",
+                "budgets": {
+                  "active_execution_seconds": 1800,
+                  "compressions": 2,
+                  "model_calls": 32,
+                  "provider_retries": 2,
+                  "tool_calls": 64,
+                  "total_context_tokens": 262144,
+                  "web_requests": 8
+                },
+                "checkpoint_key": "turn_22222222222222222222222222222222",
+                "completed_at": "2026-07-11T08:00:00Z",
+                "context_manifest": [],
+                "created_at": "2026-07-11T08:00:00Z",
+                "id": "turn_22222222222222222222222222222222",
+                "model": "deepseek-chat",
+                "provider": "deepseek",
+                "skill_mode": "auto",
+                "status": "completed",
+                "termination_reason": "stop",
+                "thinking_enabled": true,
+                "thread_id": "thread_11111111111111111111111111111111",
+                "updated_at": "2026-07-11T08:00:00Z",
+                "usage": {
+                  "active_execution_seconds": 0.0,
+                  "cache_read_tokens": 0,
+                  "cache_write_tokens": 0,
+                  "compressions": 0,
+                  "input_tokens": 0,
+                  "model_calls": 1,
+                  "output_tokens": 0,
+                  "provider_retries": 0,
+                  "reasoning_tokens": 0,
+                  "tool_calls": 0,
+                  "web_requests": 1
+                },
+                "user_entry_id": "entry_55555555555555555555555555555555"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "method": "turn.submit",
+      "name": "turn.submit",
+      "params": {
+        "client_message_id": "client_44444444444444444444444444444444",
+        "content": "Inspect the repository.",
+        "thread_id": "thread_11111111111111111111111111111111"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "client_message_id": "client_44444444444444444444444444444444",
+          "operation_id": "operation_33333333333333333333333333333333",
+          "thread_id": "thread_11111111111111111111111111111111",
+          "turn_id": "turn_22222222222222222222222222222222"
+        }
+      }
+    },
+    {
+      "method": "direct.execute",
+      "name": "direct.execute",
+      "params": {
+        "command": "git status",
+        "thread_id": "thread_11111111111111111111111111111111"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "operation_id": "operation_33333333333333333333333333333333",
+          "thread_id": "thread_11111111111111111111111111111111"
+        }
+      }
+    },
+    {
+      "method": "command.execute",
+      "name": "command.execute",
+      "params": {
+        "arguments": [],
+        "name": "status"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "kind": "result",
+          "payload": {
+            "kind": "status",
+            "snapshot": {
+              "changed_file_count": 0,
+              "configuration_diagnostic_count": 0,
+              "configuration_valid": true,
+              "context_budget_tokens": 262144,
+              "context_used_tokens": 0,
+              "credential_source_available": false,
+              "local_memory_enabled": false,
+              "mcp_degraded": 0,
+              "mcp_ready": 0,
+              "mem0_enabled": false,
+              "model_identity": {
+                "configured_model": "deepseek/deepseek-v4-flash",
+                "effective_model": "deepseek/deepseek-v4-flash",
+                "fallback_active": false,
+                "provider": "deepseek",
+                "runtime_name": "Awesome Agent"
+              },
+              "model_status": "configured",
+              "operation_status": "idle",
+              "permission_mode": "request_approval",
+              "skill_mode": "auto",
+              "thinking_enabled": true,
+              "thread_display_id": "thread_11111111",
+              "thread_id": "thread_11111111111111111111111111111111",
+              "thread_title": "Fixture Thread",
+              "version": "1.3.0",
+              "workspace_path": "C:\\workspace"
+            }
+          }
+        }
+      }
+    },
+    {
+      "method": "provider.credential.set",
+      "name": "provider.credential.set.configured",
+      "params": {
+        "action": "add",
+        "allow_unverified": false,
+        "api_key": "fixture-request-secret",
+        "provider": "deepseek"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "code": "credential_saved",
+          "provider": "deepseek",
+          "source": "awesome",
+          "status": "configured"
+        }
+      }
+    },
+    {
+      "method": "provider.credential.set",
+      "name": "provider.credential.set.invalid",
+      "params": {
+        "action": "add",
+        "allow_unverified": false,
+        "api_key": "fixture-invalid-secret",
+        "provider": "deepseek"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "code": "credential_invalid",
+          "provider": "deepseek",
+          "status": "invalid"
+        }
+      }
+    },
+    {
+      "method": "provider.credential.set",
+      "name": "provider.credential.set.confirm_unverified",
+      "params": {
+        "action": "add",
+        "allow_unverified": false,
+        "api_key": "fixture-unverified-secret",
+        "provider": "kimi"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "code": "credential_validation_unavailable",
+          "provider": "kimi",
+          "status": "confirm_unverified"
+        }
+      }
+    },
+    {
+      "method": "provider.credential.set",
+      "name": "provider.credential.set.deleted",
+      "params": {
+        "action": "delete",
+        "provider": "mem0"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "code": "credential_deleted",
+          "provider": "mem0",
+          "status": "deleted"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond",
+      "params": {
+        "decision": "trust",
+        "interaction_id": "interaction_1"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.state_reset",
+      "params": {
+        "decision": "reset_state",
+        "interaction_id": "interaction_state_reset"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.state_reset_denied",
+      "params": {
+        "decision": "deny",
+        "interaction_id": "interaction_state_reset"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "denied"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.recovery_retry",
+      "params": {
+        "decision": "retry",
+        "interaction_id": "interaction_recovery"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "interaction.respond",
+      "name": "interaction.respond.recovery_abort",
+      "params": {
+        "decision": "abort",
+        "interaction_id": "interaction_recovery"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "accepted": true,
+          "status": "resolved"
+        }
+      }
+    },
+    {
+      "method": "operation.cancel",
+      "name": "operation.cancel",
+      "params": {
+        "operation_id": "operation_33333333333333333333333333333333"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "cancelled": true,
+          "operation_id": "operation_33333333333333333333333333333333"
+        }
+      }
+    },
+    {
+      "method": "shutdown",
+      "name": "shutdown",
+      "params": {},
+      "result": {
+        "ok": true,
+        "value": {
+          "stopped": true
+        }
+      }
+    }
+  ]
+}

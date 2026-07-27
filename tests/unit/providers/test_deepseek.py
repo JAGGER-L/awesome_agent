@@ -10,6 +10,7 @@ import httpx
 import openai
 import pytest
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -261,6 +262,31 @@ async def test_assistant_tool_history_replays_excluded_continuation() -> None:
     call = create.await_args
     assert call is not None
     assert call.kwargs["messages"][1]["reasoning_content"] == "private continuation"
+
+
+@pytest.mark.asyncio
+async def test_unknown_continuation_schema_never_reaches_deepseek() -> None:
+    create = AsyncMock(
+        return_value=AsyncEvents((_chunk(content="done", finish_reason="stop"),))
+    )
+    provider = DeepSeekProvider(
+        api_key="test",
+        model="deepseek/deepseek-v4-flash",
+        client=_client(create),
+    )
+
+    with pytest.raises(ValidationError):
+        request = _request(
+            continuation={
+                "provider": "deepseek",
+                "kind": "chat.reasoning_content",
+                "schema_version": 2,
+                "data": {"reasoning_content": "private continuation"},
+            }
+        )
+        await _events(provider, request)
+
+    create.assert_not_awaited()
 
 
 @pytest.mark.asyncio

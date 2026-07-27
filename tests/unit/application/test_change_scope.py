@@ -1,5 +1,7 @@
+import asyncio
 import hashlib
 import stat
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,6 +13,8 @@ from awesome_agent.core.changes import (
     BoundFileMutation,
     ChangeJournal,
     ChangeLifecycle,
+    ChangeSet,
+    ExecuteObservation,
     FileChangeKind,
     FileNodeType,
     NodeSnapshot,
@@ -22,12 +26,93 @@ from awesome_agent.core.changes.errors import (
 from awesome_agent.core.changes.ports import PendingMutation
 from awesome_agent.core.tools import ToolExecutionContext, ToolOutput, ToolSpec
 from awesome_agent.core.tools.registry import ToolRegistry
-from awesome_agent.core.workspace import resolve_workspace
+from awesome_agent.core.workspace import WorkspaceIdentity, resolve_workspace
+from awesome_agent.storage import ApplicationSQLite
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 
 
 class _Arguments(BaseModel):
     pass
+
+
+class _BlockingBeginJournal(ChangeJournal):
+    def __init__(
+        self,
+        store: SQLiteChangeSetStore,
+        blobs: FileChangeBlobStore,
+        workspace: WorkspaceIdentity,
+    ) -> None:
+        super().__init__(store, blobs, workspace)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def begin(
+        self,
+        *,
+        session_id: str,
+        turn_id: str | None,
+        workspace: WorkspaceIdentity,
+    ) -> ChangeSet:
+        change_set = await super().begin(
+            session_id=session_id,
+            turn_id=turn_id,
+            workspace=workspace,
+        )
+        self.entered.set()
+        await self.release.wait()
+        return change_set
+
+
+class _BlockingSealJournal(ChangeJournal):
+    def __init__(
+        self,
+        store: SQLiteChangeSetStore,
+        blobs: FileChangeBlobStore,
+        workspace: WorkspaceIdentity,
+    ) -> None:
+        super().__init__(store, blobs, workspace)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def seal(self, change_set_id: str) -> ChangeSet:
+        change_set = await super().seal(change_set_id)
+        self.entered.set()
+        await self.release.wait()
+        return change_set
+
+
+class _BlockingFailBeginJournal(ChangeJournal):
+    def __init__(
+        self,
+        store: SQLiteChangeSetStore,
+        blobs: FileChangeBlobStore,
+        workspace: WorkspaceIdentity,
+    ) -> None:
+        super().__init__(store, blobs, workspace)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def begin(
+        self,
+        *,
+        session_id: str,
+        turn_id: str | None,
+        workspace: WorkspaceIdentity,
+    ) -> ChangeSet:
+        del session_id, turn_id, workspace
+        self.entered.set()
+        await self.release.wait()
+        raise RuntimeError("journal begin failed")
+
+
+class _RefusingDeleteChangeSetStore(SQLiteChangeSetStore):
+    def __init__(self, database: ApplicationSQLite) -> None:
+        super().__init__(database)
+        self.delete_attempts: list[str] = []
+
+    async def delete_empty_open(self, change_set_id: str) -> bool:
+        self.delete_attempts.append(change_set_id)
+        return False
 
 
 async def _handler(
@@ -61,11 +146,12 @@ def _registry() -> ToolRegistry:
 
 def _scope(
     tmp_path: Path,
+    database: ApplicationSQLite,
 ) -> tuple[ChangeScope, SQLiteChangeSetStore, str]:
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir(exist_ok=True)
     workspace = resolve_workspace(workspace_path)
-    store = SQLiteChangeSetStore(tmp_path / "application.db")
+    store = SQLiteChangeSetStore(database)
     journal = ChangeJournal(
         store,
         FileChangeBlobStore(tmp_path / "change-journal"),
@@ -84,43 +170,65 @@ def _scope(
     )
 
 
-def test_read_only_tool_does_not_allocate_change_set(tmp_path: Path) -> None:
-    scope, store, workspace_key = _scope(tmp_path)
+@pytest.fixture
+async def database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    owner = ApplicationSQLite(tmp_path / "application.db")
+    await owner.initialize()
+    try:
+        yield owner
+    finally:
+        await owner.aclose()
+
+
+@pytest.mark.asyncio
+async def test_read_only_tool_does_not_allocate_change_set(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, workspace_key = _scope(tmp_path, database)
 
     assert (
-        scope.change_set_for_tool(
+        await scope.change_set_for_tool(
             tool_name="read_file",
             owner="turn_1",
             turn_id="turn_1",
         )
         is None
     )
-    assert store.latest(workspace_key) is None
+    assert await store.latest(workspace_key) is None
 
 
-def test_unknown_tool_does_not_allocate_change_set(tmp_path: Path) -> None:
-    scope, store, workspace_key = _scope(tmp_path)
+@pytest.mark.asyncio
+async def test_unknown_tool_does_not_allocate_change_set(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, workspace_key = _scope(tmp_path, database)
 
     assert (
-        scope.change_set_for_tool(
+        await scope.change_set_for_tool(
             tool_name="unknown_tool",
             owner="turn_1",
             turn_id="turn_1",
         )
         is None
     )
-    assert store.latest(workspace_key) is None
+    assert await store.latest(workspace_key) is None
 
 
-def test_write_tools_reuse_one_owner_change_set(tmp_path: Path) -> None:
-    scope, store, workspace_key = _scope(tmp_path)
+@pytest.mark.asyncio
+async def test_write_tools_reuse_one_owner_change_set(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, workspace_key = _scope(tmp_path, database)
 
-    first = scope.change_set_for_tool(
+    first = await scope.change_set_for_tool(
         tool_name="write_file",
         owner="turn_1",
         turn_id="turn_1",
     )
-    second = scope.change_set_for_tool(
+    second = await scope.change_set_for_tool(
         tool_name="edit_file",
         owner="turn_1",
         turn_id="turn_1",
@@ -128,18 +236,96 @@ def test_write_tools_reuse_one_owner_change_set(tmp_path: Path) -> None:
 
     assert first is not None
     assert second == first
-    assert store.latest(workspace_key) is not None
+    assert await store.latest(workspace_key) is not None
 
 
-def test_sealing_without_a_mutating_tool_is_a_noop(tmp_path: Path) -> None:
-    scope, store, workspace_key = _scope(tmp_path)
+@pytest.mark.asyncio
+async def test_sealing_without_a_mutating_tool_is_a_noop(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, workspace_key = _scope(tmp_path, database)
 
-    scope.seal("turn_1")
+    await scope.seal("turn_1")
 
-    assert store.latest(workspace_key) is None
+    assert await store.latest(workspace_key) is None
 
 
-def _conflicting_pending(
+@pytest.mark.asyncio
+async def test_failed_finalization_deletes_an_empty_open_change_set(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, _ = _scope(tmp_path, database)
+    first = await scope.acquire("export_1", turn_id=None)
+
+    await scope.finalize_failed("export_1")
+
+    assert await store.get(first) is None
+    assert await scope.acquire("export_1", turn_id=None) != first
+
+
+@pytest.mark.asyncio
+async def test_failed_finalization_seals_an_open_change_set_with_evidence(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, _ = _scope(tmp_path, database)
+    first = await scope.acquire("export_1", turn_id=None)
+    open_change = await store.get(first)
+    assert open_change is not None
+    await store.save(
+        open_change.model_copy(
+            update={
+                "execute": [
+                    ExecuteObservation(command="export", observed_paths=["out.md"])
+                ]
+            }
+        )
+    )
+
+    await scope.finalize_failed("export_1")
+
+    sealed = await store.get(first)
+    assert sealed is not None
+    assert sealed.lifecycle is ChangeLifecycle.APPLIED
+    assert sealed.sealed_at is not None
+    assert await scope.acquire("export_1", turn_id=None) != first
+
+
+@pytest.mark.asyncio
+async def test_failed_finalization_seals_when_atomic_empty_delete_is_refused(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    store = _RefusingDeleteChangeSetStore(database)
+    scope = ChangeScope(
+        journal=ChangeJournal(
+            store,
+            FileChangeBlobStore(tmp_path / "change-journal"),
+            workspace,
+        ),
+        store=store,
+        registry=_registry(),
+        session_id="session_1",
+        workspace=workspace,
+    )
+    first = await scope.acquire("export_1", turn_id=None)
+
+    await scope.finalize_failed("export_1")
+
+    retained = await store.get(first)
+    assert store.delete_attempts == [first]
+    assert retained is not None
+    assert retained.lifecycle is ChangeLifecycle.APPLIED
+    assert retained.sealed_at is not None
+    assert await scope.acquire("export_1", turn_id=None) != first
+
+
+async def _conflicting_pending(
     tmp_path: Path,
     *,
     store: SQLiteChangeSetStore,
@@ -167,16 +353,18 @@ def _conflicting_pending(
         intended_after_mode=mode,
         created_at=datetime.now(UTC),
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     return pending
 
 
-def test_seal_ignores_a_conflicting_pending_from_another_change_set(
+@pytest.mark.asyncio
+async def test_seal_ignores_a_conflicting_pending_from_another_change_set(
     tmp_path: Path,
+    database: ApplicationSQLite,
 ) -> None:
-    scope, store, workspace_key = _scope(tmp_path)
-    current_id = scope.acquire("turn_current", turn_id="turn_current")
-    current = store.get(current_id)
+    scope, store, workspace_key = _scope(tmp_path, database)
+    current_id = await scope.acquire("turn_current", turn_id="turn_current")
+    current = await store.get(current_id)
     assert current is not None
     foreign = current.model_copy(
         update={
@@ -185,8 +373,8 @@ def test_seal_ignores_a_conflicting_pending_from_another_change_set(
             "created_at": datetime.now(UTC),
         }
     )
-    store.save(foreign)
-    pending = _conflicting_pending(
+    await store.save(foreign)
+    pending = await _conflicting_pending(
         tmp_path,
         store=store,
         change_set_id=foreign.id,
@@ -195,21 +383,25 @@ def test_seal_ignores_a_conflicting_pending_from_another_change_set(
         relative_path="foreign.txt",
     )
 
-    scope.seal("turn_current")
+    await scope.seal("turn_current")
 
-    sealed = store.get(current_id)
+    sealed = await store.get(current_id)
     assert sealed is not None
     assert sealed.lifecycle is ChangeLifecycle.APPLIED
-    retained = store.get(foreign.id)
+    retained = await store.get(foreign.id)
     assert retained is not None
     assert retained.lifecycle is ChangeLifecycle.OPEN
-    assert store.list_pending() == [pending]
+    assert await store.list_pending() == [pending]
 
 
-def test_failed_seal_retains_the_owner_for_a_safe_retry(tmp_path: Path) -> None:
-    scope, store, workspace_key = _scope(tmp_path)
-    change_set_id = scope.acquire("turn_1", turn_id="turn_1")
-    _conflicting_pending(
+@pytest.mark.asyncio
+async def test_failed_seal_retains_the_owner_for_a_safe_retry(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, workspace_key = _scope(tmp_path, database)
+    change_set_id = await scope.acquire("turn_1", turn_id="turn_1")
+    await _conflicting_pending(
         tmp_path,
         store=store,
         change_set_id=change_set_id,
@@ -219,23 +411,50 @@ def test_failed_seal_retains_the_owner_for_a_safe_retry(tmp_path: Path) -> None:
     )
 
     with pytest.raises(PendingMutationConflict):
-        scope.seal("turn_1")
+        await scope.seal("turn_1")
 
     (tmp_path / "workspace" / "current.txt").write_bytes(b"after")
-    scope.seal("turn_1")
+    await scope.seal("turn_1")
 
-    sealed = store.get(change_set_id)
+    sealed = await store.get(change_set_id)
     assert sealed is not None
     assert sealed.lifecycle is ChangeLifecycle.APPLIED
     assert len(sealed.files) == 1
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
 
-def test_startup_reconcile_seals_an_orphaned_open_change_set(
+@pytest.mark.asyncio
+async def test_failed_finalization_unpublishes_after_reconciliation_failure(
     tmp_path: Path,
+    database: ApplicationSQLite,
 ) -> None:
-    scope, store, workspace_key = _scope(tmp_path)
-    orphaned_id = scope.acquire("turn_1", turn_id="turn_1")
+    scope, store, workspace_key = _scope(tmp_path, database)
+    first = await scope.acquire("export_1", turn_id=None)
+    await _conflicting_pending(
+        tmp_path,
+        store=store,
+        change_set_id=first,
+        workspace_key=workspace_key,
+        pending_id="pending_export",
+        relative_path="export.md",
+    )
+
+    with pytest.raises(PendingMutationConflict):
+        await scope.finalize_failed("export_1")
+
+    retained = await store.get(first)
+    assert retained is not None
+    assert retained.lifecycle is ChangeLifecycle.OPEN
+    assert await scope.acquire("export_1", turn_id=None) != first
+
+
+@pytest.mark.asyncio
+async def test_startup_reconcile_seals_an_orphaned_open_change_set(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, workspace_key = _scope(tmp_path, database)
+    orphaned_id = await scope.acquire("turn_1", turn_id="turn_1")
     workspace_path = tmp_path / "workspace"
     path = workspace_path / "file.txt"
 
@@ -250,7 +469,7 @@ def test_startup_reconcile_seals_an_orphaned_open_change_set(
         FileChangeBlobStore(tmp_path / "change-journal"),
         resolve_workspace(workspace_path),
     )
-    journal.apply_file_mutation(
+    await journal.apply_file_mutation(
         change_set_id=orphaned_id,
         kind=FileChangeKind.CREATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"after", None),
@@ -261,50 +480,171 @@ def test_startup_reconcile_seals_an_orphaned_open_change_set(
             capture_after=capture_after,
         ),
     )
-    orphaned = store.get(orphaned_id)
+    orphaned = await store.get(orphaned_id)
     assert orphaned is not None
     assert orphaned.lifecycle is ChangeLifecycle.OPEN
     assert len(orphaned.files) == 1
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
-    restarted_scope, restarted_store, restarted_workspace_key = _scope(tmp_path)
+    restarted_scope, restarted_store, restarted_workspace_key = _scope(
+        tmp_path, database
+    )
     assert restarted_workspace_key == workspace_key
-    restarted_scope.reconcile()
+    await restarted_scope.reconcile()
 
-    recovered = restarted_store.get(orphaned_id)
+    recovered = await restarted_store.get(orphaned_id)
     assert recovered is not None
     assert recovered.lifecycle is ChangeLifecycle.APPLIED
     assert recovered.sealed_at is not None
 
 
-def test_reconcile_does_not_seal_the_active_scope_change_set(
+@pytest.mark.asyncio
+async def test_reconcile_does_not_seal_the_active_scope_change_set(
     tmp_path: Path,
+    database: ApplicationSQLite,
 ) -> None:
-    scope, store, _ = _scope(tmp_path)
-    active_id = scope.acquire("turn_1", turn_id="turn_1")
+    scope, store, _ = _scope(tmp_path, database)
+    active_id = await scope.acquire("turn_1", turn_id="turn_1")
 
     with pytest.raises(ChangeLifecycleError, match="active ChangeSets"):
-        scope.reconcile()
+        await scope.reconcile()
 
-    active = store.get(active_id)
+    active = await store.get(active_id)
     assert active is not None
     assert active.lifecycle is ChangeLifecycle.OPEN
 
 
-def test_reconcile_does_not_seal_another_workspaces_open_change_set(
+@pytest.mark.asyncio
+async def test_reconcile_does_not_seal_another_workspaces_open_change_set(
     tmp_path: Path,
+    database: ApplicationSQLite,
 ) -> None:
-    scope, store, _ = _scope(tmp_path)
-    foreign = store.get(scope.acquire("turn_1", turn_id="turn_1"))
+    scope, store, _ = _scope(tmp_path, database)
+    foreign = await store.get(await scope.acquire("turn_1", turn_id="turn_1"))
     assert foreign is not None
     foreign = foreign.model_copy(
         update={"id": "change_foreign", "workspace_key": "ws_foreign"}
     )
-    store.save(foreign)
+    await store.save(foreign)
 
-    restarted_scope, restarted_store, _ = _scope(tmp_path)
-    restarted_scope.reconcile()
+    restarted_scope, restarted_store, _ = _scope(tmp_path, database)
+    await restarted_scope.reconcile()
 
-    retained = restarted_store.get(foreign.id)
+    retained = await restarted_store.get(foreign.id)
     assert retained is not None
     assert retained.lifecycle is ChangeLifecycle.OPEN
+
+
+@pytest.mark.asyncio
+async def test_cancelled_acquire_publishes_the_durably_created_change_set(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    store = SQLiteChangeSetStore(database)
+    journal = _BlockingBeginJournal(
+        store,
+        FileChangeBlobStore(tmp_path / "change-journal"),
+        workspace,
+    )
+    scope = ChangeScope(
+        journal=journal,
+        store=store,
+        registry=_registry(),
+        session_id="session_1",
+        workspace=workspace,
+    )
+
+    acquiring = asyncio.create_task(scope.acquire("turn_1", turn_id="turn_1"))
+    await journal.entered.wait()
+    acquiring.cancel("first cancellation")
+    await asyncio.sleep(0)
+    acquiring.cancel("second cancellation")
+    journal.release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await acquiring
+
+    persisted = await store.latest(workspace.key)
+    assert persisted is not None
+    assert cancelled.value.args == ("first cancellation",)
+    assert await scope.acquire("turn_1", turn_id="turn_1") == persisted.id
+    assert len(await store.list_open(workspace.key)) == 1
+
+
+@pytest.mark.asyncio
+async def test_acquire_failure_after_cancellation_preserves_first_cancellation(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    store = SQLiteChangeSetStore(database)
+    journal = _BlockingFailBeginJournal(
+        store,
+        FileChangeBlobStore(tmp_path / "change-journal"),
+        workspace,
+    )
+    scope = ChangeScope(
+        journal=journal,
+        store=store,
+        registry=_registry(),
+        session_id="session_1",
+        workspace=workspace,
+    )
+
+    acquiring = asyncio.create_task(scope.acquire("turn_1", turn_id="turn_1"))
+    await journal.entered.wait()
+    acquiring.cancel("first cancellation")
+    await asyncio.sleep(0)
+    acquiring.cancel("second cancellation")
+    journal.release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await acquiring
+
+    assert cancelled.value.args == ("first cancellation",)
+    assert await store.latest(workspace.key) is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_seal_unpublishes_the_durably_sealed_change_set(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    store = SQLiteChangeSetStore(database)
+    journal = _BlockingSealJournal(
+        store,
+        FileChangeBlobStore(tmp_path / "change-journal"),
+        workspace,
+    )
+    scope = ChangeScope(
+        journal=journal,
+        store=store,
+        registry=_registry(),
+        session_id="session_1",
+        workspace=workspace,
+    )
+    first = await scope.acquire("turn_1", turn_id="turn_1")
+
+    sealing = asyncio.create_task(scope.seal("turn_1"))
+    await journal.entered.wait()
+    sealing.cancel("first cancellation")
+    await asyncio.sleep(0)
+    sealing.cancel("second cancellation")
+    journal.release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await sealing
+
+    sealed = await store.get(first)
+    assert sealed is not None
+    assert sealed.lifecycle is ChangeLifecycle.APPLIED
+    assert cancelled.value.args == ("first cancellation",)
+    assert await scope.acquire("turn_1", turn_id="turn_1") != first

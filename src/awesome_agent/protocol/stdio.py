@@ -10,7 +10,6 @@ import sys
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping
-from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -21,6 +20,7 @@ from awesome_agent.application.contracts import (
     ProductErrorCode,
 )
 from awesome_agent.application.facade import ApplicationFacade
+from awesome_agent.application.middleware import ApplicationOperation
 from awesome_agent.core.contracts import MAX_JSON_SAFE_INTEGER
 from awesome_agent.core.events import EventEnvelope, EventSink
 from awesome_agent.core.process_lifetime import (
@@ -46,109 +46,6 @@ _OUTPUT_WRITE_TIMEOUT_SECONDS = 5.0
 _MAX_PROTOCOL_JSON_DEPTH = 64
 _BACKGROUND_CONTROL_METHODS = frozenset({"initialize", "interaction.respond"})
 _URGENT_CONTROL_METHODS = frozenset({"operation.cancel", "shutdown"})
-
-
-class _HandshakeState(Enum):
-    UNINITIALIZED = auto()
-    INITIALIZING = auto()
-    BOOTSTRAP_INTERACTION = auto()
-    READY = auto()
-
-
-class _HandshakeGate:
-    def __init__(self) -> None:
-        self._state = _HandshakeState.UNINITIALIZED
-        self._initializing_from = _HandshakeState.UNINITIALIZED
-        self._bootstrap_status: str | None = None
-
-    def rejection(
-        self,
-        request: tuple[str | int | None, bool, str, object] | None,
-    ) -> tuple[str, str] | None:
-        if request is None:
-            return None
-        _, _, method, _ = request
-        if method in _URGENT_CONTROL_METHODS or self._state is _HandshakeState.READY:
-            return None
-        if method == "initialize":
-            if self._state is _HandshakeState.INITIALIZING:
-                return (
-                    "Server initialization is in progress",
-                    "initialization_in_progress",
-                )
-            return None
-        if (
-            self._state is _HandshakeState.BOOTSTRAP_INTERACTION
-            and method == "interaction.respond"
-        ):
-            return None
-        if self._state is _HandshakeState.UNINITIALIZED:
-            return "Server not initialized", "server_not_initialized"
-        return "Server not ready", "server_not_ready"
-
-    def started(self, method: str | None) -> None:
-        if method != "initialize" or self._state is _HandshakeState.READY:
-            return
-        self._initializing_from = self._state
-        self._state = _HandshakeState.INITIALIZING
-
-    def completed(
-        self,
-        method: str | None,
-        value: object,
-        response: Mapping[str, object] | None,
-    ) -> None:
-        if method == "initialize":
-            self._complete_initialize(response)
-        elif method == "interaction.respond":
-            self._complete_bootstrap_interaction(value, response)
-
-    def _complete_initialize(self, response: Mapping[str, object] | None) -> None:
-        if self._state is not _HandshakeState.INITIALIZING:
-            return
-        self._state = self._initializing_from
-        value = _successful_result_value(response)
-        status = value.get("status") if value is not None else None
-        if status == "ready":
-            self._state = _HandshakeState.READY
-            self._bootstrap_status = None
-        elif status in {"trust_required", "state_reset_required"}:
-            self._state = _HandshakeState.BOOTSTRAP_INTERACTION
-            self._bootstrap_status = status
-
-    def _complete_bootstrap_interaction(
-        self,
-        request_value: object,
-        response: Mapping[str, object] | None,
-    ) -> None:
-        if (
-            self._state is not _HandshakeState.BOOTSTRAP_INTERACTION
-            or self._bootstrap_status != "trust_required"
-        ):
-            return
-        result = _successful_result_value(response)
-        request = parse_jsonrpc_request(request_value)
-        params = request[3] if request is not None else None
-        if (
-            result is not None
-            and result.get("accepted") is True
-            and isinstance(params, Mapping)
-            and params.get("decision") == "trust"
-        ):
-            self._state = _HandshakeState.READY
-            self._bootstrap_status = None
-
-
-def _successful_result_value(
-    response: Mapping[str, object] | None,
-) -> Mapping[str, object] | None:
-    if response is None:
-        return None
-    result = response.get("result")
-    if not isinstance(result, Mapping) or result.get("ok") is not True:
-        return None
-    value = result.get("value")
-    return value if isinstance(value, Mapping) else None
 
 
 class AsyncByteReader(Protocol):
@@ -353,7 +250,6 @@ async def serve_stdio(
             shutdown_invoked = True
 
     dispatcher = JsonRpcDispatcher(facade, method_completed=method_completed)
-    handshake = _HandshakeGate()
     request_ids = _RequestIdTracker()
     pending_requests: set[asyncio.Task[Mapping[str, object] | None]] = set()
     pending_controls: set[asyncio.Task[Mapping[str, object] | None]] = set()
@@ -375,23 +271,17 @@ async def serve_stdio(
     def start_background_request(
         value: object,
         request_id: str | int | None,
-        method: str | None,
         *,
         control: bool,
     ) -> None:
         async def dispatch() -> Mapping[str, object] | None:
-            response: Mapping[str, object] | None = None
-            try:
-                response = await _dispatch_request(
-                    dispatcher,
-                    protocol_writer,
-                    request_ids,
-                    value,
-                    request_id,
-                )
-                return response
-            finally:
-                handshake.completed(method, value, response)
+            return await _dispatch_request(
+                dispatcher,
+                protocol_writer,
+                request_ids,
+                value,
+                request_id,
+            )
 
         task = asyncio.create_task(
             dispatch(),
@@ -469,6 +359,26 @@ async def serve_stdio(
                 continue
             request_id = _request_id(value)
             method = _method(value)
+            parsed_request = parse_jsonrpc_request(value)
+            bootstrap_rejection = (
+                facade.bootstrap_rejection(_application_operation(parsed_request[2]))
+                if parsed_request is not None
+                else None
+            )
+            if bootstrap_rejection is not None:
+                if parsed_request is not None and parsed_request[1]:
+                    await protocol_writer.send(
+                        jsonrpc_error(
+                            -32002,
+                            bootstrap_rejection.message,
+                            request_id=parsed_request[0],
+                            data={
+                                "diagnostic_code": bootstrap_rejection.diagnostic_code
+                            },
+                        )
+                    )
+                request_ids.complete(request_id)
+                continue
             if method in _URGENT_CONTROL_METHODS:
                 if method == "shutdown" and _valid_shutdown_request(value):
                     await cancel_background_requests()
@@ -481,21 +391,6 @@ async def serve_stdio(
                 )
                 if _shutdown_completed(value, response):
                     break
-                continue
-            parsed_request = parse_jsonrpc_request(value)
-            handshake_rejection = handshake.rejection(parsed_request)
-            if handshake_rejection is not None:
-                message, diagnostic_code = handshake_rejection
-                if parsed_request is not None and parsed_request[1]:
-                    await protocol_writer.send(
-                        jsonrpc_error(
-                            -32002,
-                            message,
-                            request_id=parsed_request[0],
-                            data={"diagnostic_code": diagnostic_code},
-                        )
-                    )
-                request_ids.complete(request_id)
                 continue
             is_control = method in _BACKGROUND_CONTROL_METHODS
             pending = pending_controls if is_control else pending_requests
@@ -515,11 +410,9 @@ async def serve_stdio(
                     )
                 request_ids.complete(request_id)
                 continue
-            handshake.started(method)
             start_background_request(
                 value,
                 request_id,
-                method,
                 control=is_control,
             )
             # Let an accepted request enter the Application boundary before the
@@ -589,6 +482,13 @@ def _request_id(value: object) -> str | int | None:
 def _method(value: object) -> str | None:
     method = value.get("method") if isinstance(value, dict) else None
     return method if isinstance(method, str) else None
+
+
+def _application_operation(method: str) -> ApplicationOperation | None:
+    try:
+        return ApplicationOperation(method)
+    except ValueError:
+        return None
 
 
 def _shutdown_completed(

@@ -6,6 +6,7 @@ from pathlib import Path
 AGENT_STATE_FIELDS = {
     "active_execution_seconds",
     "compressions",
+    "citations",
     "compression_reason",
     "compression_requested",
     "context_effective_limit",
@@ -28,6 +29,7 @@ AGENT_STATE_FIELDS = {
     "tool_results",
     "turn_id",
     "usage",
+    "web_requests",
     "workspace_key",
 }
 
@@ -47,3 +49,23 @@ def test_agent_state_is_the_current_checkpoint_contract() -> None:
     }
 
     assert field_names == AGENT_STATE_FIELDS
+
+
+def test_agent_finalization_boundary_does_not_import_memory() -> None:
+    violations: dict[str, list[str]] = {}
+    for path in Path("src/awesome_agent/agent").glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imports = sorted(
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            and node.module is not None
+            and (
+                node.module == "awesome_agent.memory"
+                or node.module.startswith("awesome_agent.memory.")
+            )
+        )
+        if imports:
+            violations[path.name] = imports
+
+    assert violations == {}

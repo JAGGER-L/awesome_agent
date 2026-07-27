@@ -2,18 +2,24 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 from pydantic import JsonValue
 
+from awesome_agent.config import BudgetConfig
+from awesome_agent.conversation.materialization import (
+    RetryPreparation,
+    ThreadMaterializationPlan,
+    materialization_source_fingerprint,
+)
 from awesome_agent.conversation.models import (
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadLineage,
     ThreadListPage,
     ThreadPage,
     ThreadSummary,
@@ -28,193 +34,257 @@ from awesome_agent.conversation.models import (
 )
 from awesome_agent.conversation.repository import (
     ConversationConflict,
+    InvalidTurnTransition,
     ThreadNotFound,
+    ThreadSearchLimitExceeded,
     TurnBusy,
     TurnNotFound,
     require_turn_transition,
 )
 from awesome_agent.core.tools import ToolActivityDraft
-from awesome_agent.storage.database import application_connection
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
+
+# SQLite invokes the handler in bounded batches, avoiding per-opcode Python calls in
+# normal operation while still making the worst-case substring scan deterministic.
+_THREAD_SEARCH_OPCODE_BUDGET = 5_000_000
+_THREAD_SEARCH_PROGRESS_GRANULARITY = 1_000
+
+
+@contextmanager
+def _bounded_thread_search(connection: sqlite3.Connection) -> Iterator[None]:
+    budget = max(1, _THREAD_SEARCH_OPCODE_BUDGET)
+    interval = min(_THREAD_SEARCH_PROGRESS_GRANULARITY, budget)
+    remaining = budget
+    exhausted = False
+
+    def progress() -> int:
+        nonlocal exhausted, remaining
+        remaining -= interval
+        if remaining <= 0:
+            exhausted = True
+            return 1
+        return 0
+
+    connection.set_progress_handler(progress, interval)
+    try:
+        yield
+    except sqlite3.OperationalError as error:
+        if exhausted:
+            raise ThreadSearchLimitExceeded(
+                "Thread search exceeded its SQLite opcode budget."
+            ) from error
+        raise
+    finally:
+        connection.set_progress_handler(None, 0)
 
 
 class SQLiteConversationRepositories:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.threads = SQLiteThreadRepository(path)
-        self.entries = SQLiteThreadEntryRepository(path)
-        self.turns = SQLiteTurnRepository(path)
-        self.summaries = SQLiteThreadSummaryRepository(path)
-        self.tool_activities = SQLiteToolActivityRepository(path)
+    """Async Application-facing repositories backed by one SQLite owner."""
 
-    @contextmanager
-    def transaction(
-        self,
-        *,
-        immediate: bool = True,
-    ) -> Iterator[sqlite3.Connection]:
-        with application_connection(self.path) as connection:
-            connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
-            with connection:
-                yield connection
+    def __init__(self, database: ApplicationSQLite) -> None:
+        self._database = database
+        self._threads = SQLiteThreadRepository()
+        self._entries = SQLiteThreadEntryRepository()
+        self._turns = SQLiteTurnRepository()
+        self._summaries = SQLiteThreadSummaryRepository()
+        self._tool_activities = SQLiteToolActivityRepository()
 
-    def create_thread(self, thread: Thread) -> Thread:
-        return self.threads.create(thread)
+    async def create_thread(self, thread: Thread) -> Thread:
+        return await self._database.write(
+            lambda connection: self._threads.create(thread, connection=connection)
+        )
 
-    def set_thread_model(
+    async def set_thread_model(
         self,
         thread_id: str,
         model: str | None,
         *,
         updated_at: datetime,
     ) -> Thread:
-        return self._patch_thread(
-            thread_id,
-            {"current_model": model, "updated_at": updated_at},
+        return await self._database.write(
+            lambda connection: self._patch_thread(
+                connection,
+                thread_id,
+                {"current_model": model, "updated_at": updated_at},
+            )
         )
 
-    def rename_thread(
+    async def rename_thread(
         self,
         thread_id: str,
         title: str,
         *,
         updated_at: datetime,
     ) -> Thread:
-        return self._patch_thread(
-            thread_id,
-            {
-                "title": title,
-                "title_source": ThreadTitleSource.MANUAL,
-                "updated_at": updated_at,
-            },
+        return await self._database.write(
+            lambda connection: self._patch_thread(
+                connection,
+                thread_id,
+                {
+                    "title": title,
+                    "title_source": ThreadTitleSource.MANUAL,
+                    "updated_at": updated_at,
+                },
+            )
         )
 
-    def set_thread_thinking(
+    async def set_thread_thinking(
         self,
         thread_id: str,
         enabled: bool,
         *,
         updated_at: datetime,
     ) -> Thread:
-        return self._patch_thread(
-            thread_id,
-            {"thinking_enabled": enabled, "updated_at": updated_at},
+        return await self._database.write(
+            lambda connection: self._patch_thread(
+                connection,
+                thread_id,
+                {"thinking_enabled": enabled, "updated_at": updated_at},
+            )
         )
 
-    def set_thread_skill_mode(
+    async def set_thread_skill_mode(
         self,
         thread_id: str,
         skill_mode: str,
         *,
         updated_at: datetime,
     ) -> Thread:
-        return self._patch_thread(
-            thread_id,
-            {"skill_mode": skill_mode, "updated_at": updated_at},
+        return await self._database.write(
+            lambda connection: self._patch_thread(
+                connection,
+                thread_id,
+                {"skill_mode": skill_mode, "updated_at": updated_at},
+            )
         )
 
-    def list_threads(self, workspace_key: str) -> Sequence[Thread]:
-        return self.threads.list(workspace_key)
+    async def list_threads(self, workspace_key: str) -> Sequence[Thread]:
+        return await self._database.read(
+            lambda connection: self._threads.list(workspace_key, connection=connection)
+        )
 
-    def match_threads(
+    async def match_threads(
         self,
         workspace_key: str,
         *,
         prefix: str,
         limit: int,
     ) -> Sequence[Thread]:
-        return self.threads.match_prefix(
-            workspace_key,
-            prefix=prefix,
-            limit=limit,
+        return await self._database.read(
+            lambda connection: self._threads.match_prefix(
+                workspace_key,
+                prefix=prefix,
+                limit=limit,
+                connection=connection,
+            )
         )
 
-    def list_threads_page(
+    async def list_threads_page(
         self,
         workspace_key: str,
         *,
         cursor: tuple[datetime, str] | None,
         limit: int,
     ) -> ThreadListPage:
-        threads, has_more = self.threads.list_page(
-            workspace_key,
-            cursor=cursor,
-            limit=limit,
-        )
-        return ThreadListPage(threads=threads, has_more=has_more)
-
-    def read_thread(self, thread_id: str) -> ThreadView:
-        with self.transaction(immediate=False) as connection:
-            thread = self.threads.get(thread_id, connection=connection)
-            if thread is None:
-                raise ThreadNotFound(thread_id)
-            return ThreadView(
-                thread=thread,
-                entries=tuple(self.entries.list(thread_id, connection=connection)),
-                turns=tuple(self.turns.list(thread_id, connection=connection)),
-                summary=self.summaries.get(thread_id, connection=connection),
-                tool_activities=tuple(
-                    self.tool_activities.list(thread_id, connection=connection)
-                ),
+        return await self._database.read(
+            lambda connection: self._list_threads_page(
+                connection,
+                workspace_key,
+                cursor=cursor,
+                limit=limit,
             )
+        )
 
-    def read_thread_page(
+    async def search_threads_page(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        return await self._database.read(
+            lambda connection: self._search_threads_page(
+                connection,
+                workspace_key,
+                query=query,
+                cursor=cursor,
+                limit=limit,
+            )
+        )
+
+    async def thread_matches_search(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        thread_id: str,
+    ) -> bool:
+        return await self._database.read(
+            lambda connection: self._threads.matches_search(
+                workspace_key,
+                query=query,
+                thread_id=thread_id,
+                connection=connection,
+            )
+        )
+
+    async def materialize_fork(
+        self,
+        plan: ThreadMaterializationPlan,
+    ) -> ThreadView:
+        if plan.kind != "fork":
+            raise ConversationConflict("Fork materialization kind is invalid.")
+        return await self._database.write(
+            lambda connection: self._materialize_fork(connection, plan)
+        )
+
+    async def materialize_retry(
+        self,
+        plan: ThreadMaterializationPlan,
+        preparation: RetryPreparation,
+    ) -> RetryPreparation:
+        if plan.kind != "retry" or preparation.view != plan.view:
+            raise ConversationConflict("Retry materialization plan is inconsistent.")
+        return await self._database.write(
+            lambda connection: self._materialize_retry(
+                connection,
+                plan,
+                preparation,
+            )
+        )
+
+    async def read_thread(self, thread_id: str) -> ThreadView:
+        return await self._database.read(
+            lambda connection: self._read_thread(connection, thread_id)
+        )
+
+    async def read_thread_page(
         self,
         thread_id: str,
         *,
         before_sequence: int | None,
         limit: int,
     ) -> ThreadPage:
-        with self.transaction(immediate=False) as connection:
-            thread = self.threads.get(thread_id, connection=connection)
-            if thread is None:
-                raise ThreadNotFound(thread_id)
-            entries, has_more = self.entries.list_page(
+        return await self._database.read(
+            lambda connection: self._read_thread_page(
+                connection,
                 thread_id,
                 before_sequence=before_sequence,
                 limit=limit,
-                connection=connection,
             )
-            entry_ids = tuple(entry.id for entry in entries)
-            turns = self.turns.list_for_entries(
-                thread_id,
-                entry_ids=entry_ids,
-                connection=connection,
-            )
-            direct_operation_ids = tuple(
-                operation_id
-                for entry in entries
-                if entry.kind is ThreadEntryKind.DIRECT_COMMAND
-                and isinstance(
-                    operation_id := entry.metadata.get("operation_id"),
-                    str,
-                )
-            )
-            activities = self.tool_activities.list_associated(
-                thread_id,
-                turn_ids=tuple(turn.id for turn in turns),
-                operation_ids=direct_operation_ids,
-                connection=connection,
-            )
-            view = ThreadView(
-                thread=thread,
-                entries=entries,
-                turns=turns,
-                summary=self.summaries.get(thread_id, connection=connection),
-                tool_activities=activities,
-            )
-        return ThreadPage(
-            view=view,
-            has_more=has_more,
-            next_before_sequence=(
-                entries[0].sequence if has_more and entries else None
-            ),
         )
 
-    def thread_id_for_turn(self, turn_id: str) -> str | None:
-        turn = self.turns.get(turn_id)
-        return None if turn is None else turn.thread_id
+    async def thread_id_for_turn(self, turn_id: str) -> str | None:
+        return await self._database.read(
+            lambda connection: (
+                None
+                if (turn := self._turns.get(turn_id, connection=connection)) is None
+                else turn.thread_id
+            )
+        )
 
-    def begin_turn(
+    async def begin_turn(
         self,
         user_entry: ThreadEntry,
         turn: Turn,
@@ -222,147 +292,400 @@ class SQLiteConversationRepositories:
         automatic_title: str | None,
         updated_at: datetime,
     ) -> Turn:
-        with self.transaction() as connection:
-            thread = self.threads.get(turn.thread_id, connection=connection)
-            if thread is None:
-                raise ThreadNotFound(turn.thread_id)
-            if self.turns.in_progress(turn.thread_id, connection=connection):
-                raise TurnBusy(turn.thread_id)
-            next_sequence = self._require_next_sequence(user_entry, connection)
-            self.entries.append(user_entry, connection=connection)
-            self.turns.create(turn, connection=connection)
-            thread_update: dict[str, object] = {"updated_at": updated_at}
-            if (
-                automatic_title is not None
-                and thread.title_source is ThreadTitleSource.AUTOMATIC
-                and next_sequence == 1
-            ):
-                thread_update["title"] = automatic_title
-            updated_thread = _monotonic_thread_update(thread, thread_update)
-            self.threads.update(updated_thread, connection=connection)
-        return turn
-
-    def complete_turn(self, assistant_entry: ThreadEntry, turn: Turn) -> Turn:
-        with self.transaction() as connection:
-            current = self.turns.get(turn.id, connection=connection)
-            if current is None:
-                raise TurnNotFound(turn.id)
-            require_turn_transition(current.status, TurnStatus.COMPLETED)
-            if (
-                current.context_manifest
-                and current.context_manifest != turn.context_manifest
-            ):
-                raise ConversationConflict(
-                    "Turn context changed before completion was committed."
-                )
-            if current.thread_id != assistant_entry.thread_id:
-                raise ConversationConflict("Assistant Entry belongs to another Thread.")
-            self._require_next_sequence(assistant_entry, connection)
-            self.entries.append(assistant_entry, connection=connection)
-            self.turns.update(turn, connection=connection)
-            thread = self.threads.get(turn.thread_id, connection=connection)
-            if thread is None:
-                raise ThreadNotFound(turn.thread_id)
-            self.threads.update(
-                _monotonic_thread_update(
-                    thread,
-                    {"updated_at": turn.updated_at},
-                ),
-                connection=connection,
+        return await self._database.write(
+            lambda connection: self._begin_turn(
+                connection,
+                user_entry,
+                turn,
+                automatic_title=automatic_title,
+                updated_at=updated_at,
             )
-        return turn
+        )
 
-    def update_in_progress_turn(
+    async def complete_turn(self, assistant_entry: ThreadEntry, turn: Turn) -> Turn:
+        return await self._database.write(
+            lambda connection: self._complete_turn(connection, assistant_entry, turn)
+        )
+
+    async def update_in_progress_turn(
         self,
         turn: Turn,
         *,
         expected_context_manifest: tuple[dict[str, JsonValue], ...],
     ) -> Turn:
-        with self.transaction() as connection:
-            current = self.turns.get(turn.id, connection=connection)
-            if current is None:
-                raise TurnNotFound(turn.id)
-            if (
-                current.status is not TurnStatus.IN_PROGRESS
-                or turn.status is not TurnStatus.IN_PROGRESS
-                or current.context_manifest != expected_context_manifest
-                or turn
-                != current.model_copy(
-                    update={
-                        "context_manifest": turn.context_manifest,
-                        "updated_at": turn.updated_at,
-                    }
-                )
-            ):
-                raise ConversationConflict(
-                    "In-progress Turn context update conflicts with stored state."
-                )
-            self.turns.update(turn, connection=connection)
-        return turn
-
-    def update_terminal_turn(self, turn: Turn) -> Turn:
-        with self.transaction() as connection:
-            current = self.turns.get(turn.id, connection=connection)
-            if current is None:
-                raise TurnNotFound(turn.id)
-            require_turn_transition(current.status, turn.status)
-            if (
-                current.context_manifest
-                and current.context_manifest != turn.context_manifest
-            ):
-                raise ConversationConflict(
-                    "Turn context changed before terminal state was committed."
-                )
-            self.turns.update(turn, connection=connection)
-            thread = self.threads.get(turn.thread_id, connection=connection)
-            if thread is None:
-                raise ThreadNotFound(turn.thread_id)
-            self.threads.update(
-                _monotonic_thread_update(
-                    thread,
-                    {"updated_at": turn.updated_at},
-                ),
-                connection=connection,
+        return await self._database.write(
+            lambda connection: self._update_in_progress_turn(
+                connection,
+                turn,
+                expected_context_manifest=expected_context_manifest,
             )
-        return turn
+        )
 
-    def append_direct_command(self, entry: ThreadEntry) -> ThreadEntry:
-        with self.transaction() as connection:
-            thread = self.threads.get(entry.thread_id, connection=connection)
-            if thread is None:
-                raise ThreadNotFound(entry.thread_id)
-            self._require_next_sequence(entry, connection)
-            self.entries.append(entry, connection=connection)
-            self.threads.update(
-                _monotonic_thread_update(
-                    thread,
-                    {"updated_at": entry.created_at},
-                ),
-                connection=connection,
-            )
-        return entry
+    async def update_terminal_turn(self, turn: Turn) -> Turn:
+        return await self._database.write(
+            lambda connection: self._update_terminal_turn(connection, turn)
+        )
 
-    def compare_and_swap_summary(
+    async def append_direct_command(self, entry: ThreadEntry) -> ThreadEntry:
+        return await self._database.write(
+            lambda connection: self._append_direct_command(connection, entry)
+        )
+
+    async def compare_and_swap_summary(
         self,
         summary: ThreadSummary,
         *,
         expected: ThreadSummary | None,
     ) -> ThreadSummary:
-        return self.summaries.compare_and_swap(summary, expected=expected)
+        return await self._database.write(
+            lambda connection: self._summaries.compare_and_swap(
+                summary,
+                expected=expected,
+                connection=connection,
+            )
+        )
+
+    async def finalize(self, draft: ToolActivityDraft) -> None:
+        await self._database.write(
+            lambda connection: self._tool_activities.finalize(
+                draft, connection=connection
+            )
+        )
+
+    async def run_write_transaction[T](
+        self,
+        operation: Callable[[SQLiteConversationTransaction], T],
+    ) -> T:
+        return await self._database.write(
+            lambda connection: operation(
+                SQLiteConversationTransaction(self, connection)
+            )
+        )
+
+    def _list_threads_page(
+        self,
+        connection: sqlite3.Connection,
+        workspace_key: str,
+        *,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        threads, has_more = self._threads.list_page(
+            workspace_key,
+            cursor=cursor,
+            limit=limit,
+            connection=connection,
+        )
+        return ThreadListPage(threads=threads, has_more=has_more)
+
+    def _search_threads_page(
+        self,
+        connection: sqlite3.Connection,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        threads, has_more = self._threads.search_page(
+            workspace_key,
+            query=query,
+            cursor=cursor,
+            limit=limit,
+            connection=connection,
+        )
+        return ThreadListPage(threads=threads, has_more=has_more)
+
+    def _read_thread(
+        self, connection: sqlite3.Connection, thread_id: str
+    ) -> ThreadView:
+        thread = self._threads.get(thread_id, connection=connection)
+        if thread is None:
+            raise ThreadNotFound(thread_id)
+        return ThreadView(
+            thread=thread,
+            entries=tuple(self._entries.list(thread_id, connection=connection)),
+            turns=tuple(self._turns.list(thread_id, connection=connection)),
+            summary=self._summaries.get(thread_id, connection=connection),
+            tool_activities=tuple(
+                self._tool_activities.list(thread_id, connection=connection)
+            ),
+        )
+
+    def _materialize_fork(
+        self,
+        connection: sqlite3.Connection,
+        plan: ThreadMaterializationPlan,
+    ) -> ThreadView:
+        source = self._validated_materialization_source(connection, plan)
+        self._validate_new_materialization_ids(source, plan.view)
+        self._insert_materialized_view(connection, plan.view)
+        return self._read_thread(connection, plan.view.thread.id)
+
+    def _materialize_retry(
+        self,
+        connection: sqlite3.Connection,
+        plan: ThreadMaterializationPlan,
+        preparation: RetryPreparation,
+    ) -> RetryPreparation:
+        source = self._validated_materialization_source(connection, plan)
+        self._validate_new_materialization_ids(source, plan.view)
+        self._insert_materialized_view(connection, plan.view)
+        persisted = self._read_thread(connection, plan.view.thread.id)
+        turn = next(
+            (turn for turn in persisted.turns if turn.id == preparation.turn.id),
+            None,
+        )
+        if turn is None:
+            raise ConversationConflict("Materialized retry Turn is unavailable.")
+        return RetryPreparation(
+            view=persisted,
+            turn=turn,
+            content=preparation.content,
+            client_message_id=preparation.client_message_id,
+        )
+
+    def _validated_materialization_source(
+        self,
+        connection: sqlite3.Connection,
+        plan: ThreadMaterializationPlan,
+    ) -> ThreadView:
+        source = self._read_thread(connection, plan.source_thread_id)
+        if source.thread.workspace_key != plan.source_workspace_key:
+            raise ThreadNotFound(plan.source_thread_id)
+        target = next(
+            (turn for turn in source.turns if turn.id == plan.source_turn_id),
+            None,
+        )
+        if target is None:
+            raise TurnNotFound(plan.source_turn_id)
+        if target.status is TurnStatus.IN_PROGRESS:
+            raise InvalidTurnTransition("Fork and retry require a terminal Turn.")
+        if materialization_source_fingerprint(source) != plan.source_fingerprint:
+            raise ConversationConflict(
+                "Source Thread changed before materialization was committed."
+            )
+        return source
+
+    @staticmethod
+    def _validate_new_materialization_ids(
+        source: ThreadView,
+        materialized: ThreadView,
+    ) -> None:
+        source_entry_ids = {entry.id for entry in source.entries}
+        source_turn_ids = {turn.id for turn in source.turns}
+        source_client_ids = {
+            entry.client_message_id
+            for entry in source.entries
+            if entry.client_message_id is not None
+        }
+        if source_entry_ids & {entry.id for entry in materialized.entries}:
+            raise ConversationConflict("Materialized Entry identity was reused.")
+        if source_turn_ids & {turn.id for turn in materialized.turns}:
+            raise ConversationConflict("Materialized Turn identity was reused.")
+        if source_client_ids & {
+            entry.client_message_id
+            for entry in materialized.entries
+            if entry.client_message_id is not None
+        }:
+            raise ConversationConflict("Materialized client identity was reused.")
+
+    def _insert_materialized_view(
+        self,
+        connection: sqlite3.Connection,
+        view: ThreadView,
+    ) -> None:
+        self._threads.create(view.thread, connection=connection)
+        for entry in view.entries:
+            self._entries.append(entry, connection=connection)
+        for turn in view.turns:
+            self._turns.create(turn, connection=connection)
+
+    def _read_thread_page(
+        self,
+        connection: sqlite3.Connection,
+        thread_id: str,
+        *,
+        before_sequence: int | None,
+        limit: int,
+    ) -> ThreadPage:
+        thread = self._threads.get(thread_id, connection=connection)
+        if thread is None:
+            raise ThreadNotFound(thread_id)
+        entries, has_more = self._entries.list_page(
+            thread_id,
+            before_sequence=before_sequence,
+            limit=limit,
+            connection=connection,
+        )
+        entry_ids = tuple(entry.id for entry in entries)
+        turns = self._turns.list_for_entries(
+            thread_id,
+            entry_ids=entry_ids,
+            connection=connection,
+        )
+        operation_ids = tuple(
+            operation_id
+            for entry in entries
+            if entry.kind is ThreadEntryKind.DIRECT_COMMAND
+            and isinstance(operation_id := entry.metadata.get("operation_id"), str)
+        )
+        activities = self._tool_activities.list_associated(
+            thread_id,
+            turn_ids=tuple(turn.id for turn in turns),
+            operation_ids=operation_ids,
+            connection=connection,
+        )
+        return ThreadPage(
+            view=ThreadView(
+                thread=thread,
+                entries=entries,
+                turns=turns,
+                summary=self._summaries.get(thread_id, connection=connection),
+                tool_activities=activities,
+            ),
+            has_more=has_more,
+            next_before_sequence=(
+                entries[0].sequence if has_more and entries else None
+            ),
+        )
+
+    def _begin_turn(
+        self,
+        connection: sqlite3.Connection,
+        user_entry: ThreadEntry,
+        turn: Turn,
+        *,
+        automatic_title: str | None,
+        updated_at: datetime,
+    ) -> Turn:
+        thread = self._threads.get(turn.thread_id, connection=connection)
+        if thread is None:
+            raise ThreadNotFound(turn.thread_id)
+        if self._turns.in_progress(turn.thread_id, connection=connection):
+            raise TurnBusy(turn.thread_id)
+        next_sequence = self._require_next_sequence(user_entry, connection)
+        self._entries.append(user_entry, connection=connection)
+        self._turns.create(turn, connection=connection)
+        update: dict[str, object] = {"updated_at": updated_at}
+        if (
+            automatic_title is not None
+            and thread.title_source is ThreadTitleSource.AUTOMATIC
+            and next_sequence == 1
+        ):
+            update["title"] = automatic_title
+        self._threads.update(
+            _monotonic_thread_update(thread, update), connection=connection
+        )
+        return turn
+
+    def _complete_turn(
+        self,
+        connection: sqlite3.Connection,
+        assistant_entry: ThreadEntry,
+        turn: Turn,
+    ) -> Turn:
+        current = self._turns.get(turn.id, connection=connection)
+        if current is None:
+            raise TurnNotFound(turn.id)
+        require_turn_transition(current.status, TurnStatus.COMPLETED)
+        if (
+            current.context_manifest
+            and current.context_manifest != turn.context_manifest
+        ):
+            raise ConversationConflict(
+                "Turn context changed before completion was committed."
+            )
+        if current.thread_id != assistant_entry.thread_id:
+            raise ConversationConflict("Assistant Entry belongs to another Thread.")
+        self._require_next_sequence(assistant_entry, connection)
+        self._entries.append(assistant_entry, connection=connection)
+        self._turns.update(turn, connection=connection)
+        self._touch_thread(connection, turn.thread_id, turn.updated_at)
+        return turn
+
+    def _update_in_progress_turn(
+        self,
+        connection: sqlite3.Connection,
+        turn: Turn,
+        *,
+        expected_context_manifest: tuple[dict[str, JsonValue], ...],
+    ) -> Turn:
+        current = self._turns.get(turn.id, connection=connection)
+        if current is None:
+            raise TurnNotFound(turn.id)
+        if (
+            current.status is not TurnStatus.IN_PROGRESS
+            or turn.status is not TurnStatus.IN_PROGRESS
+            or current.context_manifest != expected_context_manifest
+            or turn
+            != current.model_copy(
+                update={
+                    "context_manifest": turn.context_manifest,
+                    "updated_at": turn.updated_at,
+                }
+            )
+        ):
+            raise ConversationConflict(
+                "In-progress Turn context update conflicts with stored state."
+            )
+        self._turns.update(turn, connection=connection)
+        return turn
+
+    def _update_terminal_turn(self, connection: sqlite3.Connection, turn: Turn) -> Turn:
+        current = self._turns.get(turn.id, connection=connection)
+        if current is None:
+            raise TurnNotFound(turn.id)
+        require_turn_transition(current.status, turn.status)
+        if (
+            current.context_manifest
+            and current.context_manifest != turn.context_manifest
+        ):
+            raise ConversationConflict(
+                "Turn context changed before terminal state was committed."
+            )
+        self._turns.update(turn, connection=connection)
+        self._touch_thread(connection, turn.thread_id, turn.updated_at)
+        return turn
+
+    def _append_direct_command(
+        self, connection: sqlite3.Connection, entry: ThreadEntry
+    ) -> ThreadEntry:
+        thread = self._threads.get(entry.thread_id, connection=connection)
+        if thread is None:
+            raise ThreadNotFound(entry.thread_id)
+        self._require_next_sequence(entry, connection)
+        self._entries.append(entry, connection=connection)
+        self._threads.update(
+            _monotonic_thread_update(thread, {"updated_at": entry.created_at}),
+            connection=connection,
+        )
+        return entry
+
+    def _touch_thread(
+        self, connection: sqlite3.Connection, thread_id: str, updated_at: datetime
+    ) -> None:
+        thread = self._threads.get(thread_id, connection=connection)
+        if thread is None:
+            raise ThreadNotFound(thread_id)
+        self._threads.update(
+            _monotonic_thread_update(thread, {"updated_at": updated_at}),
+            connection=connection,
+        )
 
     def _patch_thread(
         self,
+        connection: sqlite3.Connection,
         thread_id: str,
         update: dict[str, object],
     ) -> Thread:
         """Apply one field-level Thread mutation from transaction-current state."""
 
-        with self.transaction() as connection:
-            current = self.threads.get(thread_id, connection=connection)
-            if current is None:
-                raise ThreadNotFound(thread_id)
-            updated = _monotonic_thread_update(current, update)
-            self.threads.update(updated, connection=connection)
+        current = self._threads.get(thread_id, connection=connection)
+        if current is None:
+            raise ThreadNotFound(thread_id)
+        updated = _monotonic_thread_update(current, update)
+        self._threads.update(updated, connection=connection)
         return updated
 
     def _require_next_sequence(
@@ -383,20 +706,43 @@ class SQLiteConversationRepositories:
         return expected
 
 
-class _SQLiteRepository:
-    def __init__(self, path: Path) -> None:
-        self._path = path
+class SQLiteConversationTransaction:
+    """Narrow synchronous view for a cross-file provider-model saga."""
 
+    def __init__(
+        self,
+        repositories: SQLiteConversationRepositories,
+        connection: sqlite3.Connection,
+    ) -> None:
+        self._repositories = repositories
+        self._connection = connection
+
+    def read_thread(self, thread_id: str) -> ThreadView:
+        return self._repositories._read_thread(self._connection, thread_id)
+
+    def set_model(
+        self,
+        thread_id: str,
+        model: str | None,
+        *,
+        updated_at: datetime,
+    ) -> Thread:
+        return self._repositories._patch_thread(
+            self._connection,
+            thread_id,
+            {"current_model": model, "updated_at": updated_at},
+        )
+
+
+class _SQLiteRepository:
     @contextmanager
     def _connection(
         self,
         connection: sqlite3.Connection | None,
     ) -> Iterator[sqlite3.Connection]:
-        if connection is not None:
-            yield connection
-            return
-        with application_connection(self._path) as opened, opened:
-            yield opened
+        if connection is None:
+            raise RuntimeError("SQLite repository requires its owner connection.")
+        yield connection
 
 
 class SQLiteThreadRepository(_SQLiteRepository):
@@ -412,8 +758,9 @@ class SQLiteThreadRepository(_SQLiteRepository):
                     """
                     INSERT INTO threads (
                         thread_id, workspace_key, title, title_source, current_model,
-                        thinking_enabled, skill_mode, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        thinking_enabled, skill_mode, lineage_json, created_at,
+                        updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         thread.id,
@@ -423,6 +770,11 @@ class SQLiteThreadRepository(_SQLiteRepository):
                         thread.current_model,
                         int(thread.thinking_enabled),
                         thread.skill_mode,
+                        (
+                            None
+                            if thread.lineage is None
+                            else _json(thread.lineage.model_dump(mode="json"))
+                        ),
                         _time(thread.created_at),
                         _time(thread.updated_at),
                     ),
@@ -524,6 +876,86 @@ class SQLiteThreadRepository(_SQLiteRepository):
             ).fetchall()
         return tuple(_thread_from_row(row) for row in rows)
 
+    def search_page(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[tuple[Thread, ...], bool]:
+        with (
+            self._connection(connection) as active,
+            _bounded_thread_search(active),
+        ):
+            parameters: list[object] = [workspace_key, query, query]
+            cursor_clause = ""
+            if cursor is not None:
+                updated_at, thread_id = cursor
+                encoded_time = _time(updated_at)
+                cursor_clause = """
+                  AND (
+                    threads.updated_at < ?
+                    OR (threads.updated_at = ? AND threads.thread_id < ?)
+                  )
+                """
+                parameters.extend((encoded_time, encoded_time, thread_id))
+            parameters.append(limit + 1)
+            rows = active.execute(
+                f"""
+                SELECT threads.* FROM threads
+                WHERE threads.workspace_key = ?
+                  AND (
+                    instr(lower(threads.title), lower(?)) > 0
+                    OR EXISTS (
+                      SELECT 1 FROM thread_entries
+                      WHERE thread_entries.thread_id = threads.thread_id
+                        AND instr(lower(thread_entries.content), lower(?)) > 0
+                    )
+                  )
+                  {cursor_clause}
+                ORDER BY threads.updated_at DESC, threads.thread_id DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return (
+            tuple(_thread_from_row(row) for row in rows[:limit]),
+            len(rows) > limit,
+        )
+
+    def matches_search(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        thread_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> bool:
+        with (
+            self._connection(connection) as active,
+            _bounded_thread_search(active),
+        ):
+            row = active.execute(
+                """
+                SELECT 1 FROM threads
+                WHERE threads.thread_id = ?
+                  AND threads.workspace_key = ?
+                  AND (
+                    instr(lower(threads.title), lower(?)) > 0
+                    OR EXISTS (
+                      SELECT 1 FROM thread_entries
+                      WHERE thread_entries.thread_id = threads.thread_id
+                        AND instr(lower(thread_entries.content), lower(?)) > 0
+                    )
+                  )
+                LIMIT 1
+                """,
+                (thread_id, workspace_key, query, query),
+            ).fetchone()
+        return row is not None
+
     def update(
         self,
         thread: Thread,
@@ -535,7 +967,8 @@ class SQLiteThreadRepository(_SQLiteRepository):
                 """
                 UPDATE threads SET
                     workspace_key = ?, title = ?, title_source = ?, current_model = ?,
-                    thinking_enabled = ?, skill_mode = ?, updated_at = ?
+                    thinking_enabled = ?, skill_mode = ?, lineage_json = ?,
+                    updated_at = ?
                 WHERE thread_id = ?
                 """,
                 (
@@ -545,6 +978,11 @@ class SQLiteThreadRepository(_SQLiteRepository):
                     thread.current_model,
                     int(thread.thinking_enabled),
                     thread.skill_mode,
+                    (
+                        None
+                        if thread.lineage is None
+                        else _json(thread.lineage.model_dump(mode="json"))
+                    ),
                     _time(thread.updated_at),
                     thread.id,
                 ),
@@ -770,8 +1208,9 @@ class SQLiteThreadSummaryRepository(_SQLiteRepository):
         summary: ThreadSummary,
         *,
         expected: ThreadSummary | None,
+        connection: sqlite3.Connection | None = None,
     ) -> ThreadSummary:
-        with self._connection(None) as active:
+        with self._connection(connection) as active:
             current = self.get(summary.thread_id, connection=active)
             if current != expected:
                 raise ConversationConflict("Thread Summary changed concurrently.")
@@ -833,8 +1272,13 @@ class SQLiteThreadSummaryRepository(_SQLiteRepository):
 
 
 class SQLiteToolActivityRepository(_SQLiteRepository):
-    def finalize(self, draft: ToolActivityDraft) -> None:
-        with self._connection(None) as active:
+    def finalize(
+        self,
+        draft: ToolActivityDraft,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        with self._connection(connection) as active:
             existing = self._by_operation_call(
                 draft.operation_id,
                 draft.call_id,
@@ -997,6 +1441,7 @@ def _monotonic_thread_update(
 
 
 def _thread_from_row(row: sqlite3.Row) -> Thread:
+    lineage_json = row["lineage_json"]
     return Thread(
         id=row["thread_id"],
         workspace_key=row["workspace_key"],
@@ -1005,6 +1450,11 @@ def _thread_from_row(row: sqlite3.Row) -> Thread:
         current_model=row["current_model"],
         thinking_enabled=bool(row["thinking_enabled"]),
         skill_mode=row["skill_mode"],
+        lineage=(
+            None
+            if lineage_json is None
+            else ThreadLineage.model_validate(json.loads(lineage_json))
+        ),
         created_at=_parse_time(row["created_at"]),
         updated_at=_parse_time(row["updated_at"]),
     )
@@ -1047,6 +1497,10 @@ def _turn_values(turn: Turn) -> tuple[object, ...]:
 
 
 def _turn_from_row(row: sqlite3.Row) -> Turn:
+    budgets = json.loads(row["budgets_json"])
+    if not isinstance(budgets, dict):
+        raise ValueError("Stored Turn budgets must be an object.")
+    budgets.setdefault("web_requests", 0)
     return Turn(
         id=row["turn_id"],
         thread_id=row["thread_id"],
@@ -1056,7 +1510,7 @@ def _turn_from_row(row: sqlite3.Row) -> Turn:
         model=row["model"],
         thinking_enabled=bool(row["thinking_enabled"]),
         skill_mode=row["skill_mode"],
-        budgets=json.loads(row["budgets_json"]),
+        budgets=BudgetConfig.model_validate(budgets),
         user_entry_id=row["user_entry_id"],
         assistant_entry_id=row["assistant_entry_id"],
         usage=UsageSummary.model_validate(json.loads(row["usage_json"])),

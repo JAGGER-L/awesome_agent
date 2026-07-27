@@ -31,7 +31,25 @@ Awesome 初始注册：
 - 删除：`delete`；
 - 宿主执行：`execute`。
 
+启用并正确配置 Web 后，同一 registry 还会包含 `web_search` 与 `web_fetch`。它们对模型保持
+provider-neutral，经过相同的严格校验/policy/审批/审计路径，并且都是 non-replayable。
+
 Memory 和 MCP 可以扩充整个 catalog。带 namespace 的扩展工具仍使用同一个 executor。精确参数 schema、限制和结果字段见[内置工具](../reference/built-in-tools.zh-CN.md)。
+
+### 使用 Web Search 与 Fetch
+
+设置 `TAVILY_API_KEY`，运行 `/web on`，随后请求当前信息，或提供一个需要提取可读内容的
+公共 HTTPS 页面。第一次 `network.read` 调用即使在 Full access 下也会 ASK；可选择默认
+deny、allow once 或 allow for this Thread。`/web status` 显示 readiness 与披露，
+`/web revoke` 清除当前 Thread grant，`/web off` 会从重建后的 runtime 中移除两个工具。
+
+Awesome 会依据 Tavily 的[隐私政策](https://www.tavily.com/privacy)与
+[平台条款](https://www.tavily.com/terms)发送 Search query 或请求的 Fetch URL。执行 Fetch
+时，由 Tavily 云服务连接页面并返回 basic Markdown；Awesome Core 不连接目标。Awesome
+会分配 `S1...` citation，并将其保留到最终回答、transcript、headless JSON 与 checkpoint。
+Search 与 Fetch 共享默认每 Turn 八次的预算。Fetch 只接受一个公共 HTTPS URL，最多返回
+24,000 个字符；它不是浏览器，也不提供 Cookie、登录、JavaScript、PDF/二进制、本地 Fetch、
+缓存或 backend fallback。精确参数见[内置工具契约](../reference/built-in-tools.zh-CN.md)。
 
 ## 模型驱动与 direct shell
 

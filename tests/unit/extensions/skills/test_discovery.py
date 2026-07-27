@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-import awesome_agent.context._safe_files as safe_files_module
 import awesome_agent.core.filesystem as core_filesystem_module
+import awesome_agent.core.safe_files as safe_files_module
 from awesome_agent.core.filesystem import (
     DirectoryPin,
 )
@@ -95,6 +95,91 @@ def test_invalid_packages_become_diagnostics_not_global_failure(tmp_path: Path) 
     assert catalog.resolve("good").allowed_tools == ("read_file",)
     assert len(catalog.diagnostics()) == 3
     assert {item.code for item in catalog.diagnostics()} == {"invalid_skill"}
+
+
+def test_identity_snapshots_are_ordered_bounded_and_path_opaque(
+    tmp_path: Path,
+) -> None:
+    user = tmp_path / "user"
+    user.mkdir()
+    _skill(user, "zeta", "last")
+    _skill(user, "alpha", "first", "allowed-tools: [read_file, mcp.demo.read]\n")
+
+    catalog = discover_skills(
+        bundled_root=None,
+        user_root=user,
+        workspace_root=None,
+        workspace_trusted=False,
+    )
+
+    snapshots = catalog.identity_snapshots()
+    assert tuple(item.name for item in snapshots) == ("alpha", "zeta")
+    assert tuple(item.name for item in catalog.identity_snapshots(limit=1)) == (
+        "alpha",
+    )
+    assert tuple(item.name for item in catalog.descriptors(limit=1)) == ("alpha",)
+    assert snapshots[0] == catalog.identity_snapshot("alpha")
+    assert snapshots[0].allowed_tools == ("read_file", "mcp.demo.read")
+    assert snapshots[0].identity.startswith("skill-v1-sha256:")
+    assert len(snapshots[0].identity) == len("skill-v1-sha256:") + 64
+    assert str(tmp_path) not in snapshots[0].identity
+    with pytest.raises(ValueError, match="non-negative"):
+        catalog.identity_snapshots(limit=-1)
+
+
+def test_skill_identity_changes_with_the_pinned_skill_file(tmp_path: Path) -> None:
+    user = tmp_path / "user"
+    user.mkdir()
+    _skill(user, "review", "first")
+    first = discover_skills(
+        bundled_root=None,
+        user_root=user,
+        workspace_root=None,
+        workspace_trusted=False,
+    ).identity_snapshot("review")
+    (user / "review" / "SKILL.md").write_text(
+        "---\nname: review\ndescription: second\n---\nchanged body",
+        encoding="utf-8",
+    )
+    second = discover_skills(
+        bundled_root=None,
+        user_root=user,
+        workspace_root=None,
+        workspace_trusted=False,
+    ).identity_snapshot("review")
+
+    assert first.identity != second.identity
+
+
+@pytest.mark.parametrize(
+    "allowed_tools",
+    [
+        "[read_file, read_file]",
+        "['not a tool']",
+        "[" + ", ".join(f"tool_{index}" for index in range(129)) + "]",
+    ],
+    ids=["duplicate", "invalid-name", "too-many"],
+)
+def test_invalid_allowed_tools_are_isolated_to_the_package(
+    tmp_path: Path,
+    allowed_tools: str,
+) -> None:
+    user = tmp_path / "user"
+    user.mkdir()
+    _skill(user, "good", "valid")
+    _skill(user, "bad", "invalid", f"allowed-tools: {allowed_tools}\n")
+
+    catalog = discover_skills(
+        bundled_root=None,
+        user_root=user,
+        workspace_root=None,
+        workspace_trusted=False,
+    )
+
+    assert [item.name for item in catalog.descriptors()] == ["good"]
+    assert [(item.code, item.name) for item in catalog.diagnostics()] == [
+        ("invalid_skill", "bad")
+    ]
 
 
 @pytest.mark.parametrize(
@@ -277,6 +362,7 @@ def test_workspace_discovery_rejects_package_check_open_aba(
         parent: DirectoryPin | None = None,
         name: str | None = None,
         expected_identity: CoreFileIdentity | None = None,
+        establish_mount_boundary: bool = False,
     ) -> DirectoryPin:
         nonlocal attacked
         if (
@@ -294,6 +380,7 @@ def test_workspace_discovery_rejects_package_check_open_aba(
                     parent=parent,
                     name=name,
                     expected_identity=expected_identity,
+                    establish_mount_boundary=establish_mount_boundary,
                 )
             finally:
                 _remove_directory_link(package)
@@ -303,6 +390,7 @@ def test_workspace_discovery_rejects_package_check_open_aba(
             parent=parent,
             name=name,
             expected_identity=expected_identity,
+            establish_mount_boundary=establish_mount_boundary,
         )
 
     monkeypatch.setattr(

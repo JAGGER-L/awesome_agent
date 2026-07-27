@@ -28,11 +28,15 @@ registered model validation -> lexical hard checks -> permission policy
                                   bounded result + terminal event
 ```
 
-The catalog always contains four read tools and the two Skill support tools.
-It contains file mutation and shell tools in the normal local composition.
+The Runtime registry always contains four workspace read tools and the two
+Skill support registrations. A Turn's model-visible catalog filters the Skill
+tools by its frozen mode: both in `auto`, neither in `off`, and only
+`read_skill_resource` for a named Skill. The registry also contains file
+mutation and shell tools in the normal local composition.
 Local Memory tools appear only while Local Memory is enabled, and valid MCP
 catalogs add namespaced tools. Dynamic MCP behavior is documented separately
-in [MCP](../extensions/mcp.md).
+in [MCP](../extensions/mcp.md). `web_search` and `web_fetch` appear only when
+user Web config is enabled and a valid `TAVILY_API_KEY` is available.
 
 ## Common request and result contract
 
@@ -40,14 +44,12 @@ A request has a unique `call_id`, a registered `tool_name`, and an arguments
 object. Unknown names return `not_found`; schema mismatches return the generic
 `invalid_arguments` error without echoing sensitive arguments or schemas.
 
-The current built-in and Skill-support argument models are typed but not a
-uniform strict/closed JSON contract. Most use Pydantic defaults, which ignore
-unknown object fields and coerce compatible scalars (for example, `"5"` to an
-integer or `"false"` to a boolean). Memory models reject unknown fields but
-still permit scalar coercion. MCP tools instead follow the server's compiled
-JSON Schema. Callers should send only the documented fields with native JSON
-types; making every local tool model `extra="forbid"` and strict is a known
-runtime contract-hardening task.
+Awesome-owned built-in, Local Memory, and Skill-support argument models form a
+strict, closed JSON contract. Unknown object fields and scalar coercion are
+rejected, so callers must send only documented fields with native JSON types;
+for example, `5` is an integer while `"5"` is not. MCP tools remain dynamic and
+follow each server's bounded, compiled JSON Schema rather than this static
+model base.
 
 A result has:
 
@@ -55,6 +57,7 @@ A result has:
 - `status`, either `success` or `error`;
 - at most 30,000 characters of model-visible `content`;
 - bounded structured `metadata`;
+- an ordered tuple of strict `Citation(id, title, url)` values, normally empty;
 - an error code/message only for an error result;
 - presentation fields used by the TUI: verb, target, outcome, summary, bounded
   detail, truncation count, and duration.
@@ -63,6 +66,10 @@ The stable built-in error codes are `invalid_arguments`, `not_found`,
 `workspace_not_trusted`, `workspace_escape`, `permission_denied`, `conflict`,
 `timeout`, `state_unavailable`, `execution_failed`, `uncertain_outcome`,
 `memory_disabled`, `memory_conflict`, `memory_rejected`, and `cancelled`.
+Web tools additionally use `web_request_rejected`,
+`web_request_budget_exhausted`, `web_credential_rejected`, `web_rate_limited`,
+`web_quota_exhausted`, `web_provider_unavailable`, `web_timeout`,
+`web_connection_failed`, and `web_malformed_response`.
 `timeout` is retryable when another process holds a local-Memory mutation lock;
 `state_unavailable` means the lock sidecar or platform locking boundary could
 not be used safely and is not retryable. `uncertain_outcome` is primarily an
@@ -70,8 +77,9 @@ MCP boundary: it means an external side effect may have happened and must not
 be replayed automatically.
 
 Ordinary handlers have a 30-second outer deadline. `execute` supplies a dynamic
-deadline described below. Cancellation is propagated after bounded cleanup;
-it is not converted into a normal error result.
+deadline described below; both Web tools have a 20-second tool deadline around
+a 15-second HTTP client timeout. Cancellation is propagated after bounded
+cleanup; it is not converted into a normal error result.
 
 ## Workspace path rules
 
@@ -179,6 +187,11 @@ identities are captured through the Change Journal so `/diff`, `/undo`, crash
 reconciliation, and audit see the same mutation boundary. A ChangeSet can
 contain at most 1,000 filesystem nodes and 50 MiB of captured content.
 
+`write_file`, `edit_file`, and `delete` are `non_replayable`. Journal-backed
+reversibility does not make invocation replay idempotent: after a crash, a user
+or another process may have changed or recreated the same path. Recovery
+therefore defaults to Abort whenever one of these calls has an uncertain result.
+
 ### `write_file`
 
 Create or atomically replace a UTF-8 file.
@@ -281,18 +294,103 @@ spawn/backend failures, timeout, and cancellation conservatively record that an
 irreversible attempt may have begun. Each call still produces at most one
 terminal tool event and one ToolActivity.
 
+## Public Web tools
+
+Web is disabled by default. Set `TAVILY_API_KEY`, keep the provider as
+`tavily`, and run `/web on`; Workspace configuration may lower the per-Turn
+budget or add blocked domains, but cannot enable Web or choose credentials.
+
+### `web_search`
+
+This tool submits a basic search to Tavily:
+
+```text
+POST https://api.tavily.com/search
+```
+
+| Argument | Type | Default | Limits/semantics |
+| --- | --- | --- | --- |
+| `query` | string | required | Trimmed nonblank text, 1–2,000 characters; control separators are rejected |
+| `max_results` | integer | `5` | 1–10; Tavily `search_depth` is always `basic` |
+
+Configured `blocked_domains` are added to Tavily's exclusion list. Awesome
+requests no generated answer, raw content, images, or favicon. The response is
+bounded to 1 MiB and at most ten strict HTTPS results; model-visible JSON is
+bounded to 28,000 characters. There are no redirects or opaque automatic
+retries. HTTP 429, 5xx, timeout, connection failure, credential failure, usage
+limits, and malformed bodies map to the stable redacted error codes above.
+
+### `web_fetch`
+
+This tool asks Tavily's cloud service to extract readable content from one URL:
+
+```text
+POST https://api.tavily.com/extract
+```
+
+| Argument | Type | Default | Limits/semantics |
+| --- | --- | --- | --- |
+| `url` | string | required | One absolute public HTTPS URL, at most 8,000 characters; no user information, fragment, special-use/private host, or path naming a PDF or other recognized binary format |
+
+Awesome sends that URL to Tavily with basic Markdown extraction selected.
+Tavily, not Awesome Core, connects to the target site. The normalized response
+contains one strict public HTTPS URL and at most 24,000 characters of extracted
+content. The tool returns JSON with `source_id`, `url`, `content`, and
+`truncated`, plus `content_chars` and `truncated` metadata and one citation
+titled `Fetched content from <lowercase-hostname>`.
+Configured `blocked_domains` reject the exact URL hostname and its subdomains
+before approval.
+
+This is deliberately not a browser or a general downloader. There is no Cookie,
+login, JavaScript, PDF, arbitrary binary, local Fetch, persistent cache, or
+backend fallback. Awesome neither follows a target-site redirect locally nor
+silently retries an uncertain request.
+
+### Shared network, permission, and citation contract
+
+The reusable async HTTP client sets `trust_env=False`, uses Awesome's explicit
+User-Agent, and ignores ambient proxy variables. Configure the optional proxy
+only through `AWESOME_WEB_PROXY_URL` (or the corresponding Awesome secret);
+only `http` and `https` proxy URLs without embedded credentials are accepted.
+
+`network.read` asks on first use in every permission mode. The user can deny
+(the default), allow once, or allow for the active Thread. Approval happens
+before either tool consumes one unit from the same frozen `web_requests`
+budget; Search and Fetch share the default/hard maximum of eight requests per
+Turn, and Workspace config can only lower it. Thread grants are cleared on
+Thread switch, runtime rebuild, permission-mode change, `/web revoke`, `/web
+off`, or exit. Both tools are `non_replayable`, so recovery defaults to Abort
+after an uncertain crash.
+
+Each Search result and Fetch response receives a stable Turn-local source ID
+(`S1`, `S2`, ...), deduped by URL. The model cites it as `[[S1]]`. Unknown IDs
+are rendered as text rather than links and produce a warning. If Web returned
+sources but the final answer uses none, finalization appends a bounded Sources
+section and emits a warning. The same citations survive ToolResult, Agent
+state/checkpoint, Conversation, Protocol v4, the TUI, and headless JSON v2.
+
+The Search query or requested Fetch URL is sent to Tavily and processed under
+the
+[Tavily Privacy Policy](https://www.tavily.com/privacy) and
+[Tavily Platform Terms](https://www.tavily.com/terms). Structured diagnostics
+do not record the query, result URL, result body, or credentials.
+
 ## Skill support tools
 
-These read-only tools are always registered so the model can progressively load
-instructions. Skill mode controls eager/named context, not tool registration.
+These read-only tools use `context.read`. They remain in the one Runtime
+registry, while the frozen Turn mode controls model visibility and hard
+admission.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
 | `load_skill` | `name`: lowercase hyphenated name, at most 64 characters | Bounded Skill body plus source, truncation, and descriptive `allowed_tools` metadata |
 | `read_skill_resource` | `name`; `relative_path` of 1–2,000 characters | One bounded text resource, at most 5,000 estimated tokens |
 
-Workspace Skill packages receive strict anti-link and identity checks on every
-load. Details are in [Skills](../extensions/skills.md).
+`auto` exposes both tools for the identities in its frozen catalog. A named
+mode exposes only `read_skill_resource` for that one identity; `off` exposes
+neither. Every call rechecks the discovered package identity, so Runtime rebuild
+or package drift fails with `conflict` instead of widening access. Details are
+in [Skills](../extensions/skills.md).
 
 ## Local Memory tools
 

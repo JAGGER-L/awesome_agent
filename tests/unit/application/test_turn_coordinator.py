@@ -1,16 +1,18 @@
 import asyncio
 import hashlib
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+import awesome_agent.application.turns as turns_module
 from awesome_agent.agent import AgentRuntimeContext, AgentState, new_agent_state
 from awesome_agent.application.context import frozen_context_snapshot_is_valid
+from awesome_agent.application.contracts import OperationAccepted
 from awesome_agent.application.events import ApplicationEventProjector
-from awesome_agent.application.operations import OperationController
+from awesome_agent.application.operations import OperationBusy, OperationController
 from awesome_agent.application.turns import (
     ContextSnapshotValidator,
     RecoveryStatus,
@@ -19,13 +21,21 @@ from awesome_agent.application.turns import (
 )
 from awesome_agent.config import BudgetConfig, TurnConfig
 from awesome_agent.context import calculate_context_budget, estimate_messages
-from awesome_agent.conversation import ConversationService, ThreadView, Turn, TurnStatus
+from awesome_agent.conversation import (
+    ConversationService,
+    RetryPreparation,
+    ThreadView,
+    Turn,
+    TurnStatus,
+    UsageSummary,
+)
 from awesome_agent.core.events import (
     CollectingEventSink,
     EventEmitter,
     EventEnvelope,
     EventType,
 )
+from awesome_agent.core.tools.registry import ToolReplaySafety
 from awesome_agent.memory import MemoryDocumentInvalid
 from awesome_agent.modeling import (
     AssistantMessage,
@@ -33,8 +43,48 @@ from awesome_agent.modeling import (
     SystemMessage,
     UserMessage,
 )
+from awesome_agent.storage import ApplicationSQLite
 from awesome_agent.storage.checkpoints import CheckpointCorrupt
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
+
+_ACTIVE_DATABASES: list[ApplicationSQLite] = []
+
+
+def test_completed_call_id_precedes_non_replayable_registration() -> None:
+    state = cast(
+        AgentState,
+        {
+            "next_tool_index": 0,
+            "pending_tool_calls": [
+                {
+                    "call_id": "call_completed",
+                    "name": "arbitrary_side_effect",
+                    "arguments_json": "{}",
+                }
+            ],
+            "tool_results": [{"call_id": "call_completed"}],
+        },
+    )
+    resolutions: list[str] = []
+
+    def resolve(name: str) -> ToolReplaySafety:
+        resolutions.append(name)
+        return ToolReplaySafety.NON_REPLAYABLE
+
+    assert turns_module._uncertain_tool_call(state, resolve) is False
+    assert resolutions == []
+
+
+@pytest.fixture(autouse=True)
+async def _close_application_databases() -> AsyncIterator[None]:
+    start = len(_ACTIVE_DATABASES)
+    try:
+        yield
+    finally:
+        owned = _ACTIVE_DATABASES[start:]
+        del _ACTIVE_DATABASES[start:]
+        for database in reversed(owned):
+            await database.aclose()
 
 
 class FakeGraph:
@@ -181,10 +231,28 @@ class FailOnTerminalSink(CollectingEventSink):
         await super().emit(event)
 
 
+class FailOnOperationStartedSink(CollectingEventSink):
+    async def emit(self, event: EventEnvelope) -> None:
+        if event.event_type is EventType.OPERATION_STARTED:
+            raise BrokenPipeError("protocol output closed")
+        await super().emit(event)
+
+
+class OrderingSink(CollectingEventSink):
+    def __init__(self, order: list[str]) -> None:
+        super().__init__()
+        self._order = order
+
+    async def emit(self, event: EventEnvelope) -> None:
+        self._order.append(event.event_type.value)
+        await super().emit(event)
+
+
 def _config() -> TurnConfig:
     return TurnConfig(
         provider="deepseek",
         model="deepseek/deepseek-v4-flash",
+        skill_mode="off",
         budgets=BudgetConfig(),
     )
 
@@ -205,7 +273,7 @@ def _result(*, final_answer: str | None, reason: str) -> AgentState:
     return state
 
 
-def _freeze_context(
+async def _freeze_context(
     state: AgentState,
     *,
     turn: Turn,
@@ -254,7 +322,7 @@ def _freeze_context(
         turn.budgets.total_context_tokens,
         turn.budgets.total_context_tokens,
     ).effective_input_limit
-    conversation.store_context_manifest(turn.id, tuple(state["context_manifest"]))
+    await conversation.store_context_manifest(turn.id, tuple(state["context_manifest"]))
 
 
 def _manifest_with_optional_direct_command(
@@ -280,7 +348,7 @@ def _manifest_with_optional_direct_command(
     )
 
 
-def _coordinator(
+async def _coordinator(
     tmp_path: Path,
     graph: FakeGraph,
     *,
@@ -290,6 +358,9 @@ def _coordinator(
     context_snapshot_validator: ContextSnapshotValidator = (
         frozen_context_snapshot_is_valid
     ),
+    conversation_factory: Callable[
+        [SQLiteConversationRepositories], ConversationService
+    ] = lambda repositories: ConversationService(store=repositories),
 ) -> tuple[
     TurnCoordinator,
     ConversationService,
@@ -298,9 +369,12 @@ def _coordinator(
     SQLiteConversationRepositories,
     str,
 ]:
-    repositories = SQLiteConversationRepositories(tmp_path / "application.db")
-    conversation = ConversationService(store=repositories)
-    thread = conversation.create_thread("workspace_1")
+    database = ApplicationSQLite(tmp_path / "application.db")
+    _ACTIVE_DATABASES.append(database)
+    await database.initialize()
+    repositories = SQLiteConversationRepositories(database)
+    conversation = conversation_factory(repositories)
+    thread = await conversation.create_thread("workspace_1")
     sink = event_sink or CollectingEventSink()
     emitter = EventEmitter(
         session_id="session_1",
@@ -309,7 +383,7 @@ def _coordinator(
     )
     checkpoints = FakeCheckpoints()
 
-    def runtime_factory(
+    async def runtime_factory(
         turn: object,
         operation_id: str,
         projector: ApplicationEventProjector,
@@ -319,6 +393,9 @@ def _coordinator(
 
     async def default_extension_preparer() -> None:
         return None
+
+    async def seal_changes(turn_id: str) -> None:
+        del turn_id
 
     coordinator = TurnCoordinator(
         workspace_key="workspace_1",
@@ -339,7 +416,7 @@ def _coordinator(
         operations=OperationController(emitter),
         emitter=emitter,
         checkpoints=checkpoints,
-        seal_changes=lambda turn_id: None,
+        seal_changes=seal_changes,
         turn_input_preparer=(turn_input_preparer or (lambda turn, content: None)),
         turn_extension_preparer=(turn_extension_preparer or default_extension_preparer),
         context_snapshot_validator=context_snapshot_validator,
@@ -347,12 +424,267 @@ def _coordinator(
     return coordinator, conversation, sink, checkpoints, repositories, thread.id
 
 
+async def _completed_source_turn(
+    conversation: ConversationService,
+    thread_id: str,
+    *,
+    config: TurnConfig | None = None,
+) -> Turn:
+    turn = await conversation.begin_turn(
+        thread_id,
+        "inspect",
+        config or _config(),
+        client_message_id="client_source",
+    )
+    return await conversation.complete_turn(
+        turn.id,
+        "source answer",
+        UsageSummary(input_tokens=2, output_tokens=1),
+        "completed",
+    )
+
+
 @pytest.mark.asyncio
-async def test_shutdown_during_operation_start_fails_persisted_turn_and_releases_lease(
+async def test_retry_blocks_fresh_execution_until_transition_is_published(
+    tmp_path: Path,
+) -> None:
+    order: list[str] = []
+    graph = FakeGraph(_result(final_answer="retried", reason="completed"))
+    sink = OrderingSink(order)
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+        event_sink=sink,
+    )
+    frozen_config = TurnConfig(
+        provider="deepseek",
+        model="deepseek/deepseek-v4-flash",
+        thinking_enabled=False,
+        skill_mode="off",
+        budgets=BudgetConfig(model_calls=7, tool_calls=9, web_requests=1),
+    )
+    source = await _completed_source_turn(
+        conversation,
+        thread_id,
+        config=frozen_config,
+    )
+    await conversation.set_model(thread_id, "kimi/kimi-k2.6")
+    await conversation.set_thinking(thread_id, True)
+    await conversation.set_skill_mode(thread_id, "auto")
+    publish_entered = asyncio.Event()
+    publish_release = asyncio.Event()
+    captured: list[RetryPreparation] = []
+
+    def before_start() -> None:
+        order.append("permission.reset")
+
+    async def started(
+        preparation: RetryPreparation,
+        accepted: OperationAccepted,
+    ) -> OperationAccepted:
+        captured.append(preparation)
+        order.append("transition.publish")
+        publish_entered.set()
+        await publish_release.wait()
+        order.append("transition.published")
+        return accepted
+
+    retry = asyncio.create_task(
+        coordinator.retry_turn(
+            thread_id,
+            source.id,
+            before_start=before_start,
+            started=started,
+        )
+    )
+    await publish_entered.wait()
+
+    assert order == [
+        "permission.reset",
+        EventType.OPERATION_STARTED.value,
+        "transition.publish",
+    ]
+    assert graph.inputs == []
+    assert EventType.TURN_STARTED not in [event.event_type for event in sink.events]
+    preparation = captured[0]
+    assert preparation.turn.model == frozen_config.model
+    assert preparation.turn.thinking_enabled is frozen_config.thinking_enabled
+    assert preparation.turn.skill_mode == frozen_config.skill_mode
+    assert preparation.turn.budgets == frozen_config.budgets
+
+    publish_release.set()
+    accepted = await retry
+    await coordinator.wait(accepted.operation_id)
+
+    assert accepted.thread_id == preparation.view.thread.id
+    assert accepted.turn_id == preparation.turn.id
+    assert len(graph.inputs) == 1
+    assert graph.inputs[0]["pending_tool_calls"] == []
+    assert graph.inputs[0]["tool_results"] == []
+    assert graph.configs[0]["configurable"]["thread_id"] == preparation.turn.id
+    assert checkpoints.deleted == [preparation.turn.id]
+    retried = await conversation.read_thread(preparation.view.thread.id)
+    assert retried.turns[-1].status is TurnStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_retry_operation_start_failure_marks_new_turn_failed(
+    tmp_path: Path,
+) -> None:
+    graph = FakeGraph(_result(final_answer="must not run", reason="completed"))
+    sink = FailOnOperationStartedSink()
+    coordinator, conversation, _, _, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+        event_sink=sink,
+    )
+    source = await _completed_source_turn(conversation, thread_id)
+    callbacks: list[str] = []
+
+    async def started(
+        preparation: RetryPreparation,
+        accepted: OperationAccepted,
+    ) -> OperationAccepted:
+        del preparation, accepted
+        callbacks.append("published")
+        raise AssertionError("transition publication must not run")
+
+    with pytest.raises(BrokenPipeError, match="protocol output closed"):
+        await coordinator.retry_turn(
+            thread_id,
+            source.id,
+            before_start=lambda: callbacks.append("permission.reset"),
+            started=started,
+        )
+
+    retries = tuple(
+        thread
+        for thread in await conversation.list_threads("workspace_1")
+        if thread.lineage is not None and thread.lineage.kind == "retry"
+    )
+    assert len(retries) == 1
+    retry_turn = (await conversation.read_thread(retries[0].id)).turns[-1]
+    assert (retry_turn.status, retry_turn.error_code) == (
+        TurnStatus.FAILED,
+        "operation_start_failed",
+    )
+    assert callbacks == ["permission.reset"]
+    assert coordinator.active_operation_id is None
+    assert graph.inputs == []
+
+
+@pytest.mark.asyncio
+async def test_retry_publish_failure_cancels_blocked_turn_and_releases_operation(
+    tmp_path: Path,
+) -> None:
+    graph = FakeGraph(_result(final_answer="must not run", reason="completed"))
+    coordinator, conversation, sink, _, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+    )
+    source = await _completed_source_turn(conversation, thread_id)
+    captured: list[RetryPreparation] = []
+
+    async def fail_publish(
+        preparation: RetryPreparation,
+        accepted: OperationAccepted,
+    ) -> OperationAccepted:
+        del accepted
+        captured.append(preparation)
+        raise RuntimeError("transition publication failed")
+
+    with pytest.raises(RuntimeError, match="transition publication failed"):
+        await coordinator.retry_turn(
+            thread_id,
+            source.id,
+            before_start=lambda: None,
+            started=fail_publish,
+        )
+
+    retry_view = await conversation.read_thread(captured[0].view.thread.id)
+    assert retry_view.turns[-1].status is TurnStatus.CANCELLED
+    assert coordinator.active_operation_id is None
+    assert graph.inputs == []
+    assert [event.event_type for event in sink.events] == [
+        EventType.OPERATION_STARTED,
+        EventType.OPERATION_CANCELLED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retry_caller_cancellation_during_materialization_compensates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = FakeGraph(_result(final_answer="must not run", reason="completed"))
+    coordinator, conversation, sink, _, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+    )
+    source = await _completed_source_turn(conversation, thread_id)
+    prepare_retry = conversation.prepare_retry
+    materialized = asyncio.Event()
+    release = asyncio.Event()
+    captured: list[RetryPreparation] = []
+
+    async def blocking_prepare_retry(
+        workspace_key: str,
+        source_thread_id: str,
+        source_turn_id: str | None = None,
+    ) -> RetryPreparation:
+        assert coordinator.active_operation_id is not None
+        preparation = await prepare_retry(
+            workspace_key,
+            source_thread_id,
+            source_turn_id,
+        )
+        captured.append(preparation)
+        materialized.set()
+        await release.wait()
+        return preparation
+
+    monkeypatch.setattr(conversation, "prepare_retry", blocking_prepare_retry)
+    before_start: list[str] = []
+    retry = asyncio.create_task(
+        coordinator.retry_turn(
+            thread_id,
+            source.id,
+            before_start=lambda: before_start.append("permission.reset"),
+            started=lambda preparation, accepted: _return_accepted(
+                preparation,
+                accepted,
+            ),
+        )
+    )
+    await materialized.wait()
+    retry.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await retry
+
+    retry_view = await conversation.read_thread(captured[0].view.thread.id)
+    assert retry_view.turns[-1].status is TurnStatus.CANCELLED
+    assert before_start == []
+    assert coordinator.active_operation_id is None
+    assert sink.events == []
+    assert graph.inputs == []
+
+
+async def _return_accepted(
+    preparation: RetryPreparation,
+    accepted: OperationAccepted,
+) -> OperationAccepted:
+    del preparation
+    return accepted
+
+
+@pytest.mark.asyncio
+async def test_shutdown_during_operation_start_cancels_turn_and_releases_lease(
     tmp_path: Path,
 ) -> None:
     sink = BlockingOperationStartedSink()
-    coordinator, conversation, _, _, _, thread_id = _coordinator(
+    coordinator, conversation, _, _, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed")),
         event_sink=sink,
@@ -370,20 +702,20 @@ async def test_shutdown_during_operation_start_fails_persisted_turn_and_releases
 
     with pytest.raises(asyncio.CancelledError):
         await submission
-    turn = conversation.read_thread(thread_id).turns[0]
-    assert turn.status is TurnStatus.FAILED
-    assert turn.error_code == "operation_start_failed"
+    turn = (await conversation.read_thread(thread_id)).turns[0]
+    assert turn.status is TurnStatus.CANCELLED
+    assert turn.termination_reason == "cancelled"
 
 
 @pytest.mark.asyncio
 async def test_submit_rejects_thread_from_another_workspace_without_mutation(
     tmp_path: Path,
 ) -> None:
-    coordinator, conversation, _, _, _, _ = _coordinator(
+    coordinator, conversation, _, _, _, _ = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="must not run", reason="completed")),
     )
-    foreign = conversation.create_thread("workspace_2")
+    foreign = await conversation.create_thread("workspace_2")
 
     with pytest.raises(TurnExecutionFailed, match="thread_workspace_mismatch"):
         await coordinator.submit_turn(
@@ -392,7 +724,7 @@ async def test_submit_rejects_thread_from_another_workspace_without_mutation(
             client_message_id="client_foreign_submit",
         )
 
-    assert conversation.read_thread(foreign.id).turns == ()
+    assert (await conversation.read_thread(foreign.id)).turns == ()
     assert coordinator.active_operation_id is None
 
 
@@ -400,12 +732,12 @@ async def test_submit_rejects_thread_from_another_workspace_without_mutation(
 async def test_resume_rejects_thread_from_another_workspace_without_mutation(
     tmp_path: Path,
 ) -> None:
-    coordinator, conversation, _, checkpoints, _, _ = _coordinator(
+    coordinator, conversation, _, checkpoints, _, _ = await _coordinator(
         tmp_path,
         ResumeGraph(_result(final_answer="must not run", reason="completed")),
     )
-    foreign = conversation.create_thread("workspace_2")
-    turn = conversation.begin_turn(
+    foreign = await conversation.create_thread("workspace_2")
+    turn = await conversation.begin_turn(
         foreign.id,
         "inspect",
         _config(),
@@ -415,7 +747,7 @@ async def test_resume_rejects_thread_from_another_workspace_without_mutation(
     with pytest.raises(TurnExecutionFailed, match="thread_workspace_mismatch"):
         await coordinator.resume_unfinished(foreign.id)
 
-    recovered = conversation.read_thread(foreign.id).turns[0]
+    recovered = (await conversation.read_thread(foreign.id)).turns[0]
     assert recovered.status is TurnStatus.IN_PROGRESS
     assert checkpoints.deleted == []
     assert turn.id == recovered.id
@@ -428,7 +760,7 @@ async def test_turn_started_delivery_failure_terminalizes_before_graph_execution
 ) -> None:
     graph = FakeGraph(_result(final_answer="must not run", reason="completed"))
     sink = FailOnTerminalSink(EventType.TURN_STARTED)
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         event_sink=sink,
@@ -442,7 +774,7 @@ async def test_turn_started_delivery_failure_terminalizes_before_graph_execution
     with pytest.raises(BrokenPipeError, match="protocol output closed"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert (turn.status, turn.error_code) == (
         TurnStatus.FAILED,
         "turn_start_failed",
@@ -456,7 +788,7 @@ async def test_cancel_after_durable_turn_commit_is_rejected(
     tmp_path: Path,
 ) -> None:
     sink = BlockingTurnCompletedSink()
-    coordinator, conversation, _, _, _, thread_id = _coordinator(
+    coordinator, conversation, _, _, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="done", reason="completed")),
         event_sink=sink,
@@ -472,7 +804,7 @@ async def test_cancel_after_durable_turn_commit_is_rejected(
     sink.release.set()
     await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.COMPLETED
     event_types = [event.event_type for event in sink.events]
     assert event_types.count(EventType.TURN_COMPLETED) == 1
@@ -487,7 +819,7 @@ async def test_cancel_after_durable_turn_failure_is_rejected(
     tmp_path: Path,
 ) -> None:
     sink = BlockingTurnFailedSink()
-    coordinator, conversation, _, _, _, thread_id = _coordinator(
+    coordinator, conversation, _, _, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer=None, reason="model_failed")),
         event_sink=sink,
@@ -504,7 +836,7 @@ async def test_cancel_after_durable_turn_failure_is_rejected(
     with pytest.raises(TurnExecutionFailed, match="model_failed"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert (turn.status, turn.error_code) == (TurnStatus.FAILED, "model_failed")
     event_types = [event.event_type for event in sink.events]
     assert event_types.count(EventType.TURN_FAILED) == 1
@@ -520,14 +852,14 @@ async def test_completed_turn_write_error_reconciles_exact_durable_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gate = asyncio.Event()
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="done", reason="completed"), gate),
     )
     persist = conversation.complete_turn
 
-    def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
-        persist(*args, **kwargs)
+    async def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
+        await persist(*args, **kwargs)
         raise RuntimeError("connection close failed after commit")
 
     monkeypatch.setattr(conversation, "complete_turn", commit_then_raise)
@@ -540,12 +872,12 @@ async def test_completed_turn_write_error_reconciles_exact_durable_state(
     manifest: tuple[dict[str, JsonValue], ...] = (
         {"kind": "history", "estimated_tokens": 11},
     )
-    conversation.store_context_manifest(accepted.turn_id, manifest)
+    await conversation.store_context_manifest(accepted.turn_id, manifest)
     gate.set()
 
     await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.COMPLETED
     assert turn.context_manifest == manifest
     assert checkpoints.deleted == [accepted.turn_id]
@@ -560,7 +892,7 @@ async def test_completed_turn_write_error_is_not_reconciled_without_exact_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, sink, _, _, thread_id = _coordinator(
+    coordinator, conversation, sink, _, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="done", reason="completed")),
     )
@@ -579,7 +911,7 @@ async def test_completed_turn_write_error_is_not_reconciled_without_exact_state(
     with pytest.raises(RuntimeError, match="write failed before commit"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.IN_PROGRESS
     event_types = [event.event_type for event in sink.events]
     assert event_types.count(EventType.TURN_COMPLETED) == 0
@@ -592,14 +924,14 @@ async def test_failed_turn_write_error_reconciles_exact_durable_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer=None, reason="model_failed")),
     )
     persist = conversation.fail_turn
 
-    def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
-        persist(*args, **kwargs)
+    async def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
+        await persist(*args, **kwargs)
         raise RuntimeError("connection close failed after commit")
 
     monkeypatch.setattr(conversation, "fail_turn", commit_then_raise)
@@ -612,7 +944,7 @@ async def test_failed_turn_write_error_reconciles_exact_durable_state(
     with pytest.raises(TurnExecutionFailed, match="model_failed"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert (turn.status, turn.error_code) == (TurnStatus.FAILED, "model_failed")
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
@@ -627,14 +959,14 @@ async def test_cancelled_turn_write_error_reconciles_exact_durable_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gate = asyncio.Event()
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed"), gate),
     )
     persist = conversation.cancel_turn
 
-    def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
-        persist(*args, **kwargs)
+    async def commit_then_raise(*args: Any, **kwargs: Any) -> Turn:
+        await persist(*args, **kwargs)
         raise RuntimeError("connection close failed after commit")
 
     monkeypatch.setattr(conversation, "cancel_turn", commit_then_raise)
@@ -648,7 +980,7 @@ async def test_cancelled_turn_write_error_reconciles_exact_durable_state(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
@@ -669,7 +1001,7 @@ async def test_turn_prepares_extensions_inside_operation_and_cleans_up_cancel(
         await release.wait()
 
     graph = FakeGraph(_result(final_answer="unreachable", reason="completed"))
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         turn_extension_preparer=prepare_extensions,
@@ -686,7 +1018,7 @@ async def test_turn_prepares_extensions_inside_operation_and_cleans_up_cancel(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events] == [
@@ -703,7 +1035,7 @@ async def test_submit_cancelled_while_turn_started_is_blocked_is_terminalized_on
 ) -> None:
     sink = BlockingTurnStartedSink()
     graph = FakeGraph(_result(final_answer="must not run", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         event_sink=sink,
@@ -719,7 +1051,7 @@ async def test_submit_cancelled_while_turn_started_is_blocked_is_terminalized_on
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [accepted.turn_id]
     assert graph.inputs == []
@@ -735,19 +1067,19 @@ async def test_resume_cancelled_while_turn_started_is_blocked_is_terminalized_on
 ) -> None:
     sink = BlockingTurnStartedSink()
     graph = ResumeGraph(_result(final_answer="must not run", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         event_sink=sink,
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
         client_message_id="client_resume_cancel_blocked_turn_start",
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
     accepted = await coordinator.resume_unfinished(thread_id)
     await sink.entered.wait()
 
@@ -755,7 +1087,7 @@ async def test_resume_cancelled_while_turn_started_is_blocked_is_terminalized_on
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [turn.id]
     assert graph.resume_inputs == []
@@ -771,8 +1103,8 @@ async def test_submit_turn_freezes_config_commits_then_emits_and_cleans_checkpoi
 ) -> None:
     gate = asyncio.Event()
     graph = FakeGraph(_result(final_answer="done", reason="completed"), gate)
-    coordinator, conversation, sink, checkpoints, repositories, thread_id = (
-        _coordinator(tmp_path, graph)
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
+        tmp_path, graph
     )
 
     accepted = await coordinator.submit_turn(
@@ -786,19 +1118,12 @@ async def test_submit_turn_freezes_config_commits_then_emits_and_cleans_checkpoi
     assert accepted.client_message_id == "client_1"
     assert coordinator.active_operation_id == accepted.operation_id
 
-    view = conversation.read_thread(thread_id)
-    repositories.threads.update(
-        view.thread.model_copy(
-            update={
-                "current_model": "kimi/kimi-k2.6",
-                "thinking_enabled": False,
-            }
-        )
-    )
+    await conversation.set_model(thread_id, "kimi/kimi-k2.6")
+    await conversation.set_thinking(thread_id, False)
     gate.set()
     await coordinator.wait(accepted.operation_id)
 
-    completed = conversation.read_thread(thread_id)
+    completed = await conversation.read_thread(thread_id)
     assert completed.turns[0].status is TurnStatus.COMPLETED
     assert completed.entries[-1].content == "done"
     assert completed.entries[0].client_message_id == "client_1"
@@ -820,7 +1145,7 @@ async def test_model_failure_persists_failed_turn_and_failed_operation(
     tmp_path: Path,
 ) -> None:
     graph = FakeGraph(_result(final_answer=None, reason="model_authentication"))
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path, graph
     )
 
@@ -830,7 +1155,7 @@ async def test_model_failure_persists_failed_turn_and_failed_operation(
     with pytest.raises(TurnExecutionFailed, match="model_authentication"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "model_authentication"
     assert turn.usage.input_tokens == 10
@@ -856,7 +1181,7 @@ async def test_preprocessing_failure_terminalizes_turn_and_allows_next_turn(
         if attempts == 1:
             raise RuntimeError("preprocessing fault")
 
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="done", reason="completed")),
         turn_input_preparer=prepare_input,
@@ -870,7 +1195,7 @@ async def test_preprocessing_failure_terminalizes_turn_and_allows_next_turn(
     with pytest.raises(RuntimeError, match="preprocessing fault"):
         await coordinator.wait(failed.operation_id)
 
-    first = conversation.read_thread(thread_id).turns[0]
+    first = (await conversation.read_thread(thread_id)).turns[0]
     assert first.status is TurnStatus.FAILED
     assert first.error_code == "turn_preparation_failed"
     assert checkpoints.deleted == [failed.turn_id]
@@ -883,7 +1208,7 @@ async def test_preprocessing_failure_terminalizes_turn_and_allows_next_turn(
     )
     await coordinator.wait(succeeded.operation_id)
 
-    turns = conversation.read_thread(thread_id).turns
+    turns = (await conversation.read_thread(thread_id)).turns
     assert [turn.status for turn in turns] == [
         TurnStatus.FAILED,
         TurnStatus.COMPLETED,
@@ -903,7 +1228,7 @@ async def test_invalid_local_memory_preparation_terminalizes_the_created_turn(
         del turn, content
         raise MemoryDocumentInvalid("memory_document_invalid")
 
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="must not run", reason="completed")),
         turn_input_preparer=prepare_input,
@@ -917,7 +1242,7 @@ async def test_invalid_local_memory_preparation_terminalizes_the_created_turn(
     with pytest.raises(MemoryDocumentInvalid, match="memory_document_invalid"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "turn_preparation_failed"
     assert checkpoints.deleted == [accepted.turn_id]
@@ -940,7 +1265,7 @@ async def test_preprocessing_cancellation_persists_one_cancelled_terminal(
         if attempts == 1:
             raise asyncio.CancelledError
 
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="done", reason="completed")),
         turn_input_preparer=prepare_input,
@@ -954,7 +1279,7 @@ async def test_preprocessing_cancellation_persists_one_cancelled_terminal(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(cancelled.operation_id)
 
-    first = conversation.read_thread(thread_id).turns[0]
+    first = (await conversation.read_thread(thread_id)).turns[0]
     assert first.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [cancelled.turn_id]
     assert coordinator.active_operation_id is None
@@ -978,7 +1303,7 @@ async def test_graph_exception_persists_last_stable_checkpoint_facts(
     tmp_path: Path,
 ) -> None:
     graph = RaisingGraph(_result(final_answer=None, reason="waiting"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path, graph
     )
     observed = _result(final_answer=None, reason="waiting")
@@ -992,7 +1317,7 @@ async def test_graph_exception_persists_last_stable_checkpoint_facts(
     with pytest.raises(RuntimeError, match="graph failed"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "agent_execution_failed"
     assert turn.usage.tool_calls == 2
@@ -1004,7 +1329,7 @@ async def test_graph_exception_preserves_primary_error_when_fact_read_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         RaisingGraph(_result(final_answer=None, reason="waiting")),
     )
@@ -1023,7 +1348,7 @@ async def test_graph_exception_preserves_primary_error_when_fact_read_fails(
     with pytest.raises(RuntimeError, match="graph failed"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "agent_execution_failed"
     assert turn.usage.tool_calls == 0
@@ -1039,7 +1364,7 @@ async def test_graph_exception_commits_before_bounded_fact_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         RaisingGraph(_result(final_answer=None, reason="waiting")),
     )
@@ -1065,7 +1390,7 @@ async def test_graph_exception_commits_before_bounded_fact_read(
     with pytest.raises(RuntimeError, match="graph failed"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "agent_execution_failed"
     assert checkpoints.deleted == [accepted.turn_id]
@@ -1081,7 +1406,7 @@ async def test_agent_state_construction_failure_terminalizes_turn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed")),
     )
@@ -1100,7 +1425,7 @@ async def test_agent_state_construction_failure_terminalizes_turn(
     with pytest.raises(ValueError, match="invalid initial state"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "agent_initialization_failed"
     assert checkpoints.deleted == [accepted.turn_id]
@@ -1115,7 +1440,7 @@ async def test_invalid_graph_result_terminalizes_turn(
     tmp_path: Path,
 ) -> None:
     graph = FakeGraph(cast(AgentState, {}))
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
     )
@@ -1128,7 +1453,7 @@ async def test_invalid_graph_result_terminalizes_turn(
     with pytest.raises(KeyError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "agent_execution_failed"
     assert checkpoints.deleted == [accepted.turn_id]
@@ -1143,7 +1468,7 @@ async def test_graph_result_normalization_cancellation_terminalizes_turn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed")),
     )
@@ -1165,7 +1490,7 @@ async def test_graph_result_normalization_cancellation_terminalizes_turn(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
@@ -1179,7 +1504,7 @@ async def test_runtime_context_cancellation_terminalizes_turn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed")),
     )
@@ -1198,7 +1523,7 @@ async def test_runtime_context_cancellation_terminalizes_turn(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
@@ -1213,7 +1538,7 @@ async def test_cancel_persists_cancelled_turn_before_operation_terminal(
 ) -> None:
     gate = asyncio.Event()
     graph = FakeGraph(_result(final_answer="unused", reason="completed"), gate)
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path, graph
     )
     accepted = await coordinator.submit_turn(
@@ -1227,11 +1552,87 @@ async def test_cancel_persists_cancelled_turn_before_operation_terminal(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert turn.usage.input_tokens == 10
     assert turn.usage.output_tokens == 3
     assert turn.context_manifest == ({"kind": "history", "estimated_tokens": 13},)
+    assert checkpoints.deleted == [accepted.turn_id]
+    assert [event.event_type for event in sink.events][-2:] == [
+        EventType.TURN_CANCELLED,
+        EventType.OPERATION_CANCELLED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_holds_operation_until_turn_persistence_and_cleanup_finish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph_gate = asyncio.Event()
+    graph = FakeGraph(
+        _result(final_answer="unused", reason="completed"),
+        graph_gate,
+    )
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
+        tmp_path,
+        graph,
+    )
+    persist_cancelled = conversation.cancel_turn
+    persistence_entered = asyncio.Event()
+    release_persistence = asyncio.Event()
+    sealed: list[str] = []
+
+    async def gated_cancel(*args: Any, **kwargs: Any) -> Turn:
+        persistence_entered.set()
+        await release_persistence.wait()
+        return await persist_cancelled(*args, **kwargs)
+
+    async def seal(turn_id: str) -> None:
+        sealed.append(turn_id)
+
+    monkeypatch.setattr(conversation, "cancel_turn", gated_cancel)
+    monkeypatch.setattr(coordinator, "_seal_changes", seal)
+    monkeypatch.setattr(
+        "awesome_agent.application.turns._CANCELLATION_FINALIZATION_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+    accepted = await coordinator.submit_turn(
+        thread_id,
+        "inspect",
+        client_message_id="client_durable_cancel_gate",
+    )
+    while not graph.inputs:
+        await asyncio.sleep(0)
+
+    started = asyncio.get_running_loop().time()
+    assert await coordinator.cancel_operation(accepted.operation_id) is True
+    assert asyncio.get_running_loop().time() - started < 0.25
+    await persistence_entered.wait()
+    await asyncio.sleep(0.03)
+
+    assert coordinator.active_operation_id == accepted.operation_id
+    with pytest.raises(OperationBusy):
+        await coordinator.submit_turn(
+            thread_id,
+            "second",
+            client_message_id="client_while_cancel_commits",
+        )
+    shutdown = asyncio.create_task(coordinator._operations.shutdown())
+    await asyncio.sleep(0.03)
+    assert not shutdown.done()
+    assert checkpoints.deleted == []
+    assert sealed == []
+
+    release_persistence.set()
+    await asyncio.wait_for(shutdown, timeout=1)
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator.wait(accepted.operation_id)
+
+    turn = (await conversation.read_thread(thread_id)).turns[0]
+    assert turn.status is TurnStatus.CANCELLED
+    assert sealed == [accepted.turn_id]
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
         EventType.TURN_CANCELLED,
@@ -1245,7 +1646,7 @@ async def test_cancel_falls_back_when_checkpoint_reader_self_cancels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gate = asyncio.Event()
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed"), gate),
     )
@@ -1265,7 +1666,7 @@ async def test_cancel_falls_back_when_checkpoint_reader_self_cancels(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [accepted.turn_id]
     assert [event.event_type for event in sink.events][-2:] == [
@@ -1280,7 +1681,7 @@ async def test_cancel_preserves_cancelled_error_when_terminal_delivery_fails(
 ) -> None:
     gate = asyncio.Event()
     sink = FailOnTerminalSink(EventType.TURN_CANCELLED)
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed"), gate),
         event_sink=sink,
@@ -1295,7 +1696,7 @@ async def test_cancel_preserves_cancelled_error_when_terminal_delivery_fails(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert checkpoints.deleted == [accepted.turn_id]
 
@@ -1306,7 +1707,7 @@ async def test_cancel_preserves_cancelled_error_when_checkpoint_cleanup_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gate = asyncio.Event()
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed"), gate),
     )
@@ -1326,7 +1727,7 @@ async def test_cancel_preserves_cancelled_error_when_checkpoint_cleanup_fails(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
 
 
@@ -1336,7 +1737,7 @@ async def test_cancel_preserves_checkpoint_when_terminal_state_write_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gate = asyncio.Event()
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed"), gate),
     )
@@ -1356,7 +1757,7 @@ async def test_cancel_preserves_checkpoint_when_terminal_state_write_fails(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.IN_PROGRESS
     assert checkpoints.deleted == []
 
@@ -1367,7 +1768,7 @@ async def test_cancel_then_shutdown_finishes_cancelled_turn_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gate = asyncio.Event()
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed"), gate),
     )
@@ -1408,7 +1809,7 @@ async def test_cancel_then_shutdown_finishes_cancelled_turn_once(
     with pytest.raises(asyncio.CancelledError):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert turn.usage.tool_calls == 2
     assert turn.context_manifest == ({"kind": "tool_result", "estimated_tokens": 17},)
@@ -1425,7 +1826,7 @@ async def test_cancel_bounds_observed_facts_and_uses_safe_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     gate = asyncio.Event()
-    coordinator, conversation, sink, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, sink, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="unused", reason="completed"), gate),
     )
@@ -1453,7 +1854,7 @@ async def test_cancel_bounds_observed_facts_and_uses_safe_fallback(
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(coordinator.wait(accepted.operation_id), timeout=1)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.CANCELLED
     assert turn.usage.tool_calls == 0
     assert turn.context_manifest == ()
@@ -1468,7 +1869,7 @@ async def test_graph_failure_preserves_primary_error_when_cleanup_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         RaisingGraph(_result(final_answer=None, reason="waiting")),
     )
@@ -1487,7 +1888,7 @@ async def test_graph_failure_preserves_primary_error_when_cleanup_fails(
     with pytest.raises(RuntimeError, match="graph failed"):
         await coordinator.wait(accepted.operation_id)
 
-    turn = conversation.read_thread(thread_id).turns[0]
+    turn = (await conversation.read_thread(thread_id)).turns[0]
     assert turn.status is TurnStatus.FAILED
     assert turn.error_code == "agent_execution_failed"
 
@@ -1497,14 +1898,14 @@ async def test_resume_uses_official_checkpoint_position_without_new_user_entry(
     tmp_path: Path,
 ) -> None:
     graph = ResumeGraph(_result(final_answer="resumed", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path, graph
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id, "inspect", _config(), client_message_id="client_1"
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
-    _freeze_context(
+    await _freeze_context(
         checkpoints.state,
         turn=turn,
         conversation=conversation,
@@ -1515,7 +1916,7 @@ async def test_resume_uses_official_checkpoint_position_without_new_user_entry(
 
     assert accepted.turn_id == turn.id
     assert graph.resume_inputs == [None]
-    view = conversation.read_thread(thread_id)
+    view = await conversation.read_thread(thread_id)
     assert len(view.entries) == 2
     assert view.entries[-1].content == "resumed"
 
@@ -1525,11 +1926,11 @@ async def test_resume_repairs_manifest_committed_ahead_of_older_checkpoint(
     tmp_path: Path,
 ) -> None:
     graph = ResumeGraph(_result(final_answer="resumed", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path, graph
     )
-    direct = conversation.append_direct_command(thread_id, "prior output", {})
-    turn = conversation.begin_turn(
+    direct = await conversation.append_direct_command(thread_id, "prior output", {})
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -1537,18 +1938,18 @@ async def test_resume_repairs_manifest_committed_ahead_of_older_checkpoint(
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
     checkpoints.state["termination_reason"] = None
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
     checkpoint_manifest = tuple(checkpoints.state["context_manifest"])
     persisted_ahead = _manifest_with_optional_direct_command(
         checkpoint_manifest,
         entry_id=direct.id,
     )
-    conversation.store_context_manifest(turn.id, persisted_ahead)
+    await conversation.store_context_manifest(turn.id, persisted_ahead)
 
     accepted = await coordinator.resume_unfinished(thread_id)
     await coordinator.wait(accepted.operation_id)
 
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.COMPLETED
     assert recovered.context_manifest == checkpoint_manifest
     assert graph.resume_inputs == [None]
@@ -1572,19 +1973,19 @@ async def test_resume_never_repairs_turn_from_tampered_checkpoint_snapshot(
         return True
 
     graph = ResumeGraph(_result(final_answer="must not run", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         context_snapshot_validator=permissive_validator,
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
         client_message_id="client_tampered_checkpoint",
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
     checkpoint_manifest = tuple(checkpoints.state["context_manifest"])
     persisted_ahead = (
         {
@@ -1593,13 +1994,13 @@ async def test_resume_never_repairs_turn_from_tampered_checkpoint_snapshot(
         },
         checkpoint_manifest[1],
     )
-    conversation.store_context_manifest(turn.id, persisted_ahead)
+    await conversation.store_context_manifest(turn.id, persisted_ahead)
     checkpoints.state["context_manifest"][0]["content_hash"] = "0" * 64
 
     with pytest.raises(TurnExecutionFailed, match="context_snapshot_missing"):
         await coordinator.resume_unfinished(thread_id)
 
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.FAILED
     assert recovered.context_manifest == persisted_ahead
     assert graph.resume_inputs == []
@@ -1610,12 +2011,12 @@ async def test_resume_never_repairs_turn_from_tampered_checkpoint_snapshot(
 async def test_startup_reconciliation_repairs_checkpoint_manifest_gap(
     tmp_path: Path,
 ) -> None:
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="must not run", reason="completed")),
     )
-    direct = conversation.append_direct_command(thread_id, "prior output", {})
-    turn = conversation.begin_turn(
+    direct = await conversation.append_direct_command(thread_id, "prior output", {})
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -1623,18 +2024,18 @@ async def test_startup_reconciliation_repairs_checkpoint_manifest_gap(
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
     checkpoints.state["termination_reason"] = None
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
     checkpoint_manifest = tuple(checkpoints.state["context_manifest"])
     persisted_ahead = _manifest_with_optional_direct_command(
         checkpoint_manifest,
         entry_id=direct.id,
     )
-    conversation.store_context_manifest(turn.id, persisted_ahead)
+    await conversation.store_context_manifest(turn.id, persisted_ahead)
 
     [result] = await coordinator.reconcile_startup()
 
     assert result.status is RecoveryStatus.RESUMABLE
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.IN_PROGRESS
     assert recovered.context_manifest == checkpoint_manifest
     assert checkpoints.deleted == []
@@ -1644,11 +2045,11 @@ async def test_startup_reconciliation_repairs_checkpoint_manifest_gap(
 async def test_startup_reconciliation_restores_empty_manifest_from_checkpoint(
     tmp_path: Path,
 ) -> None:
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="must not run", reason="completed")),
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -1656,9 +2057,9 @@ async def test_startup_reconciliation_restores_empty_manifest_from_checkpoint(
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
     checkpoints.state["termination_reason"] = None
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
     checkpoint_manifest = tuple(checkpoints.state["context_manifest"])
-    conversation.compare_and_swap_context_manifest(
+    await conversation.compare_and_swap_context_manifest(
         turn.id,
         (),
         expected_context_manifest=checkpoint_manifest,
@@ -1667,7 +2068,7 @@ async def test_startup_reconciliation_restores_empty_manifest_from_checkpoint(
     [result] = await coordinator.reconcile_startup()
 
     assert result.status is RecoveryStatus.RESUMABLE
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.IN_PROGRESS
     assert recovered.context_manifest == checkpoint_manifest
 
@@ -1688,11 +2089,11 @@ async def test_empty_manifest_never_trusts_unverifiable_checkpoint(
     variant: str,
     expected_error: str,
 ) -> None:
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="must not run", reason="completed")),
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -1700,9 +2101,9 @@ async def test_empty_manifest_never_trusts_unverifiable_checkpoint(
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
     checkpoints.state["termination_reason"] = None
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
     checkpoint_manifest = tuple(checkpoints.state["context_manifest"])
-    conversation.compare_and_swap_context_manifest(
+    await conversation.compare_and_swap_context_manifest(
         turn.id,
         (),
         expected_context_manifest=checkpoint_manifest,
@@ -1739,7 +2140,7 @@ async def test_empty_manifest_never_trusts_unverifiable_checkpoint(
         RecoveryStatus.FAILED,
         expected_error,
     )
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.FAILED
     assert recovered.context_manifest == ()
 
@@ -1749,12 +2150,12 @@ async def test_startup_manifest_cas_conflict_fails_one_turn_and_continues_queue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    coordinator, conversation, _, _, _, thread_id = _coordinator(
+    coordinator, conversation, _, _, _, thread_id = await _coordinator(
         tmp_path,
         FakeGraph(_result(final_answer="must not run", reason="completed")),
     )
-    direct = conversation.append_direct_command(thread_id, "prior output", {})
-    conflicted = conversation.begin_turn(
+    direct = await conversation.append_direct_command(thread_id, "prior output", {})
+    conflicted = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -1762,16 +2163,16 @@ async def test_startup_manifest_cas_conflict_fails_one_turn_and_continues_queue(
     )
     conflicted_state = _result(final_answer=None, reason="waiting")
     conflicted_state["termination_reason"] = None
-    _freeze_context(conflicted_state, turn=conflicted, conversation=conversation)
+    await _freeze_context(conflicted_state, turn=conflicted, conversation=conversation)
     checkpoint_manifest = tuple(conflicted_state["context_manifest"])
     persisted_ahead = _manifest_with_optional_direct_command(
         checkpoint_manifest,
         entry_id=direct.id,
     )
-    conversation.store_context_manifest(conflicted.id, persisted_ahead)
+    await conversation.store_context_manifest(conflicted.id, persisted_ahead)
 
-    other_thread = conversation.create_thread("workspace_1", "Other")
-    resumable = conversation.begin_turn(
+    other_thread = await conversation.create_thread("workspace_1", "Other")
+    resumable = await conversation.begin_turn(
         other_thread.id,
         "inspect",
         _config(),
@@ -1779,7 +2180,7 @@ async def test_startup_manifest_cas_conflict_fails_one_turn_and_continues_queue(
     )
     resumable_state = _result(final_answer=None, reason="waiting")
     resumable_state["termination_reason"] = None
-    _freeze_context(resumable_state, turn=resumable, conversation=conversation)
+    await _freeze_context(resumable_state, turn=resumable, conversation=conversation)
     checkpoints = MappingCheckpoints(
         {
             conflicted.id: conflicted_state,
@@ -1794,15 +2195,15 @@ async def test_startup_manifest_cas_conflict_fails_one_turn_and_continues_queue(
         persisted_ahead[2],
     )
 
-    def race_context_manifest(
+    async def race_context_manifest(
         turn_id: str,
         context_manifest: tuple[dict[str, JsonValue], ...],
         *,
         expected_context_manifest: tuple[dict[str, JsonValue], ...],
     ) -> Turn:
         if turn_id == conflicted.id:
-            conversation.store_context_manifest(turn_id, concurrent_manifest)
-        return original_cas(
+            await conversation.store_context_manifest(turn_id, concurrent_manifest)
+        return await original_cas(
             turn_id,
             context_manifest,
             expected_context_manifest=expected_context_manifest,
@@ -1822,7 +2223,7 @@ async def test_startup_manifest_cas_conflict_fails_one_turn_and_continues_queue(
         "context_snapshot_conflict",
     )
     assert by_turn[resumable.id].status is RecoveryStatus.RESUMABLE
-    conflict_result = conversation.read_thread(thread_id).turns[0]
+    conflict_result = (await conversation.read_thread(thread_id)).turns[0]
     assert conflict_result.status is TurnStatus.FAILED
     assert conflict_result.context_manifest == concurrent_manifest
     assert resumable.id not in checkpoints.deleted
@@ -1834,12 +2235,12 @@ async def test_resume_manifest_cas_conflict_returns_stable_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph = ResumeGraph(_result(final_answer="must not run", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
     )
-    direct = conversation.append_direct_command(thread_id, "prior output", {})
-    turn = conversation.begin_turn(
+    direct = await conversation.append_direct_command(thread_id, "prior output", {})
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -1847,13 +2248,13 @@ async def test_resume_manifest_cas_conflict_returns_stable_error(
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
     checkpoints.state["termination_reason"] = None
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
     checkpoint_manifest = tuple(checkpoints.state["context_manifest"])
     persisted_ahead = _manifest_with_optional_direct_command(
         checkpoint_manifest,
         entry_id=direct.id,
     )
-    conversation.store_context_manifest(turn.id, persisted_ahead)
+    await conversation.store_context_manifest(turn.id, persisted_ahead)
     original_cas = conversation.compare_and_swap_context_manifest
     concurrent_manifest = (
         persisted_ahead[0],
@@ -1861,14 +2262,14 @@ async def test_resume_manifest_cas_conflict_returns_stable_error(
         persisted_ahead[2],
     )
 
-    def race_context_manifest(
+    async def race_context_manifest(
         turn_id: str,
         context_manifest: tuple[dict[str, JsonValue], ...],
         *,
         expected_context_manifest: tuple[dict[str, JsonValue], ...],
     ) -> Turn:
-        conversation.store_context_manifest(turn_id, concurrent_manifest)
-        return original_cas(
+        await conversation.store_context_manifest(turn_id, concurrent_manifest)
+        return await original_cas(
             turn_id,
             context_manifest,
             expected_context_manifest=expected_context_manifest,
@@ -1883,7 +2284,7 @@ async def test_resume_manifest_cas_conflict_returns_stable_error(
     with pytest.raises(TurnExecutionFailed, match="context_snapshot_conflict"):
         await coordinator.resume_unfinished(thread_id)
 
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.FAILED
     assert recovered.error_code == "context_snapshot_conflict"
     assert recovered.context_manifest == concurrent_manifest
@@ -1896,10 +2297,10 @@ async def test_resume_rejects_and_cleans_checkpoint_without_frozen_context(
     tmp_path: Path,
 ) -> None:
     graph = ResumeGraph(_result(final_answer="must not run", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path, graph
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -1915,7 +2316,7 @@ async def test_resume_rejects_and_cleans_checkpoint_without_frozen_context(
     with pytest.raises(TurnExecutionFailed, match="context_snapshot_missing"):
         await coordinator.resume_unfinished(thread_id)
 
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.FAILED
     assert recovered.error_code == "context_snapshot_missing"
     assert checkpoints.deleted == [turn.id]
@@ -1938,25 +2339,27 @@ async def test_resume_uses_injected_context_snapshot_validator(
         return True
 
     graph = ResumeGraph(_result(final_answer="resumed", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         context_snapshot_validator=accept_snapshot,
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
         client_message_id="client_custom_context_validator",
     )
     checkpoints.state = _result(final_answer=None, reason="waiting")
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
 
     accepted = await coordinator.resume_unfinished(thread_id)
     await coordinator.wait(accepted.operation_id)
 
     assert observed == [(turn.id, turn.id, thread_id)]
-    assert conversation.read_thread(thread_id).turns[0].status is TurnStatus.COMPLETED
+    assert (await conversation.read_thread(thread_id)).turns[
+        0
+    ].status is TurnStatus.COMPLETED
 
 
 @pytest.mark.asyncio
@@ -1977,12 +2380,12 @@ async def test_injected_context_validator_cannot_bypass_checkpoint_identity(
         return True
 
     graph = ResumeGraph(_result(final_answer="must not run", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         context_snapshot_validator=accept_snapshot,
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -1994,7 +2397,7 @@ async def test_injected_context_validator_cannot_bypass_checkpoint_identity(
         await coordinator.resume_unfinished(thread_id)
 
     assert calls == 0
-    assert conversation.read_thread(thread_id).turns[0].error_code == (
+    assert (await conversation.read_thread(thread_id)).turns[0].error_code == (
         "checkpoint_corrupt"
     )
     assert checkpoints.deleted == [turn.id]
@@ -2007,10 +2410,10 @@ async def test_resume_terminalizes_corrupt_checkpoint_without_running_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph = ResumeGraph(_result(final_answer="must not run", reason="completed"))
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path, graph
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -2025,7 +2428,7 @@ async def test_resume_terminalizes_corrupt_checkpoint_without_running_graph(
     with pytest.raises(TurnExecutionFailed, match="checkpoint_corrupt"):
         await coordinator.resume_unfinished(thread_id)
 
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.FAILED
     assert recovered.error_code == "checkpoint_corrupt"
     assert checkpoints.deleted == [turn.id]
@@ -2044,12 +2447,12 @@ async def test_recovery_event_failure_cannot_mask_persisted_checkpoint_error(
 ) -> None:
     graph = ResumeGraph(_result(final_answer="must not run", reason="completed"))
     sink = FailOnTerminalSink(failed_event)
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         event_sink=sink,
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
@@ -2064,7 +2467,7 @@ async def test_recovery_event_failure_cannot_mask_persisted_checkpoint_error(
     with pytest.raises(TurnExecutionFailed, match="checkpoint_corrupt"):
         await coordinator.resume_unfinished(thread_id)
 
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.FAILED
     assert recovered.error_code == "checkpoint_corrupt"
     assert checkpoints.deleted == [turn.id]
@@ -2082,25 +2485,27 @@ async def test_recovery_event_failure_cannot_block_terminal_checkpoint_commit(
 ) -> None:
     graph = ResumeGraph(_result(final_answer="must not run", reason="completed"))
     sink = FailOnTerminalSink(failed_event)
-    coordinator, conversation, _, checkpoints, _, thread_id = _coordinator(
+    coordinator, conversation, _, checkpoints, _, thread_id = await _coordinator(
         tmp_path,
         graph,
         event_sink=sink,
     )
-    turn = conversation.begin_turn(
+    turn = await conversation.begin_turn(
         thread_id,
         "inspect",
         _config(),
         client_message_id="client_terminal_event_failure",
     )
     checkpoints.state = _result(final_answer="recovered", reason="completed")
-    _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
+    await _freeze_context(checkpoints.state, turn=turn, conversation=conversation)
 
     [result] = await coordinator.reconcile_startup()
 
     assert result.status is RecoveryStatus.FINALIZED
-    recovered = conversation.read_thread(thread_id).turns[0]
+    recovered = (await conversation.read_thread(thread_id)).turns[0]
     assert recovered.status is TurnStatus.COMPLETED
-    assert conversation.read_thread(thread_id).entries[-1].content == "recovered"
+    assert (await conversation.read_thread(thread_id)).entries[
+        -1
+    ].content == "recovered"
     assert checkpoints.deleted == [turn.id]
     assert graph.resume_inputs == []

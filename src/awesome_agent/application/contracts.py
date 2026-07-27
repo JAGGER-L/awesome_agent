@@ -23,10 +23,16 @@ from awesome_agent.config.credentials import (
 )
 from awesome_agent.config.models import CredentialSource, SecretStatus
 from awesome_agent.context.workspace_instructions import WorkspaceInstructionDiagnostic
+from awesome_agent.contract_versions import (
+    PROTOCOL_VERSION as PROTOCOL_VERSION,
+)
+from awesome_agent.contract_versions import (
+    ProtocolVersion as ProtocolVersion,
+)
 from awesome_agent.conversation.models import Thread, ThreadView
 from awesome_agent.core.changes import ChangeDelta
 from awesome_agent.core.tools.permissions import PermissionMode
-from awesome_agent.modeling.catalog import ModelIdentitySnapshot
+from awesome_agent.modeling.catalog import ModelCatalog, ModelIdentitySnapshot
 
 
 class ProductErrorCode(StrEnum):
@@ -99,6 +105,64 @@ class ProviderCredentialSetResult(BaseModel):
     code: str = Field(min_length=1, max_length=128)
 
 
+class SkillPackageSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
+    description: str = Field(min_length=1, max_length=500)
+
+
+class SkillListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    skills: tuple[SkillPackageSummary, ...] = Field(default=(), max_length=512)
+
+    @field_validator("skills")
+    @classmethod
+    def validate_skills(
+        cls,
+        value: tuple[SkillPackageSummary, ...],
+    ) -> tuple[SkillPackageSummary, ...]:
+        names = tuple(skill.name for skill in value)
+        if len(names) != len(set(names)) or names != tuple(sorted(names)):
+            raise ValueError("Installed Skills must be unique and name ordered.")
+        return value
+
+
+class SkillInstallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source_path: str = Field(min_length=1, max_length=4_096)
+    replace: bool = False
+
+    @field_validator("source_path")
+    @classmethod
+    def validate_source_path(cls, value: str) -> str:
+        if value != value.strip() or any(character in value for character in "\0\r\n"):
+            raise ValueError("Skill source path is invalid.")
+        return value
+
+
+class SkillInstallResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
+    status: Literal["installed", "replaced"]
+
+
+class SkillRemoveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
+
+
+class SkillRemoveResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
+    status: Literal["removed"]
+
+
 class ProductError(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -147,7 +211,7 @@ class InitializeStatus(StrEnum):
 class InitializeParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    protocol_version: Literal[3]
+    protocol_version: ProtocolVersion
     client_name: Literal["awesome"]
     client_version: str = Field(min_length=1, max_length=64)
 
@@ -163,7 +227,7 @@ class InitializeResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     product_version: str = Field(min_length=1, max_length=64)
-    protocol_version: Literal[3]
+    protocol_version: ProtocolVersion
     status: InitializeStatus
     session_id: str = Field(min_length=1, max_length=128)
     interaction_id: str | None = Field(default=None, max_length=128)
@@ -195,6 +259,7 @@ class ApplicationState(BaseModel):
     workspace: WorkspacePresentation
     workspace_trusted: bool
     current_thread_id: str | None = Field(default=None, max_length=128)
+    model_catalog: ModelCatalog
     model_identity: ModelIdentitySnapshot | None = None
     thinking_enabled: bool = True
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)
@@ -218,6 +283,19 @@ class ThreadListQuery(BaseModel):
 
     cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
     limit: int = Field(default=50, ge=1, le=200)
+
+
+class ThreadSearchQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    query: str = Field(min_length=1, max_length=200)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
+    limit: int = Field(default=50, ge=1, le=50)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def normalize_query(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class ThreadReadQuery(BaseModel):

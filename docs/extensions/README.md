@@ -113,4 +113,4 @@ same context and tools as an earlier run.
   [tools and shell](../user-guide/tools-and-shell.md).
 - External tool server: [MCP](mcp.md) ->
   [permissions](../user-guide/permissions.md) ->
-  [Protocol v3](../reference/protocol.md).
+  [Protocol v4](../reference/protocol.md).

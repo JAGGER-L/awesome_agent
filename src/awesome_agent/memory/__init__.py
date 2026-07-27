@@ -4,6 +4,7 @@ from awesome_agent.memory.distiller import (
     DistillerGateway,
     MemoryDistiller,
 )
+from awesome_agent.memory.finalization import Mem0PostAnswerFinalizer
 from awesome_agent.memory.identity import (
     Mem0Identity,
     ensure_mem0_user_id,
@@ -20,6 +21,7 @@ from awesome_agent.memory.mem0_cloud import (
     Mem0CloudAdapter,
     Mem0CloudError,
     create_mem0_client,
+    managed_mem0_client,
 )
 from awesome_agent.memory.models import (
     CloudDeleteOutcome,
@@ -73,6 +75,7 @@ __all__ = [
     "Mem0CloudError",
     "Mem0Diagnostic",
     "Mem0Identity",
+    "Mem0PostAnswerFinalizer",
     "MemoryCandidate",
     "MemoryDistiller",
     "MemoryDocument",
@@ -86,6 +89,7 @@ __all__ = [
     "cloud_fact_hash",
     "create_mem0_client",
     "ensure_mem0_user_id",
+    "managed_mem0_client",
     "new_mem0_user_id",
     "refresh_local_memory_tools",
     "render_memory_document",

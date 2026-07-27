@@ -6,11 +6,17 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from awesome_agent.application.contracts import (
     ApplicationState,
+    OperationAccepted,
     StatusSnapshot,
     ThreadReadResult,
 )
 from awesome_agent.config.credentials import ProviderCredentialStatuses
-from awesome_agent.conversation.models import Thread, UsageSummary
+from awesome_agent.conversation.models import (
+    Thread,
+    ThreadEntryKind,
+    TurnStatus,
+    UsageSummary,
+)
 from awesome_agent.core.tools.permissions import PermissionMode
 
 
@@ -67,7 +73,7 @@ class NoticeCommandPayload(_CommandModel):
 
 
 class ThreadTransitionSnapshot(_CommandModel):
-    reason: Literal["new", "resume"]
+    reason: Literal["new", "resume", "fork", "retry"]
     application: ApplicationState
     thread: ThreadReadResult
 
@@ -82,10 +88,90 @@ class ThreadTransitionCommandPayload(_CommandModel):
     kind: Literal["thread_transition"] = "thread_transition"
     transition: ThreadTransitionSnapshot
 
+    @model_validator(mode="after")
+    def validate_non_retry_transition(self) -> Self:
+        transition = self.transition
+        reason = transition.reason
+        lineage = transition.thread.view.thread.lineage
+        if reason == "retry":
+            raise ValueError("Retry transitions require a thread_retry payload.")
+        if reason == "new" and lineage is not None:
+            raise ValueError("New transitions require a root Thread.")
+        if reason == "fork" and (lineage is None or lineage.kind != "fork"):
+            raise ValueError("Fork transitions require Fork Thread lineage.")
+        return self
+
+
+class ThreadRetryCommandPayload(_CommandModel):
+    kind: Literal["thread_retry"] = "thread_retry"
+    transition: ThreadTransitionSnapshot
+    operation: OperationAccepted
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> Self:
+        if self.transition.reason != "retry":
+            raise ValueError("Retry payload requires a retry transition.")
+        thread_id = self.transition.thread.view.thread.id
+        lineage = self.transition.thread.view.thread.lineage
+        if lineage is None or lineage.kind != "retry":
+            raise ValueError("Retry transition requires Retry Thread lineage.")
+        operation = self.operation
+        if operation.thread_id != thread_id or operation.turn_id is None:
+            raise ValueError("Retry transition and Operation identities must match.")
+        view = self.transition.thread.view
+        turn = next(
+            (item for item in view.turns if item.id == operation.turn_id),
+            None,
+        )
+        if turn is None or turn.thread_id != thread_id:
+            raise ValueError("Retry Operation Turn must belong to the new Thread.")
+        in_progress = tuple(
+            item for item in view.turns if item.status is TurnStatus.IN_PROGRESS
+        )
+        if (
+            len(in_progress) != 1
+            or in_progress[0] != turn
+            or not view.turns
+            or view.turns[-1] != turn
+        ):
+            raise ValueError(
+                "Retry Operation must identify the final and only in-progress Turn."
+            )
+        user_entry = next(
+            (item for item in view.entries if item.id == turn.user_entry_id),
+            None,
+        )
+        if (
+            user_entry is None
+            or user_entry.kind is not ThreadEntryKind.USER_MESSAGE
+            or user_entry.client_message_id != operation.client_message_id
+        ):
+            raise ValueError(
+                "Retry Operation client identity must match its Turn user Entry."
+            )
+        return self
+
 
 class ThreadRenamedPayload(_CommandModel):
     kind: Literal["thread_renamed"] = "thread_renamed"
     thread: Thread
+
+
+class ThreadExportCommandPayload(_CommandModel):
+    kind: Literal["thread_export"] = "thread_export"
+    thread_id: str = Field(min_length=1, max_length=128)
+    path: str = Field(min_length=1, max_length=1_000)
+    format: Literal["markdown", "json"]
+    write_status: Literal["created", "updated", "unchanged"]
+    byte_count: int = Field(ge=0, le=9_007_199_254_740_991)
+    change_set_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_change_set(self) -> Self:
+        changed = self.write_status != "unchanged"
+        if changed != (self.change_set_id is not None):
+            raise ValueError("Changed exports require exactly one ChangeSet identity.")
+        return self
 
 
 class ContextCategory(_CommandModel):
@@ -266,10 +352,30 @@ class PermissionCommandPayload(_CommandModel):
     mode: PermissionMode
 
 
+class WebStatusCommandPayload(_CommandModel):
+    kind: Literal["web_status"] = "web_status"
+    enabled: bool
+    provider: Literal["tavily"] = "tavily"
+    available: bool
+    credential_configured: bool
+    proxy_configured: bool
+    thread_authorized: bool
+    requests_per_turn: int = Field(ge=0, le=8)
+    diagnostic_code: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z][a-z0-9_]{0,127}$",
+    )
+    disclosure: str = Field(min_length=1, max_length=2_000)
+
+
 CommandPayload = Annotated[
     NoticeCommandPayload
     | ThreadTransitionCommandPayload
+    | ThreadRetryCommandPayload
     | ThreadRenamedPayload
+    | ThreadExportCommandPayload
     | ContextCommandPayload
     | CompactCommandPayload
     | ModelCommandPayload
@@ -288,7 +394,8 @@ CommandPayload = Annotated[
     | UsageCommandPayload
     | DoctorCommandPayload
     | ConfigCommandPayload
-    | PermissionCommandPayload,
+    | PermissionCommandPayload
+    | WebStatusCommandPayload,
     Field(discriminator="kind"),
 ]
 

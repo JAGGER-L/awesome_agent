@@ -81,6 +81,32 @@ describe("Ink terminal ownership boundaries", () => {
     }
   });
 
+  it("keeps startup and submission coordination local to the Ink session", async () => {
+    const files = await sourceFiles(
+      fileURLToPath(new URL("../../src", import.meta.url)),
+    );
+    const app = files.find((file) => file.path === "app/App.tsx")?.source ?? "";
+    const main =
+      files.find((file) => file.path === "cli/main.tsx")?.source ?? "";
+    const submission =
+      files.find((file) => file.path === "app/submission-coordinator.ts")
+        ?.source ?? "";
+    const startup =
+      files.find((file) => file.path === "cli/startup-session-controller.ts")
+        ?.source ?? "";
+
+    expect(app).toContain("new SubmissionCoordinator");
+    expect(main).toContain("new StartupSessionController");
+    for (const controller of [submission, startup]) {
+      expect(controller).not.toMatch(
+        /\b(?:useInput|useReducer|useState|useSyncExternalStore)\b/u,
+      );
+    }
+    expect(submission).not.toContain("usePendingInputQueue");
+    expect(startup).not.toContain("BootstrapPhase");
+    expect(startup).not.toContain('request("initialize"');
+  });
+
   it("keeps the Ink frame effect in the CLI host", async () => {
     const files = await sourceFiles(
       fileURLToPath(new URL("../../src", import.meta.url)),

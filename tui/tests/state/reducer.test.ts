@@ -26,6 +26,7 @@ function lifecycle(
             reasoning_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            web_requests: 3,
           };
   return {
     version: 1,
@@ -43,6 +44,23 @@ function lifecycle(
 }
 
 describe("surfaceReducer", () => {
+  it("retains the complete live usage projection", () => {
+    const state = surfaceReducer(initialSurfaceState(), {
+      type: "event.received",
+      generation: 0,
+      event: lifecycle(1, "usage.updated"),
+    });
+
+    expect(state.usage).toEqual({
+      input_tokens: 1,
+      output_tokens: 2,
+      reasoning_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      web_requests: 3,
+    });
+  });
+
   it("moves an optimistic user message through pending, accepted, and failed", () => {
     let state = surfaceReducer(initialSurfaceState(), {
       type: "transcript.user.pending",
@@ -651,6 +669,44 @@ describe("surfaceReducer", () => {
     expect(state.pending_interaction?.interaction_id).toBe(
       "interaction_second",
     );
+  });
+
+  it("retains envelope authority for a network approval", () => {
+    const state = surfaceReducer(initialSurfaceState(), {
+      type: "event.received",
+      generation: 0,
+      event: {
+        ...lifecycle(1, "warning"),
+        thread_id: "thread_1",
+        turn_id: "turn_1",
+        operation_id: "operation_1",
+        event_type: "interaction.required",
+        payload: {
+          kind: "interaction.required",
+          interaction_id: "interaction_network",
+          interaction_kind: "tool_approval",
+          prompt: "Send to Tavily?",
+          operation: "web_search",
+          target: "Tavily",
+          capability: "network.read",
+          choices: [
+            { decision: "deny", label: "Deny" },
+            { decision: "allow_once", label: "Allow once" },
+            {
+              decision: "allow_thread_network",
+              label: "Allow for this Thread",
+            },
+          ],
+        },
+      } as EventEnvelope,
+    });
+
+    expect(state.pending_interaction).toMatchObject({
+      interaction_id: "interaction_network",
+      thread_id: "thread_1",
+      turn_id: "turn_1",
+      operation_id: "operation_1",
+    });
   });
 
   it("resets reconnect projection and closes", () => {

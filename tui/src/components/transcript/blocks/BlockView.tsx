@@ -36,11 +36,26 @@ export function BlockView({
       return <UserLine text={block.text} />;
     case "assistant":
       return (
-        <Box width={width}>
-          <Text color={theme.assistant}>● </Text>
-          <Box width={Math.max(1, width - 2)}>
-            <MarkdownBlock source={block.text} width={Math.max(1, width - 2)} />
+        <Box width={width} flexDirection="column">
+          <Box width={width}>
+            <Text color={theme.assistant}>● </Text>
+            <Box width={Math.max(1, width - 2)}>
+              <MarkdownBlock
+                source={block.text}
+                width={Math.max(1, width - 2)}
+              />
+            </Box>
           </Box>
+          {block.citations && block.citations.length > 0 ? (
+            <Box marginLeft={2} flexDirection="column">
+              <Text color={theme.muted}>Sources</Text>
+              {block.citations.map((citation) => (
+                <Text key={citation.id} color={theme.muted}>
+                  [{citation.id}] {citation.title} · {citation.url}
+                </Text>
+              ))}
+            </Box>
+          ) : null}
         </Box>
       );
     case "direct_command":

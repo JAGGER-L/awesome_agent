@@ -14,6 +14,10 @@ class CommandName(StrEnum):
     NEW = "new"
     RENAME = "rename"
     RESUME = "resume"
+    FORK = "fork"
+    RETRY = "retry"
+    SEARCH = "search"
+    EXPORT = "export"
     CONTEXT = "context"
     COMPACT = "compact"
     AUTH = "auth"
@@ -26,6 +30,7 @@ class CommandName(StrEnum):
     TOOLS = "tools"
     SKILLS = "skills"
     MCP = "mcp"
+    WEB = "web"
     MEMORY = "memory"
     STATUS = "status"
     USAGE = "usage"
@@ -45,6 +50,10 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.NEW,
             CommandName.RENAME,
             CommandName.RESUME,
+            CommandName.FORK,
+            CommandName.RETRY,
+            CommandName.SEARCH,
+            CommandName.EXPORT,
             CommandName.CONTEXT,
             CommandName.COMPACT,
             CommandName.AUTH,
@@ -57,6 +66,7 @@ COMMAND_OWNERS: dict[CommandName, CommandOwner] = {
             CommandName.TOOLS,
             CommandName.SKILLS,
             CommandName.MCP,
+            CommandName.WEB,
             CommandName.MEMORY,
             CommandName.STATUS,
             CommandName.USAGE,

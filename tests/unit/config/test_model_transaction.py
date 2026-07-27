@@ -18,6 +18,7 @@ from awesome_agent.config.model_transaction import (
 
 def _record() -> ProviderModelTransactionRecord:
     return ProviderModelTransactionRecord(
+        transaction_id="0" * 32,
         phase=ProviderModelTransactionPhase.PREPARED,
         thread_id="thread_123",
         previous_default_model="deepseek/deepseek-v4-flash",
@@ -45,6 +46,31 @@ def test_model_transaction_journal_round_trip_is_atomic_and_secret_free(
 
     journal.clear(committed)
     assert journal.read() is None
+
+
+def test_model_transaction_identity_prevents_equal_endpoint_aba() -> None:
+    first = _record()
+    second = first.model_copy(update={"transaction_id": "1" * 32})
+
+    assert first != second
+    assert first.transaction_id == "0" * 32
+    assert second.transaction_id == "1" * 32
+
+
+def test_model_transaction_identity_reads_legacy_version_one_records() -> None:
+    record = ProviderModelTransactionRecord.model_validate(
+        {
+            "version": 1,
+            "phase": "prepared",
+            "thread_id": "thread_legacy",
+            "previous_default_model": None,
+            "target_default_model": "deepseek/deepseek-v4-pro",
+            "previous_thread_model": None,
+            "target_thread_model": "deepseek/deepseek-v4-pro",
+        }
+    )
+
+    assert record.transaction_id == "legacy"
 
 
 @pytest.mark.parametrize(

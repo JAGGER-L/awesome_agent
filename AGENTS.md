@@ -202,7 +202,7 @@ Before ending:
   configuration, and troubleshooting.
 - `docs/extensions/`: Memory, Skills, and MCP decision and usage guides.
 - `docs/reference/`: exact CLI, command, configuration, tool, permission,
-  file/state, and Protocol v3 contracts.
+  file/state, and Protocol v4 contracts.
 - `docs/architecture/`: focused lifecycle, Application/Agent, context/model,
   tool, storage, protocol/TUI, security, and dependency guides.
 - `docs/development/`: contributor setup, testing, extension, contract,
@@ -231,6 +231,8 @@ Before ending:
 - `src/awesome_agent/safety/`: redaction helpers.
 - `src/awesome_agent/storage/`: Application SQLite, checkpoints,
   conversations, trust, Change Journal, pagination, and MCP enablement.
+- `src/awesome_agent/web/`: Tavily async HTTP adapter for Core's
+  provider-neutral Web contracts; it does not own tool policy or permissions.
 - `tui/`: Node Ink + React UI, protocol client, state reducers, transcript,
   commands, composer, and presentation tests.
 - `protocol/fixtures/`: deterministic cross-language protocol examples.

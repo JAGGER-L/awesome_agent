@@ -55,6 +55,23 @@ MCP 和未知扩展能力在所有模式中都逐次询问。内置 Memory 操�
 
 切换模式会清除临时 capability grant，并推进 permission generation。选择其他 Thread 也会把权限 Session 重置为 Request approval。
 
+## Headless 权限
+
+`awesome run "<prompt>"` 使用同一套控制；非交互执行不是另一条权限路径。除非通过
+`--thread <id>` 选择现有 Thread，否则它会创建新 Thread。`--trust-workspace` 通过正常
+启动 interaction 接受规范启动 Workspace 的信任。没有该显式 flag 时，所需信任保持未解决，
+命令以退出码 3 退出。
+
+`--permission-mode request_approval|accept_edits|full_access` 为选中的 Thread 和当前进程
+请求正常权限模式。提供 `full_access` 是对同一警告的显式 headless 确认，不是绕过警告
+不变量的方法：权限仍只在 Thread/Session 范围有效，路径检查、限制、扩展审批和硬拒绝继续
+生效。如果后续工具调用需要无法非交互解决的审批，runner 会请求取消、不向 stdout 写入
+部分回答，并以退出码 3 退出。
+
+`--allow-network` 只授权本进程把当前 headless Turn 精确匹配的 `network.read` prompt
+解析为 `allow_once`。它不会让已禁用的 Web 可用，不能创建 Thread grant 或处理其他
+interaction，也不能绕过硬拒绝。
+
 ## 审批语义
 
 写入审批可能提供：
@@ -64,6 +81,11 @@ MCP 和未知扩展能力在所有模式中都逐次询问。内置 Memory 操�
 - **No**：拒绝本次调用。
 
 临时写入 grant 绝不包含删除或 shell 执行。删除、shell、MCP 和未知能力只提供单次决策。Escape 会拒绝当前审批。
+
+`network.read` 与本地 Full access 不同：它在每种 permission mode 下首次调用都会 ASK。
+选项为默认的 **No**、**Allow once** 和 **Allow for this Thread**。切换选中 Thread、重建
+runtime、更改 permission mode、运行 `/web revoke` 或 `/web off`，以及退出 Awesome 时，
+Thread network grant 都会被清除。
 
 每个工具审批都与其 Thread、Turn、Operation 和 interaction 身份绑定。响应最多接受一次，并且只在这些事实仍是当前值时接受。过期的 UI 响应无法授权替代它的新 Turn。
 

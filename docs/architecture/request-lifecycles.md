@@ -38,16 +38,21 @@ Thread, and Turn.
 
 Across every lifecycle, identity is explicit, no second foreground mutation is
 admitted, expected busy/failure states are typed, cancellation is propagated,
-and an uncertain external action is never replayed without a user decision.
+and an uncertain side-effecting action is never replayed without a user
+decision.
 
 ## Startup and trust
 
 ```text
 awesome [workspace]
   -> Ink starts one private awesome-core
-  -> initialize(protocol=3, client identity)
+  -> initialize(protocol=4, client identity)
   -> resolve candidate workspace identity
-  -> read-only state preflight + trust lookup
+  -> shared-lease read-only state preflight
+  -> if migration_required:
+       exclusive lease -> recheck -> SQLite backup -> one transaction
+       -> downgrade to shared lease -> initialize repositories
+  -> trust lookup
   -> trust decision, if required
   -> after acceptance/already trusted: acquire path + entity leases
   -> recheck workspace root identity under those leases
@@ -66,14 +71,21 @@ user decides. Acceptance (or an existing trust record) is followed by acquiring
 both leases and rechecking identity before activation. A rejected trust
 decision exits and is not persisted as a denial.
 
-An older Application schema produces a typed reset-or-exit interaction. A
-newer, unknown, corrupt, unreadable, or locked state stops safely; it is never
-silently deleted. A confirmed reset runs under the bootstrap lock, a foreground
-interaction-resolution lease, and an exclusive cross-process state lease.
+The production migration floor is 7 and the current schema is 8. The one
+registered 7→8 step adds nullable Thread lineage while preserving existing
+Threads with `lineage = null`. Schemas 1–6 therefore produce a typed
+reset-or-exit interaction. Migration keeps
+`application.db.pre-migration.bak` for manual recovery and never triggers an
+automatic reset or restore. Newer, unknown, corrupt, unreadable, or locked
+state stops safely and is never silently deleted. A confirmed reset runs under
+the bootstrap lock, a foreground interaction-resolution lease, and an
+exclusive cross-process state lease.
 
-Failure before `ready` leaves the protocol handshake closed. See
+Failure before `ready` restores or leaves the Application-owned
+`ApplicationBootstrap` in a non-ready phase. The protocol handshake is only an
+admission projection of that fact and remains closed. See
 [Storage and recovery](storage-and-recovery.md) for state classification and
-[Protocol and TUI](protocol-and-tui.md) for the handshake gate.
+[Protocol and TUI](protocol-and-tui.md) for bootstrap admission.
 
 ## Natural-language Turn
 
@@ -98,11 +110,12 @@ turn.submit(thread_id, content, client_message_id)
   -> release foreground lease
 ```
 
-The cleanup attempts after the primary terminal fact are bounded. Failure does
-not rewrite a completed, cancelled, or failed Turn; startup reconciliation can
-retry leftover checkpoint cleanup.
+Local durable cleanup after the primary terminal fact remains owned until its
+result is known. Failure does not rewrite a completed, cancelled, or failed
+Turn; startup reconciliation can retry leftover checkpoint cleanup. External
+process cleanup and best-effort event publication retain bounded deadlines.
 
-The synchronous durable Turn transition and Operation phase form one commit
+The worker-owned durable Turn transition and Operation phase form one commit
 point. Before it, cancellation wins; after it, cancellation is rejected and
 bounded terminal publication preserves the already committed completed or
 failed outcome. Shutdown observes the same phase and waits rather than issuing
@@ -148,18 +161,20 @@ model prompt. It still creates a foreground Operation and an open ChangeSet:
   -> validate Thread and pending interaction
   -> reserve Operation
   -> ToolExecutor(execute, origin=direct)
+       -> strict-validate registered execute arguments
+       -> registered hard admission
+       -> typed description exactly once
        -> emit tool.started
-       -> validate execute arguments
-       -> command hard-deny + Direct permission policy
-       -> Process Runner and bounded process cleanup
+       -> Direct capability policy
+       -> deadline + Process Runner + bounded process cleanup
   -> bounded transcript entry + ChangeSet observation
   -> seal ChangeSet and emit terminal Operation event
 ```
 
-Direct execution uses the same command policy, process runner, redaction,
-timeout, cancellation, and audit path as an Agent `execute` call. It does not
-become reversible merely because it has a ChangeSet; arbitrary shell effects
-remain unmanaged.
+Direct execution uses the same registered admission, command policy, process
+runner, redaction, deadline, cancellation, and audit path as an Agent `execute`
+call. It does not become reversible merely because it has a ChangeSet;
+arbitrary shell effects remain unmanaged.
 
 It is independent of the selected Thread permission mode. The user's exact
 `! command` is the authorization, so Application supplies that Direct Operation
@@ -191,6 +206,21 @@ natural-language Turn:
   -> optional authoritative state effect
   -> exhaustive Presenter
 ```
+
+Fork and retry use the same command boundary and exclusive foreground
+admission. The source is re-read and fingerprinted before one SQLite
+transaction materializes a prefix with new identities. Fork publishes a
+`thread_transition` only after the independent Thread exists. Retry first
+creates the independent prefix and fresh in-progress Turn, then starts the
+ordinary Turn path and returns one combined `thread_retry` payload containing
+both the transition and Operation acceptance. No checkpoint, ToolActivity, or
+ChangeSet is copied, and no old tool call is replayed.
+
+Retry Events may reach stdio before the command response. Ink therefore gates
+them before sequence reduction, applies the authoritative retry transition,
+binds the accepted Operation to the new Thread generation, and only then
+replays the buffered Events in sequence. Identity mismatch fails the protocol
+instead of projecting an Event into the old Thread.
 
 During an active Operation, only the following side-effect-free observations
 may cross the Core gate:
@@ -238,13 +268,15 @@ approval even in Full access.
 
 `operation.cancel` addresses one Operation ID. Cancellation propagates through
 the Operation task into the model stream or Tool Executor. For a Turn,
-Application then records cancellation facts, attempts bounded ChangeSet sealing
-and checkpoint deletion, emits `operation.cancelled`, and releases the lease.
+Application then records cancellation facts and retains foreground ownership
+until local ToolActivity, transcript, ChangeSet sealing, and checkpoint deletion
+reach known results. It then emits `operation.cancelled` and releases the lease.
 Cleanup failure does not replace the cancelled terminal fact and can be retried
 during startup reconciliation. For a shell process, the Process Runner performs
 bounded process-tree and pipe cleanup and then re-raises the original
 `CancelledError`. Direct transcript and ChangeSet finalizers preserve that
-primary cancellation as it crosses the Application boundary.
+primary cancellation as it crosses the Application boundary. Event delivery is
+bounded best-effort and never shortens local durable ownership.
 
 A true cancellation acknowledgement means the matching Operation had not yet
 crossed its commit point; this includes the observable window after
@@ -264,8 +296,8 @@ Startup reconciles each non-terminal product Turn with its checkpoint:
 ```text
 unfinished Turn + checkpoint
   |-- completed valid graph state -> finalize product records
-  |-- valid resumable graph state -> recovery decision / resume
-  |-- uncertain shell or MCP call -> Abort (safe default) or explicit Retry
+  |-- resumable + currently registered replayable tool -> resume
+  |-- non-replayable, missing, or unknown metadata -> interaction: Abort | explicit Retry
   |-- missing, corrupt, or conflicting state -> fail Turn with stable code
 ```
 
@@ -274,20 +306,40 @@ Application projection only with compare-and-swap. A self-consistent but
 unrelated checkpoint is not accepted as authority. Recovery processes other
 Turns even if one fails.
 
+For an interrupted tool call, recovery looks up the same name in the current
+Runtime Registry and uses that registration's replay-safety metadata; it does
+not branch on concrete tool names. A proven local built-in may be replayable.
+File mutation, MCP, and Web tools are non-replayable, and missing or unknown
+metadata fails closed. Those cases never retry automatically: the interaction
+defaults to Abort, while an explicit Retry may continue the old checkpoint and
+repeat the pending call.
+Changing a same-named tool contract must therefore account for checkpoint
+compatibility.
+
+This recovery Retry is distinct from `/retry [turn_id]`. Recovery may continue
+one unfinished checkpoint after explicit approval; the slash command requires
+a terminal Turn, creates a fresh Thread and Turn, and never reuses or copies the
+source checkpoint.
+
 ## Shutdown
 
-Shutdown closes foreground admission first. It then cancels an active
-Operation, cancels a separate exclusive owner when necessary, waits until the
-arbiter is idle, and only then closes MCP clients, repositories, databases, and
-process resources under the bootstrap lock.
+Shutdown closes foreground admission first. It cancels an active Operation only
+while that Operation is still running, waits for any committing Operation and a
+separate exclusive owner, and then waits until the arbiter is idle. It retires
+the workspace runtime in reverse resource order, closes the checkpoint saver,
+drains and closes the process-owned Application SQLite worker, and finally
+releases workspace and state leases under the bootstrap lock.
 
 ```text
 shutdown request
   -> foreground.begin_closing()
-  -> cancel and await Operation
+  -> cancel RUNNING Operation / await COMMITTING Operation
   -> cancel exclusive owner if external
   -> wait_idle()
-  -> close MCP and composed resources
+  -> retire runtime (MCP, Mem0, providers)
+  -> close checkpoint saver
+  -> drain and close ApplicationSQLite
+  -> release workspace and state leases
   -> mark Application closed
 ```
 
@@ -301,7 +353,7 @@ begun.
 - expected tool errors become bounded Agent observations;
 - unexpected graph/tool errors terminate the Operation visibly;
 - one Operation produces one terminal lifecycle event;
-- uncertain external outcomes are never replayed automatically;
+- uncertain side-effecting outcomes are never replayed automatically;
 - event-delivery failure after durable completion is logged rather than
   changing the already-completed product fact.
 
@@ -313,7 +365,7 @@ begun.
   session must reconstruct recovery decisions from durable facts.
 - TUI input queuing improves flow without promising Core-side parallelism.
 - Explicit uncertain-outcome decisions add friction in exchange for avoiding
-  duplicate external effects.
+  duplicate side effects.
 
 ## Source and test map
 

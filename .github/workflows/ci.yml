@@ -159,7 +159,6 @@ jobs:
           tests/unit/protocol
           tests/unit/extensions
           tests/unit/application
-          tests/unit/config/test_resource_lock.py
           tests/unit/config/test_user_state_concurrency.py
           tests/unit/context/test_workspace_instructions.py
           tests/unit/memory/test_tools.py

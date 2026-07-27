@@ -3,11 +3,9 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from typing import Literal, cast
 
 from awesome_agent.config.loader import LoadedConfigSources
 from awesome_agent.config.models import (
-    SUPPORTED_MODEL_IDS,
     ApplicationConfig,
     BudgetConfig,
     ProjectBudgetConfig,
@@ -15,12 +13,11 @@ from awesome_agent.config.models import (
     StartupOverrides,
     ThreadConfigState,
     TurnConfig,
+    UserBudgetConfig,
+    WebConfig,
 )
+from awesome_agent.modeling import MODEL_CATALOG, ModelCatalogError, ProviderId
 
-_PROVIDER_DEFAULTS = {
-    "deepseek": "deepseek/deepseek-v4-flash",
-    "kimi": "kimi/kimi-k2.6",
-}
 _SKILL_MODE_PATTERN = re.compile(r"^(?:auto|off|[a-z][a-z0-9_-]{0,63})$")
 
 
@@ -36,9 +33,14 @@ def resolve_application_config(sources: LoadedConfigSources) -> ApplicationConfi
     project = sources.workspace
     project_budgets = project.budgets if project is not None else None
     budgets = _restrict_budgets(user.budgets, project_budgets)
+    web = _restrict_web(
+        user.web,
+        project.web.blocked_domains if project is not None else (),
+    )
     return ApplicationConfig(
         providers=user.providers,
         budgets=budgets,
+        web=web,
         memory=user.memory,
         user_skills=tuple(
             SkillSourceConfig(name=name, enabled=False) for name in user.skills.disabled
@@ -59,33 +61,23 @@ def resolve_turn_config(
     thread: ThreadConfigState,
     cli: StartupOverrides | None = None,
     environ: Mapping[str, str] | None = None,
-    model_context_limit: int | None = None,
 ) -> TurnConfig:
     overrides = cli or StartupOverrides()
     env = os.environ if environ is None else environ
     model = _select_model(application, thread, overrides, env)
-    provider = cast(
-        Literal["deepseek", "kimi"],
-        model.split("/", maxsplit=1)[0],
-    )
-    _require_provider_credential(application, provider)
+    provider = MODEL_CATALOG.provider_for_model(model).id
     thinking = _select_thinking(thread, overrides, env)
     skill_mode = _select_skill_mode(application, thread, overrides, env)
     budgets = application.budgets
-    if model_context_limit is not None:
-        if model_context_limit < 1:
-            raise ConfigurationResolutionError(
-                "configuration_invalid",
-                "Model context limit must be positive.",
+    model_context_limit = MODEL_CATALOG.profile(model).context_limit
+    budgets = budgets.model_copy(
+        update={
+            "total_context_tokens": min(
+                budgets.total_context_tokens,
+                model_context_limit,
             )
-        budgets = budgets.model_copy(
-            update={
-                "total_context_tokens": min(
-                    budgets.total_context_tokens,
-                    model_context_limit,
-                )
-            }
-        )
+        }
+    )
     return TurnConfig(
         provider=provider,
         model=model,
@@ -96,11 +88,10 @@ def resolve_turn_config(
 
 
 def _restrict_budgets(
-    user: BudgetConfig,
+    user: UserBudgetConfig,
     project: ProjectBudgetConfig | None,
 ) -> BudgetConfig:
-    if project is None:
-        return user
+    project = project or ProjectBudgetConfig()
     return BudgetConfig(
         model_calls=_minimum(user.model_calls, project.model_calls),
         tool_calls=_minimum(user.tool_calls, project.tool_calls),
@@ -117,11 +108,31 @@ def _restrict_budgets(
             user.total_context_tokens,
             project.total_context_tokens,
         ),
+        web_requests=_minimum(user.web_requests, project.web_requests),
     )
 
 
 def _minimum(user: int, project: int | None) -> int:
     return user if project is None else min(user, project)
+
+
+def _restrict_web(
+    user: WebConfig,
+    project_blocked_domains: tuple[str, ...],
+) -> WebConfig:
+    blocked_domains = tuple(
+        dict.fromkeys((*user.blocked_domains, *project_blocked_domains))
+    )
+    if len(blocked_domains) > 128:
+        raise ConfigurationResolutionError(
+            "configuration_invalid",
+            "Effective Web blocked domains exceed the 128-domain limit.",
+        )
+    return WebConfig(
+        enabled=user.enabled,
+        provider=user.provider,
+        blocked_domains=blocked_domains,
+    )
 
 
 def _select_model(
@@ -139,41 +150,28 @@ def _select_model(
         candidate = thread.model
     else:
         candidate = application.providers.default_model
-    if candidate is not None:
-        if candidate not in SUPPORTED_MODEL_IDS:
-            raise ConfigurationResolutionError(
-                "configuration_invalid",
-                "Selected model is not in the curated catalog.",
-            )
-        return candidate
     configured = _configured_providers(application)
-    if len(configured) != 1:
-        raise ConfigurationResolutionError(
-            "model_not_configured",
-            "Select a Provider/model before starting an Agent Turn.",
+    try:
+        return MODEL_CATALOG.require_selection(
+            candidate,
+            configured_providers=configured,
+        ).model
+    except ModelCatalogError as error:
+        code = (
+            "configuration_invalid"
+            if error.code in {"unsupported_model", "unsupported_provider"}
+            else error.code
         )
-    return _PROVIDER_DEFAULTS[configured[0]]
+        raise ConfigurationResolutionError(code, error.message) from error
 
 
-def _configured_providers(application: ApplicationConfig) -> tuple[str, ...]:
-    result: list[str] = []
+def _configured_providers(application: ApplicationConfig) -> tuple[ProviderId, ...]:
+    result: list[ProviderId] = []
     if application.secret_status.deepseek_api_key:
         result.append("deepseek")
     if application.secret_status.moonshot_api_key:
         result.append("kimi")
     return tuple(result)
-
-
-def _require_provider_credential(
-    application: ApplicationConfig,
-    provider: str,
-) -> None:
-    configured = provider in _configured_providers(application)
-    if not configured:
-        raise ConfigurationResolutionError(
-            "provider_not_configured",
-            f"{provider} credentials are not configured.",
-        )
 
 
 def _select_thinking(

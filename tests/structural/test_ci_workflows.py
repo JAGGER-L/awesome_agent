@@ -132,7 +132,6 @@ def test_required_ci_covers_every_product_boundary() -> None:
     assert isinstance(run, str)
     assert "tests/unit/core" in run
     assert "tests/unit/protocol" in run
-    assert "tests/unit/config/test_resource_lock.py" in run
     assert "tests/unit/config/test_user_state_concurrency.py" in run
     assert "tests/unit/memory/test_tools.py" in run
     assert "tests/integration/test_local_memory.py" in run
@@ -366,16 +365,16 @@ def test_security_workflow_exposes_one_stable_required_check() -> None:
     assert "--disable-pip" in osv_audit
 
 
-def test_docs_site_deployment_is_main_only() -> None:
+def test_docs_site_deployment_is_stable_release_only() -> None:
     workflow = _workflow(PRIMARY_WORKFLOWS[4])
     triggers = workflow["on"]
     jobs = workflow["jobs"]
 
     assert isinstance(triggers, dict)
-    assert {"push", "workflow_dispatch"} == set(triggers)
-    push = triggers["push"]
-    assert isinstance(push, dict)
-    assert push["branches"] == ["main"]
+    assert set(triggers) == {"release"}
+    release = triggers["release"]
+    assert isinstance(release, dict)
+    assert release["types"] == ["published"]
 
     assert isinstance(jobs, dict)
     assert set(jobs) == {"build", "deploy"}
@@ -384,19 +383,40 @@ def test_docs_site_deployment_is_main_only() -> None:
     assert isinstance(build, dict)
     assert isinstance(deploy, dict)
 
+    stable_release = (
+        "github.event.release.draft == false && "
+        "github.event.release.prerelease == false"
+    )
+    assert build["if"] == stable_release
+
     build_steps = build["steps"]
     assert isinstance(build_steps, list)
     build_by_name = {
         step.get("name"): step for step in build_steps if isinstance(step, dict)
     }
+    checkout = build_by_name["Checkout"]
+    assert checkout["with"] == {
+        "ref": "${{ github.event.release.tag_name }}",
+        "fetch-depth": "0",
+        "persist-credentials": "false",
+    }
+    source_validation = build_by_name["Validate stable release source"]
+    assert source_validation["env"] == {
+        "RELEASE_TAG": "${{ github.event.release.tag_name }}"
+    }
+    source_validation_run = source_validation["run"]
+    assert isinstance(source_validation_run, str)
+    assert "expected_tag=\"v$(tr -d '\\r\\n' < VERSION)\"" in source_validation_run
+    assert "refs/heads/main:refs/remotes/origin/main" in source_validation_run
+    assert 'git rev-list -n 1 "$RELEASE_TAG"' in source_validation_run
+    assert "git merge-base --is-ancestor HEAD origin/main" in source_validation_run
     assert build_by_name["Install dependencies"]["run"] == "npm ci"
     assert build_by_name["Check site"]["run"] == "npm run check"
     assert build_by_name["Build site"]["run"] == "npm run build"
     assert build_by_name["Check built links"]["run"] == "npm run check:links"
 
-    main_only = "github.ref == 'refs/heads/main' && github.event_name != 'pull_request'"
-    assert build_by_name["Upload Pages artifact"]["if"] == main_only
-    assert deploy["if"] == main_only
+    assert "if" not in build_by_name["Upload Pages artifact"]
+    assert deploy["if"] == stable_release
     assert deploy["needs"] == "build"
     assert deploy["concurrency"] == {
         "group": "pages",

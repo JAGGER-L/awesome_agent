@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 from openai import AsyncOpenAI
 
 from awesome_agent.modeling import (
+    MODEL_CATALOG,
     AssistantMessage,
     ContinuationState,
     ModelRequest,
@@ -31,14 +32,11 @@ from awesome_agent.modeling import (
     TurnFailed,
     UserMessage,
 )
+from awesome_agent.modeling.catalog import ModelCatalogError
 from awesome_agent.modeling.errors import ModelProviderError
 from awesome_agent.providers.errors import classify_openai_error
 
 DEEPSEEK_OFFICIAL_BASE_URL = "https://api.deepseek.com"
-_CURATED_MODELS = {
-    "deepseek/deepseek-v4-flash",
-    "deepseek/deepseek-v4-pro",
-}
 _WIRE_UNSAFE = re.compile(r"[^A-Za-z0-9_]")
 
 
@@ -55,7 +53,11 @@ class DeepSeekProvider:
         timeout_seconds: float = 60.0,
         client: AsyncOpenAI | None = None,
     ) -> None:
-        if model not in _CURATED_MODELS:
+        try:
+            descriptor = MODEL_CATALOG.provider_for_model(model)
+        except ModelCatalogError as error:
+            raise ValueError("Model must be a curated DeepSeek model.") from error
+        if descriptor.id != "deepseek":
             raise ValueError("Model must be a curated DeepSeek model.")
         if not api_key.strip():
             raise ValueError("DeepSeek API key cannot be empty.")

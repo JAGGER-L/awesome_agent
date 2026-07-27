@@ -7,11 +7,11 @@ Skill 是一组具名、可复用的指令，可选择附带文本资源。Skill
 
 Workspace 获得信任后，Awesome 会发现三类来源：
 
-| 来源 | 位置 | 通常的所有者 | 严格的 Workspace 身份检查 |
+| 来源 | 位置 | 通常的所有者 | Session 身份固定 |
 | --- | --- | --- | --- |
-| Bundled | 已安装的 Python 包内部 | Awesome release | 否 |
-| User | `<AWESOME_HOME>/skills/<name>/` | 当前操作系统用户 | 否 |
-| Workspace | `<workspace>/.awesome/skills/<name>/` | Repository/workspace | 是 |
+| Bundled | 已安装的 Python 包内部 | Awesome release | 是 |
+| User | `<AWESOME_HOME>/skills/<name>/` | 当前操作系统用户 | 是 |
+| Workspace | `<workspace>/.awesome/skills/<name>/` | Repository/workspace | 是，并包含受信任 Workspace 链 |
 
 发现顺序依次为 bundled、user、workspace。后出现的同名包会遮蔽更早的包并产生诊断，因此
 有效优先级为 workspace > user > bundled。在 user 或 workspace 配置中禁用某个名称，都会
@@ -59,21 +59,66 @@ Read `references/checklist.md` only when the change exposes an HTTP endpoint.
 | --- | --- | --- |
 | `name` | 是 | 以小写字母开头，后接至多 63 个小写字母、数字或连字符；必须与目录名完全相同 |
 | `description` | 是 | 1–500 个字符 |
-| `allowed-tools` | 否 | 一个字符串或字符串列表；仅为说明性元数据 |
+| `allowed-tools` | 否 | 一个字符串，或最多 128 个匹配 `[a-z][a-z0-9_.-]{0,199}` 的唯一工具名称列表；仅为说明性元数据 |
 | `license` | 否 | 字符串，最多 500 个字符 |
 | `compatibility` | 否 | 字符串，最多 500 个字符 |
 | `metadata` | 否 | 值与 JSON 兼容的映射 |
 
-当前 parser 比上述规范标量类型更宽松：它会用 `str()` 规范化若干标量字段和
-`allowed-tools` 条目，因此数字 description 或布尔列表项之类的值可能作为文本被接受。
-不要依赖这种强制转换；请按示例使用字符串。严格的标量 frontmatter 验证仍是一个运行时
-契约加固缺口。
+当前 parser 仍会用 `str()` 规范化若干非工具标量字段，因此数字 description 可能作为文本
+被接受。不要依赖这种强制转换；请按示例使用字符串。`allowed-tools` 还会受到数量、去重和
+名称校验，避免格式错误的 metadata 膨胀或破坏自动 catalog。
 
 文件必须以 `---` YAML frontmatter 开头。YAML parser 限制为 64 层、4,096 个节点和
 64 个 alias；递归 alias 无效。`SKILL.md` 必须是 UTF-8、非二进制，且不大于 1 MiB。
 
 正文应使用祈使语气并且可测试：说明 Skill 何时适用、所需输入、有序工作步骤、停止条件、
 验证和预期输出。将大段背景材料放入资源，以便只在需要时加载。
+
+## 安装和管理 User Skills
+
+需要由 Awesome 安全管理 User 来源时，使用独立 CLI：
+
+```text
+awesome skills list
+awesome skills install <local-directory-or-zip> [--replace]
+awesome skills remove <name> [--yes]
+```
+
+`list` 只报告直接安装在 `<AWESOME_HOME>/skills` 下的有效包，不会合并 Bundled 或
+Workspace 来源。要查看应用来源优先级、禁用名称和诊断后的有效 catalog，请在会话中使用
+`/skills`。
+
+安装源必须位于本机，可以是本身就是包根目录的目录，也可以是 archive root 直接包含
+`SKILL.md` 的 ZIP；不会剥离单层顶级包装目录。相对 source path 从命令启动目录解析。
+首版不接受 URL，也不提供远程 registry、签名或自动更新。
+
+Core 会在发布任何内容前校验完整包和 manifest。包最多包含 512 个 entry，所有文件展开后
+内容合计不超过 32 MiB，单个文件不超过 1 MiB；ZIP 文件本身还不得超过 32 MiB。Traversal、
+绝对路径、重复或冲突路径、link、junction、reparse point、非常规文件、加密 ZIP entry，
+以及二进制或无效 `SKILL.md` 都会被拒绝。本地 source 遍历以及 installed/quarantine 包清理
+还会拒绝跨越 filesystem 或 mount boundary，包括 POSIX mount 与 bind boundary；Windows
+volume mount 由 reparse-point 拒绝覆盖。TUI launcher 不会复制这些包规则。
+
+列出、安装、替换和移除操作会跨进程串行执行。全新安装时，Core 会完整校验私有 stage、记录
+`prepared` 事务，再通过一次同目录且 no-replace 的原子 rename，把 stage 发布到原本不存在的
+target。已有名称必须显式提供 `--replace`。
+
+替换和移除是可恢复事务，不是一次原子替换。替换会记录 `prepared`，把已有 target rename 到
+私有 quarantine，记录 `quarantined`，再把已校验 stage rename 到 target，并在删除 quarantine
+前记录 `published`。这是两次独立的正向 rename，因此 recovery 会在 published marker 之前
+回滚到原包，在 marker 之后向前完成 quarantine 清理。移除会围绕 target-to-quarantine 记录
+相同 phase，标记移除已发布后再删除 quarantine；recovery 会在发布前恢复 target，或在发布后
+完成清理。
+
+只有 stdin 是 TTY 时，移除才会显示确认提示；脚本必须提供 `--yes`，否则命令会在 Core
+启动前失败。这些命令只影响 User 包，不能修改 Bundled 或 Workspace 来源。如果 Core 启动
+owned worker 后调用方被取消，Core 会继续等待该 worker，直到包事务收敛，再重新抛出取消；
+这种收敛没有 wall-clock 清理 deadline。
+
+官方 `awesome skills` 命令是一次性的：它在初始化前调用一个私有包 RPC，随后关闭 Core。
+已经初始化的 Session 绝不会热更新其不可变 Skill catalog，必须重启才能发现包变化。仍在
+同一个 `UNINITIALIZED` Core 上的私有 client 可以先执行包操作，再调用 `initialize`；该次
+初始化会发现变更后的 package tree。
 
 ## 选择和加载 Skills
 
@@ -84,18 +129,24 @@ Read `references/checklist.md` only when the change exposes an HTTP endpoint.
 /skills review-api
 ```
 
-选择存储在当前 Thread 上，并应用于后续 Turn。具名选择会将该 Skill 正文中最多 5,000 个
-估算 token 作为强制 system context 加载。Skill 正文和资源也可以通过有界的 `load_skill`
-和 `read_skill_resource` 工具按需读取。
+选择存储在当前 Thread 上，并应用于后续 Turn。三种模式具有不同且封闭的行为：
 
-在当前 release 中，`auto` 和 `off` 的可观察执行行为相同：两者都不会主动注入具名 Skill，
-两个读取工具也都仍在 registry 中，并且不存在为模型自动选择 Skill 的 catalog selector。
-这两个值为未来选择行为保留了明确的产品选项；不得把它们解读为当前已有的自动化保证。
-因此，`off` 不是包隔离边界。如果某个包必须不可解析，请在配置中禁用其名称，或将它从相关
-user 来源中移除。
+| 模式 | 冻结上下文 | 模型可见的 Skill 工具 |
+| --- | --- | --- |
+| `auto` | 最多 64 个有效 Skill 的确定性 catalog，并限制为 32 KiB 和 4,096 个估算 token | `load_skill`、`read_skill_resource` |
+| `off` | 不包含 Skill catalog 或正文 | 无 |
+| `<name>` | 该 Skill 正文中最多 5,000 个估算 token，作为强制 system context | 仅可对该 Skill 使用 `read_skill_resource` |
+
+为限制 Turn 准备的工作量，`auto` 会先按名称确定性排序，仅从前 256 个有效 Skill 候选中选择
+最终的 64 个。如果仍有后续候选，或某个候选因字节或 token 上限被排除，catalog 会将自身标记
+为不完整。
+
+`auto` 允许模型从有界 catalog 中选择，但不会静默运行 Skill。`off` 是运行时隔离边界：即使
+伪造调用，也会在权限策略和 handler 之前被硬准入拒绝。工具参数 object 严格且封闭，因此
+未知字段和用非字符串标量替代字符串的输入会作为 `invalid_arguments` 被拒绝。
 
 ```yaml
-version: 1
+version: 2
 skills:
   disabled:
     - review-api
@@ -110,28 +161,36 @@ Core 启动时执行发现；添加、替换或移除包后请重启 Awesome。
 discover directories
   -> parse bounded frontmatter
   -> resolve shadowing + disabled names
+  -> pin package + SKILL.md identity
   -> immutable session catalog + diagnostics
-  -> select named Skill or call load_skill
+  -> freeze selected identities in Turn context/checkpoint
+  -> expose tools allowed by the frozen Skill mode
   -> strip frontmatter + 5,000-token bound
   -> Context Builder
 ```
 
-Skill 加载时，`allowed-tools` 作为诊断元数据返回。它不会过滤模型的工具 catalog，也不会
+Skill 加载时，`allowed-tools` 会被冻结并作为诊断元数据返回。它不会过滤模型的工具 catalog，也不会
 绕过或收紧[权限策略](../reference/permission-modes.zh-CN.md)。可以在正文中说明对工具的预期，
 但真正的权限必须在 Tool Executor 边界强制执行。
+
+Skill 读取使用内置 `context.read` capability。只有硬准入证明请求的包和操作位于该 Turn
+冻结的 Skill scope 中后，permission mode 才会无提示允许该 capability。Runtime 重建、恢复
+或磁盘上的包变化都不能扩大此 scope；identity 不匹配会返回 `conflict`。包变更后应重启已经
+初始化的 Session；尚未初始化的 Core 会在 initialize 时发现当前 package tree。
 
 资源使用相对于包的路径，拒绝绝对路径和 `..`，并且必须是 UTF-8 非二进制文本且不大于
 1 MiB。`read_skill_resource` 每次调用最多返回 5,000 个估算 token，并报告是否发生截断。
 
-## Workspace Skill 安全
+## Skill 身份与 Workspace 安全
 
 Workspace 包由仓库控制，因此发现流程从受信任 workspace anchor 开始，并验证
 `.awesome/skills`、包目录和 `SKILL.md` 的每个组成部分。符号链接、junction 及其他
 reparse point 会在内容被接受前遭到拒绝。
 
-Catalog 记录从 workspace anchor 到包目录的目录身份，以及最初 `SKILL.md` 的身份和哈希。
-后续正文加载会重新打开这条已固定的链，并比较打开的 `SKILL.md` 与发现时的文件。因此，
-替换 workspace、skills root、包或 `SKILL.md` 都会安全失败（fail closed）。
+每个 catalog 条目都有版本化 identity，由规范化 descriptor metadata、发现时 `SKILL.md`
+fingerprint 与内容派生。后续准入和 handler 读取会以 no-follow 方式重新打开包，并要求 identity
+一致。Workspace 条目还记录 workspace anchor 到包目录的每一级目录身份。因此，替换包或
+`SKILL.md`，以及替换 Workspace Skill 的 workspace 链，都会安全失败（fail closed）。
 
 读取资源时会重新验证已固定链和包含关系，拒绝包下的每一个 symlink/junction/reparse
 组成部分，并对被读取文件使用 `lstat`/open/`fstat` 身份检查。它**不会**在发现时固定普通
@@ -139,8 +198,8 @@ Catalog 记录从 workspace anchor 到包目录的目录身份，以及最初 `S
 嵌套 reparse point 或在受检查 open 过程中发生的替换会安全失败。这一区分既防止路径
 重定向和检查/打开竞态，也没有宣称完整的包是不可变内容快照。
 
-这些严格的 reparse 与身份规则刻意只应用于 Workspace 来源。Bundled 和 User 包保留既有
-兼容行为，不过单个资源遍历仍会拒绝逃逸路径和 symlink 组成部分。
+Bundled 与 User 包使用相同的 package/`SKILL.md` identity 要求；Workspace 包额外使用更强的
+受信任 anchor 链。所有资源遍历都会拒绝逃逸与 symlink/reparse 组成部分。
 
 ## 诊断与恢复
 

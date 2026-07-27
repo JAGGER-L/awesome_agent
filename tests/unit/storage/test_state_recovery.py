@@ -53,7 +53,7 @@ def _build_home(tmp_path: Path) -> AwesomePaths:
     return paths
 
 
-def test_reset_replaces_only_owned_state_and_creates_schema_seven(
+def test_reset_replaces_only_owned_state_and_creates_schema_eight(
     tmp_path: Path,
 ) -> None:
     paths = _build_home(tmp_path)
@@ -76,7 +76,7 @@ def test_reset_replaces_only_owned_state_and_creates_schema_seven(
 
     preflight = inspect_application_state(paths.application_db)
     assert preflight.compatibility is StateCompatibility.CURRENT
-    assert preflight.found_schema == 7
+    assert preflight.found_schema == 8
     assert not paths.checkpoint_db.exists()
     assert not paths.change_journal_dir.exists()
     assert not list(paths.home.glob(".state-reset-*"))
@@ -96,7 +96,7 @@ def test_reset_changes_only_the_exclusive_lease_home(tmp_path: Path) -> None:
 
     preflight = inspect_application_state(paths.application_db)
     assert preflight.compatibility is StateCompatibility.CURRENT
-    assert preflight.found_schema == 7
+    assert preflight.found_schema == 8
     assert _inventory(other.home) == other_before
 
 

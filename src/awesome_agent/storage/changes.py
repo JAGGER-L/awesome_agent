@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import tempfile
 from pathlib import Path
 
 from awesome_agent.core.changes.errors import ChangeBlobCorrupt
 from awesome_agent.core.changes.models import ChangeLifecycle, ChangeSet, FileNodeType
 from awesome_agent.core.changes.ports import PendingMutation
-from awesome_agent.storage.database import application_connection
+from awesome_agent.storage.application_sqlite import ApplicationSQLite
 
 _PENDING_NODE_TYPES_VERSION = 1
 
@@ -107,11 +108,11 @@ class FileChangeBlobStore:
 
 
 class SQLiteChangeSetStore:
-    def __init__(self, path: Path) -> None:
-        self._path = path
+    def __init__(self, database: ApplicationSQLite) -> None:
+        self._database = database
 
-    def save(self, change_set: ChangeSet) -> None:
-        with application_connection(self._path) as connection, connection:
+    async def save(self, change_set: ChangeSet) -> None:
+        def write(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "INSERT INTO change_sets ("
                 "change_set_id, workspace_key, session_id, turn_id, lifecycle, "
@@ -137,38 +138,83 @@ class SQLiteChangeSetStore:
                 ),
             )
 
-    def get(self, change_set_id: str) -> ChangeSet | None:
-        with application_connection(self._path) as connection:
+        await self._database.write(write)
+
+    async def get(self, change_set_id: str) -> ChangeSet | None:
+        def read(connection: sqlite3.Connection) -> ChangeSet | None:
             row = connection.execute(
                 "SELECT payload_json FROM change_sets WHERE change_set_id = ?",
                 (change_set_id,),
             ).fetchone()
-        if row is None:
-            return None
-        return ChangeSet.model_validate_json(row["payload_json"])
+            if row is None:
+                return None
+            return ChangeSet.model_validate_json(row["payload_json"])
 
-    def latest(self, workspace_key: str) -> ChangeSet | None:
-        with application_connection(self._path) as connection:
+        return await self._database.read(read)
+
+    async def latest(self, workspace_key: str) -> ChangeSet | None:
+        def read(connection: sqlite3.Connection) -> ChangeSet | None:
             row = connection.execute(
                 "SELECT payload_json FROM change_sets WHERE workspace_key = ? "
                 "ORDER BY created_at DESC, change_set_id DESC LIMIT 1",
                 (workspace_key,),
             ).fetchone()
-        if row is None:
-            return None
-        return ChangeSet.model_validate_json(row["payload_json"])
+            if row is None:
+                return None
+            return ChangeSet.model_validate_json(row["payload_json"])
 
-    def list_open(self, workspace_key: str) -> list[ChangeSet]:
-        with application_connection(self._path) as connection:
+        return await self._database.read(read)
+
+    async def list_open(self, workspace_key: str) -> list[ChangeSet]:
+        def read(connection: sqlite3.Connection) -> list[ChangeSet]:
             rows = connection.execute(
                 "SELECT payload_json FROM change_sets WHERE workspace_key = ? "
                 "AND lifecycle = ? ORDER BY created_at, change_set_id",
                 (workspace_key, ChangeLifecycle.OPEN.value),
             ).fetchall()
-        return [ChangeSet.model_validate_json(row["payload_json"]) for row in rows]
+            return [ChangeSet.model_validate_json(row["payload_json"]) for row in rows]
 
-    def save_pending(self, pending: PendingMutation) -> None:
-        with application_connection(self._path) as connection, connection:
+        return await self._database.read(read)
+
+    async def delete_empty_open(self, change_set_id: str) -> bool:
+        def write(connection: sqlite3.Connection) -> bool:
+            row = connection.execute(
+                "SELECT lifecycle, payload_json FROM change_sets "
+                "WHERE change_set_id = ?",
+                (change_set_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            change_set = ChangeSet.model_validate_json(row["payload_json"])
+            if (
+                row["lifecycle"] != ChangeLifecycle.OPEN.value
+                or change_set.lifecycle is not ChangeLifecycle.OPEN
+                or change_set.files
+                or change_set.execute
+            ):
+                return False
+            pending = connection.execute(
+                "SELECT 1 FROM pending_mutations WHERE change_set_id = ? LIMIT 1",
+                (change_set_id,),
+            ).fetchone()
+            if pending is not None:
+                return False
+            referenced = connection.execute(
+                "SELECT 1 FROM tool_activities WHERE change_set_id = ? LIMIT 1",
+                (change_set_id,),
+            ).fetchone()
+            if referenced is not None:
+                return False
+            cursor = connection.execute(
+                "DELETE FROM change_sets WHERE change_set_id = ? AND lifecycle = ?",
+                (change_set_id, ChangeLifecycle.OPEN.value),
+            )
+            return cursor.rowcount == 1
+
+        return await self._database.write(write)
+
+    async def save_pending(self, pending: PendingMutation) -> None:
+        def write(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "INSERT INTO pending_mutations ("
                 "pending_id, change_set_id, relative_path, kind, node_type, "
@@ -201,42 +247,48 @@ class SQLiteChangeSetStore:
                 ),
             )
 
-    def list_pending(self) -> list[PendingMutation]:
-        with application_connection(self._path) as connection:
+        await self._database.write(write)
+
+    async def list_pending(self) -> list[PendingMutation]:
+        def read(connection: sqlite3.Connection) -> list[PendingMutation]:
             rows = connection.execute(
                 "SELECT p.*, c.workspace_key FROM pending_mutations AS p "
                 "JOIN change_sets AS c ON c.change_set_id = p.change_set_id "
                 "ORDER BY p.created_at, p.pending_id"
             ).fetchall()
-        pending_items: list[PendingMutation] = []
-        for row in rows:
-            node_type, before_node_type, intended_after_node_type = (
-                _decode_pending_node_types(row["node_type"])
-            )
-            pending_items.append(
-                PendingMutation(
-                    id=row["pending_id"],
-                    change_set_id=row["change_set_id"],
-                    workspace_key=row["workspace_key"],
-                    relative_path=row["relative_path"],
-                    kind=row["kind"],
-                    node_type=node_type,
-                    before_node_type=before_node_type,
-                    intended_after_node_type=intended_after_node_type,
-                    before_hash=row["before_hash"],
-                    before_blob=row["before_blob"],
-                    before_mode=row["before_mode"],
-                    intended_after_hash=row["intended_after_hash"],
-                    intended_after_blob=row["intended_after_blob"],
-                    intended_after_mode=row["intended_after_mode"],
-                    created_at=row["created_at"],
+            pending_items: list[PendingMutation] = []
+            for row in rows:
+                node_type, before_node_type, intended_after_node_type = (
+                    _decode_pending_node_types(row["node_type"])
                 )
-            )
-        return pending_items
+                pending_items.append(
+                    PendingMutation(
+                        id=row["pending_id"],
+                        change_set_id=row["change_set_id"],
+                        workspace_key=row["workspace_key"],
+                        relative_path=row["relative_path"],
+                        kind=row["kind"],
+                        node_type=node_type,
+                        before_node_type=before_node_type,
+                        intended_after_node_type=intended_after_node_type,
+                        before_hash=row["before_hash"],
+                        before_blob=row["before_blob"],
+                        before_mode=row["before_mode"],
+                        intended_after_hash=row["intended_after_hash"],
+                        intended_after_blob=row["intended_after_blob"],
+                        intended_after_mode=row["intended_after_mode"],
+                        created_at=row["created_at"],
+                    )
+                )
+            return pending_items
 
-    def delete_pending(self, pending_id: str) -> None:
-        with application_connection(self._path) as connection, connection:
+        return await self._database.read(read)
+
+    async def delete_pending(self, pending_id: str) -> None:
+        def write(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "DELETE FROM pending_mutations WHERE pending_id = ?",
                 (pending_id,),
             )
+
+        await self._database.write(write)

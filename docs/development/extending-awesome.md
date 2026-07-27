@@ -18,7 +18,7 @@ Before adding an abstraction, answer:
 4. What inputs are untrusted, and where are they validated and bounded?
 5. What happens on timeout, cancellation, partial output, and process crash?
 6. Is an external effect safe to retry, or must it become uncertain?
-7. Does this change Protocol v3, storage schema, permissions, or packaging?
+7. Does this change Protocol v4, storage schema, permissions, or packaging?
 
 Prefer a concrete implementation behind a current contract. Do not create a
 generic provider/backend/plugin layer for one hypothetical implementation.
@@ -140,32 +140,46 @@ primitives. Do not call `Path.resolve()`, `read_text()`, `write_text()`,
 
 ### 4. Register once
 
-Register the `ToolSpec`, input model, handler, capability, read-only flag,
-display verb, and optional internal timeout resolver in the built-in registry
-composition. The name must match the shared tool-name pattern and cannot collide
-with built-in or extension namespaces.
+Register one complete tool containing its `ToolSpec`, strict input model,
+handler, typed operation description, hard admission, replay-safety
+classification, optional internal timeout resolver, and optional handler-
+cancellation grace in the built-in registry composition. Capability, read-only
+state, and display metadata belong to the spec. The name must match the shared
+tool-name pattern and cannot collide with built-in or extension namespaces.
 
 The model-visible schema comes from the input model. Internal cleanup budgets
-must not appear as fake model arguments.
+must not appear as fake model arguments. Hard admission consumes validated
+arguments and execution context and rejects non-disableable unsafe cases. Only
+after it succeeds, the operation description runs exactly once and returns the
+bounded facts needed for presentation and approval. It may perform bounded
+metadata inspection for the admitted operation, but still runs before approval,
+the handler, or any external effect. Admission remains separate from capability
+policy, and a permission mode or temporary grant cannot override it.
 
 ### 5. Define lifecycle behavior
 
 Document and test:
 
-- argument and path validation before approval;
-- hard-deny rules before mode grants;
+- the one execution order: resolve, strict validation, hard admission, one
+  typed description, capability policy, approval, deadline, handler, then
+  result/event/audit;
+- argument and path validation before approval, handler execution, or external
+  effects;
+- hard-admission rules before mode grants;
 - approval text derived from validated operation facts;
 - total timeout and handler cancellation grace;
 - output/content/presentation bounds;
 - one ToolActivity and one terminal event;
 - whether an attempt is recorded before an irreversible effect;
 - whether the effect is fully, partially, or not reversible;
+- whether replay is provably safe, with unknown classifications failing closed;
 - crash and startup-recovery evidence.
 
 ### Tool tests
 
-Add unit tests for schema, normal result, expected error, unknown capability,
-all permission modes, hard denial, timeout, cancellation, and output bounds.
+Add unit tests for schema, normal result, expected error, typed descriptions,
+unknown capability, all permission modes, hard admission, replay safety,
+timeout, cancellation, and output bounds.
 Add integration tests when the tool touches workspace identity, Change Journal,
 processes, Application approval, transcript activity, or recovery. Test real
 platform primitives on their owning OS.
@@ -234,6 +248,12 @@ Workspace Skill code must retain anchor/package identity revalidation. Do not
 weaken it to support a linked package; use a user Skill if the user intentionally
 manages a linked layout.
 
+The built-in Skill tool registrations hard-admit catalog membership, portable
+lexical resource paths, and a no-follow plain-file boundary before deriving a
+target. The handler repeats the safe read checks; Workspace Skills additionally
+compare the package identity captured at discovery and fail closed on a
+replacement.
+
 ## Integrate through MCP
 
 MCP is the preferred boundary for independently operated tools. Server
@@ -272,6 +292,12 @@ MCP input validation errors must be generic and must not expose raw arguments
 or schemas. Output validation and JSON traversal occur under their own byte,
 node, depth, and content-block bounds.
 
+Every MCP registration is explicitly non-replayable. Recovery consumes that
+metadata through the same Registry contract and must not infer safety from the
+`mcp.` prefix. A missing or unknown registration fails closed into the same
+interaction. Neither case retries automatically; only an explicit user Retry
+may continue the old checkpoint.
+
 ## Add a Memory provider
 
 Awesome currently has local Markdown Memory and one optional Mem0 Cloud
@@ -293,10 +319,27 @@ Memory cannot grant Tool capabilities or become a hidden provider fallback.
 ## Change storage or recovery
 
 Storage changes require more than adding a column. Determine whether absence
-has a safe interpretation under Schema 7. If not, increment schema identity and
-define product behavior for older/newer state. Awesome has no automatic
-migration framework, so a new schema must update preflight, reset verification,
-packaging checks, docs, and recovery tests.
+has a safe interpretation under the current Schema 8. If not, increment schema
+identity and define product behavior for older/newer state. Add each supported upgrade as
+one adjacent `N -> N+1` operation in the Storage-owned migration registry. The
+registry must remain a complete linear chain from its explicit floor to current;
+do not add branches, gaps, historical adapters, or migration logic outside that
+owner. The current production chain has floor 7, current 8, and one `7 -> 8`
+step that adds nullable Thread lineage; Schemas 1–6 remain
+migration-unavailable.
+
+Migration code must preserve the startup protocol: shared-lease read-only
+preflight, exclusive lease, compatibility recheck, validated WAL-aware SQLite
+backup at `application.db.pre-migration.bak`, then the complete chain in one
+transaction. Only after success may startup downgrade the lease and initialize
+repositories. A migration step receives only the restricted schema/data
+connection facade; it must not commit, roll back, open savepoints, attach another
+database, or run scripts that manage transactions. A failed step rolls back the
+entire chain and retains the backup for manual recovery; never automatically
+reset or restore state. Test the
+registry with synthetic multi-step schemas, including data preservation, backup
+validation, rollback, and unknown rollback outcomes. Update preflight, release
+contracts, bilingual docs, and recovery tests in the same schema change.
 
 For every new durable fact specify:
 
@@ -313,7 +356,7 @@ become the product transcript.
 
 ## Add a protocol or TUI surface fact
 
-Follow the full Protocol v3 chain:
+Follow the full Protocol v4 chain:
 
 ```text
 Python strict model
@@ -334,8 +377,10 @@ events; it must not call Agent, tools, or storage directly.
 
 - [ ] One existing package owns the new behavior.
 - [ ] No second graph, executor, command runtime, policy, or storage owner.
-- [ ] Input is strict and bounded before approval/external I/O.
-- [ ] Capability and hard-deny behavior are explicit.
+- [ ] Input is strict and bounded before approval, handler execution, or
+      external effects.
+- [ ] Hard admission and capability policy are explicit and remain separate.
+- [ ] Replay safety is explicit, and missing/unknown metadata fails closed.
 - [ ] Timeout, cancellation, cleanup, and uncertain outcome are tested.
 - [ ] Durable facts and recovery rules are documented.
 - [ ] Secrets and raw payloads cannot enter events, audit, fixtures, or logs.

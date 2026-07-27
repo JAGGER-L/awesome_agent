@@ -20,6 +20,7 @@ import { Picker } from "../components/Picker.js";
 import { StateResetPrompt } from "../components/StateResetPrompt.js";
 import { ThemeProvider } from "../components/theme.js";
 import { TrustPrompt } from "../components/TrustPrompt.js";
+import { UI_PREFERENCES_CURRENT } from "../contract-versions.js";
 import { CoreSpawnError } from "../core/errors.js";
 import type { CoreLaunchOptions } from "../core/process.js";
 import { CancellationController } from "../lifecycle/cancellation.js";
@@ -54,26 +55,34 @@ import {
   connectSurface,
   type ConnectedSurface,
 } from "../surface/controller.js";
-import {
-  beginStartup,
-  respondStartupStateReset,
-  respondStartupTrust,
-  selectStartupThread,
-  type StartupResult,
-} from "../surface/startup.js";
+import { beginStartup, type StartupResult } from "../surface/startup.js";
 import { PRODUCT_VERSION } from "../version.js";
 import {
   CLI_HELP,
   LaunchArgumentError,
   parseCliIntent,
+  type HeadlessRunIntent,
   type LaunchIntent,
+  type SkillCommandIntent,
 } from "./args.js";
+import {
+  runHeadless,
+  type HeadlessExitCode,
+  type HeadlessIo,
+} from "./headless.js";
 import {
   assertInteractiveTerminal,
   assertSupportedNode,
   resolveCoreExecutable,
   RuntimeCheckError,
 } from "./runtime-checks.js";
+import {
+  confirmSkillRemoval,
+  runSkillCommand,
+  type SkillCommandExitCode,
+  type SkillCommandIo,
+} from "./skills.js";
+import { StartupSessionController } from "./startup-session-controller.js";
 
 export type CliRenderOutcome =
   | { readonly kind: "quit"; readonly exitCode: 0 }
@@ -117,12 +126,29 @@ export interface CliDependencies {
   readonly renderApplication: (
     request: CliRenderRequest,
   ) => Promise<CliRenderOutcome>;
+  readonly runHeadlessApplication?: (
+    surface: ConnectedSurface,
+    intent: HeadlessRunIntent,
+    io: HeadlessIo,
+  ) => Promise<HeadlessExitCode>;
+  readonly closeHeadlessApplication?: (
+    surface: ConnectedSurface,
+  ) => Promise<boolean>;
+  readonly runSkillApplication?: (
+    surface: ConnectedSurface,
+    intent: SkillCommandIntent,
+    io: SkillCommandIo,
+  ) => Promise<SkillCommandExitCode>;
+  readonly closeSkillApplication?: (
+    surface: ConnectedSurface,
+  ) => Promise<boolean>;
+  readonly confirmSkillRemoval?: (name: string) => Promise<boolean>;
 }
 
 export async function runCli(
   dependencies: CliDependencies = productionDependencies(),
-): Promise<0 | 1 | 2> {
-  let intent: LaunchIntent;
+): Promise<0 | 1 | 2 | 3 | 130> {
+  let intent: LaunchIntent | HeadlessRunIntent | SkillCommandIntent;
   try {
     const parsed = parseCliIntent(dependencies.argv);
     if (parsed.kind === "version") {
@@ -135,10 +161,22 @@ export async function runCli(
     }
     intent = parsed;
     assertSupportedNode(dependencies.nodeVersion);
-    assertInteractiveTerminal(
-      dependencies.stdinIsTTY,
-      dependencies.stdoutIsTTY,
-    );
+    if (intent.kind !== "run" && intent.kind !== "skills") {
+      assertInteractiveTerminal(
+        dependencies.stdinIsTTY,
+        dependencies.stdoutIsTTY,
+      );
+    }
+    if (
+      intent.kind === "skills" &&
+      intent.action === "remove" &&
+      !intent.yes &&
+      !dependencies.stdinIsTTY
+    ) {
+      throw new LaunchArgumentError(
+        "awesome skills remove requires --yes when stdin is not a TTY.",
+      );
+    }
   } catch (error) {
     if (
       error instanceof LaunchArgumentError ||
@@ -148,6 +186,22 @@ export async function runCli(
       return 2;
     }
     throw error;
+  }
+
+  if (intent.kind === "skills" && intent.action === "remove" && !intent.yes) {
+    let confirmed: boolean;
+    try {
+      confirmed = await (
+        dependencies.confirmSkillRemoval ?? confirmSkillRemoval
+      )(intent.name);
+    } catch {
+      dependencies.writeStderr("Unable to read Skill removal confirmation.\n");
+      return 1;
+    }
+    if (!confirmed) {
+      dependencies.writeStdout("Skill removal cancelled.\n");
+      return 0;
+    }
   }
 
   const cwd = dependencies.cwd();
@@ -167,6 +221,76 @@ export async function runCli(
     }
     dependencies.writeStderr("Unable to start the Awesome Core process.\n");
     return 1;
+  }
+
+  if (intent.kind === "run") {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let exitCode: HeadlessExitCode;
+    try {
+      exitCode = await (dependencies.runHeadlessApplication ?? runHeadless)(
+        surface,
+        intent,
+        {
+          writeStdout: (value) => stdout.push(value),
+          writeStderr: (value) => stderr.push(value),
+        },
+      );
+    } catch {
+      stderr.push("The headless run failed unexpectedly.\n");
+      exitCode = 1;
+    }
+    const closed = await (
+      dependencies.closeHeadlessApplication ?? closeHeadlessSurface
+    )(surface);
+    if (!closed) {
+      stderr.push("Awesome Core did not shut down cleanly.\n");
+      if (exitCode === 0) exitCode = 1;
+    }
+    if (exitCode === 0) {
+      for (const value of stdout) dependencies.writeStdout(value);
+    }
+    for (const value of stderr) dependencies.writeStderr(value);
+    return exitCode;
+  }
+
+  if (intent.kind === "skills") {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let exitCode: SkillCommandExitCode;
+    try {
+      exitCode = await (dependencies.runSkillApplication ?? runSkillCommand)(
+        surface,
+        intent,
+        {
+          writeStdout: (value) => stdout.push(value),
+          writeStderr: (value) => stderr.push(value),
+        },
+      );
+    } catch {
+      stderr.push("The Skill command failed unexpectedly.\n");
+      exitCode = 1;
+    }
+    let closed = false;
+    try {
+      closed = await (
+        dependencies.closeSkillApplication ?? closeHeadlessSurface
+      )(surface);
+    } catch {
+      // Report the bounded public shutdown diagnostic below.
+    }
+    if (!closed) {
+      if (exitCode === 0 && intent.action !== "list") {
+        for (const value of stdout) stderr.push(value);
+      }
+      stderr.push("Awesome Core did not shut down cleanly.\n");
+      exitCode = 1;
+    }
+    if (exitCode === 0) {
+      for (const value of stdout) dependencies.writeStdout(value);
+    }
+    for (const value of stderr) dependencies.writeStderr(value);
+    return exitCode;
   }
 
   let state: StartupRenderState;
@@ -203,6 +327,71 @@ export async function runCli(
     dependencies.writeStderr("The terminal interface failed unexpectedly.\n");
     return 1;
   }
+}
+
+export interface HeadlessCloseOptions {
+  readonly gracefulTimeoutMs?: number;
+  readonly totalTimeoutMs?: number;
+}
+
+export async function closeHeadlessSurface(
+  surface: ConnectedSurface,
+  options: HeadlessCloseOptions = {},
+): Promise<boolean> {
+  const gracefulTimeoutMs = boundedTimeout(options.gracefulTimeoutMs, 5_000);
+  const totalTimeoutMs = Math.max(
+    gracefulTimeoutMs,
+    boundedTimeout(options.totalTimeoutMs, 10_000),
+  );
+  const deadline = Date.now() + totalTimeoutMs;
+  const close = settledCall(() => surface.close());
+  const exited = settled(surface.session.exit);
+  const graceful = await within(
+    Promise.all([close, exited]).then((results) => results.every(Boolean)),
+    Math.min(gracefulTimeoutMs, totalTimeoutMs),
+  );
+  if (graceful === true) return true;
+
+  const terminated = settledCall(() => surface.session.terminate());
+  const forced = await within(
+    Promise.all([terminated, exited]).then((results) => results.every(Boolean)),
+    Math.max(1, deadline - Date.now()),
+  );
+  return forced === true;
+}
+
+async function settled<Value>(promise: Promise<Value>): Promise<boolean> {
+  return await promise.then(
+    () => true,
+    () => false,
+  );
+}
+
+async function settledCall<Value>(
+  operation: () => Promise<Value>,
+): Promise<boolean> {
+  return await settled(Promise.resolve().then(operation));
+}
+
+async function within<Value>(
+  promise: Promise<Value>,
+  timeoutMs: number,
+): Promise<Value | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const result = await Promise.race([
+    promise,
+    new Promise<undefined>((resolve) => {
+      timeout = setTimeout(() => resolve(undefined), timeoutMs);
+    }),
+  ]);
+  if (timeout) clearTimeout(timeout);
+  return result;
+}
+
+function boundedTimeout(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value >= 1
+    ? Math.min(Math.floor(value), 30_000)
+    : fallback;
 }
 
 function productionDependencies(): CliDependencies {
@@ -407,6 +596,10 @@ function RunningCliApplication({
     () => new CommandController(surface),
     [surface],
   );
+  const startupSession = useMemo(
+    () => new StartupSessionController(surface, intent),
+    [intent, surface],
+  );
   const exitController = useMemo(
     () =>
       new ExitController(surface.session, {
@@ -441,7 +634,7 @@ function RunningCliApplication({
         setTheme: setThemePreference,
         saveTheme: async (selected) =>
           await savePreferences(awesomeHome, {
-            schema_version: 1,
+            schema_version: UI_PREFERENCES_CURRENT,
             theme: selected,
           }),
       }),
@@ -483,12 +676,13 @@ function RunningCliApplication({
     (decision: "trust" | "deny") => {
       if (startup.kind !== "trust_required") return;
       dispatchTerminal({ type: "mode.trust.submitting", submitting: true });
-      void respondStartupTrust(surface, intent, startup.interactionId, decision)
-        .then((result) => {
-          if (result.kind === "denied") {
-            void requestExit("trust_denied");
+      void startupSession
+        .respondTrust(startup, decision)
+        .then((outcome) => {
+          if (outcome.kind === "exit") {
+            void requestExit(outcome.reason);
           } else {
-            setStartup(result);
+            setStartup(outcome.startup);
           }
         })
         .catch((error: unknown) => {
@@ -502,7 +696,7 @@ function RunningCliApplication({
           });
         });
     },
-    [dispatchTerminal, intent, requestExit, startup, surface],
+    [dispatchTerminal, requestExit, startup, startupSession],
   );
 
   const submitStartupStateReset = useCallback(
@@ -512,17 +706,13 @@ function RunningCliApplication({
         type: "mode.state_reset.submitting",
         submitting: true,
       });
-      void respondStartupStateReset(
-        surface,
-        intent,
-        startup.interactionId,
-        decision,
-      )
-        .then((result) => {
-          if (result.kind === "denied") {
-            void requestExit("state_reset_denied");
+      void startupSession
+        .respondStateReset(startup, decision)
+        .then((outcome) => {
+          if (outcome.kind === "exit") {
+            void requestExit(outcome.reason);
           } else {
-            setStartup(result);
+            setStartup(outcome.startup);
           }
         })
         .catch((error: unknown) => {
@@ -537,7 +727,7 @@ function RunningCliApplication({
           });
         });
     },
-    [dispatchTerminal, intent, requestExit, startup, surface],
+    [dispatchTerminal, requestExit, startup, startupSession],
   );
 
   const reconnectSurface = useCallback(async () => {
@@ -627,9 +817,7 @@ function RunningCliApplication({
       ) {
         const threadId = mode.selection.options[mode.selected]?.value;
         if (!threadId) return;
-        void selectStartupThread(surface, threadId).then((thread) =>
-          setStartup({ ...startup, thread }),
-        );
+        void startupSession.selectThread(startup, threadId).then(setStartup);
       }
     },
     [
@@ -637,9 +825,9 @@ function RunningCliApplication({
       requestExit,
       reconnectSurface,
       startup,
+      startupSession,
       submitStartupStateReset,
       submitStartupTrust,
-      surface,
       terminalUiRef,
     ],
   );
@@ -735,6 +923,9 @@ function RunningCliApplication({
             }}
             interactionResponder={interactions}
             providerSetupRequired={startup.readiness === "diagnostics_ready"}
+            {...(preferenceWarning
+              ? { startupWarning: preferenceWarning }
+              : {})}
             resetCurrentFrame={resetCurrentFrame}
             exiting={exiting}
             welcome={{
@@ -766,7 +957,6 @@ function RunningCliApplication({
             }}
           />
         )}
-        {preferenceWarning ? null : null}
       </AppErrorBoundary>
     </ThemeProvider>
   );

@@ -20,6 +20,7 @@ import {
   connectSurface,
   type ConnectedSurface,
 } from "../../src/surface/controller.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 import {
   beginStartup,
   respondStartupStateReset,
@@ -27,6 +28,7 @@ import {
   type StartupResult,
 } from "../../src/surface/startup.js";
 import { createCoreWrapper } from "../fixtures/core-wrapper.js";
+import { createCanonicalTemporaryRoot } from "../fixtures/temporary-root.js";
 
 const temporary: string[] = [];
 const fakeCore = fileURLToPath(
@@ -241,8 +243,69 @@ describe("networkless candidate product flow", () => {
     expect(view.lastFrame()).not.toContain("new answer");
   });
 
+  it("installs a retry fork before consuming Events that raced its response", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "awesome-retry-race-"));
+    temporary.push(workspace);
+    const surface = await connectSurface({
+      executable: process.execPath,
+      cwd: workspace,
+      env: {
+        AWESOME_FAKE_CORE_THREAD: "1",
+        AWESOME_FAKE_CORE_RETRY_EVENTS: "before",
+      },
+      startSession: async (launch) =>
+        await startCoreProcess(launch, [fakeCore]),
+    });
+    const reportFatal = vi.fn();
+    const resetCurrentFrame = vi.fn();
+    const application = await surface.request("application.getState", {});
+    if (!application.ok || !application.value.current_thread_id) {
+      throw new Error("Fake Core did not publish a current Thread");
+    }
+    surface.store.dispatch({
+      type: "hydrate.application",
+      application: application.value,
+    });
+    const thread = await surface.request("thread.read", {
+      thread_id: application.value.current_thread_id,
+    });
+    if (!thread.ok) throw new Error("Fake Core did not publish a Thread page");
+    surface.store.dispatch({ type: "hydrate.thread", thread: thread.value });
+    const view = render(
+      createElement(App, {
+        store: surface.store,
+        controller: new CommandController(surface),
+        reportFatal,
+        resetCurrentFrame,
+        width: 80,
+      }),
+    );
+
+    try {
+      view.stdin.write("/retry");
+      view.stdin.write("\r");
+      await eventually(() => {
+        expect(surface.store.getState()).toMatchObject({
+          thread_generation: 1,
+          application: { current_thread_id: "thread_retry" },
+          active_operation: {
+            id: "operation_retry",
+            status: "active",
+            turn: { id: "turn_retry", status: "active" },
+          },
+        });
+      });
+      expect(resetCurrentFrame).toHaveBeenCalledOnce();
+      expect(view.lastFrame()).toContain("retry question");
+      expect(reportFatal).not.toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      await closeSurface(surface);
+    }
+  });
+
   it("configures a clean home through the credential RPC without leaking the key", async () => {
-    const root = await mkdtemp(join(tmpdir(), "awesome-credential-"));
+    const root = await createCanonicalTemporaryRoot("awesome-credential-");
     temporary.push(root);
     const home = join(root, "home");
     const workspace = join(root, "workspace");
@@ -360,7 +423,7 @@ describe("networkless candidate product flow", () => {
   ] as const)(
     "runs the %s flow through CLI, controller, Python, and SQLite",
     async (provider, model) => {
-      const root = await mkdtemp(join(tmpdir(), "awesome-product-"));
+      const root = await createCanonicalTemporaryRoot("awesome-product-");
       temporary.push(root);
       const home = join(root, "home");
       const workspace = join(root, "workspace");
@@ -555,6 +618,7 @@ function applicationState(threadId: string) {
     workspace: { display_path: "E:/awesome" },
     workspace_trusted: true,
     current_thread_id: threadId,
+    model_catalog: freshModelCatalog(),
     model_identity: {
       provider: "deepseek",
       configured_model: "deepseek/deepseek-v4-flash",
@@ -619,7 +683,7 @@ function entry(
     kind,
     content,
     ...(kind === "user_message" ? { client_message_id: "client_old" } : {}),
-    metadata: {},
+    metadata: kind === "assistant_message" ? { citations: [] } : {},
     created_at: "2026-07-13T00:00:00Z",
   };
 }

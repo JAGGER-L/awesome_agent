@@ -1,11 +1,12 @@
-# 私有 Core/TUI protocol v3
+# 私有 Core/TUI protocol v4
 
 Awesome 的 Ink 进程与其唯一的 Python Core 子进程通过私有 stdio 使用 newline-delimited
 JSON-RPC 2.0 通信。该 protocol 是内部组件边界，不是远程 API：它没有网络 listener、
 authentication scheme、compatibility proxy，也不承诺第三方客户端可以独立混用不同版本。
 
-Protocol 版本 **3** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.3.0**。Event
-envelope 有独立版本 **1**。
+Protocol 版本 **4** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.3.0**。Event
+envelope 有独立版本 **1**。两个 contract identifier 都来自
+`contract-versions.json`；产品值仍来自 `VERSION`。
 
 ## 进程与传输
 
@@ -28,7 +29,7 @@ envelope 有独立版本 **1**。
 ```text
 Ink                     Protocol Host              Application
  |                            |                          |
- |-- initialize(v3, exact) -->|                          |
+ |-- initialize(v4, exact) -->|                          |
  |                            |------- initialize ------>|
  |                            |<-- ApplicationResult ----|
  |<---- JSON-RPC response ----|                          |
@@ -75,7 +76,8 @@ list/read pagination 字段和 credential `api_key` 会显式拒绝 null。
 
 ## 握手状态机
 
-Host 从 `UNINITIALIZED` 开始。`initialize` 必须使用：
+Application 的 `ApplicationBootstrap` 从 `UNINITIALIZED` 开始。Host 没有独立的 bootstrap
+phase；它会查询 Application admission，并把拒绝转换为既有握手错误。`initialize` 必须使用：
 
 ```json
 {
@@ -83,7 +85,7 @@ Host 从 `UNINITIALIZED` 开始。`initialize` 必须使用：
   "id": "init-1",
   "method": "initialize",
   "params": {
-    "protocol_version": 3,
+    "protocol_version": 4,
     "client_name": "awesome",
     "client_version": "1.3.0"
   }
@@ -91,7 +93,7 @@ Host 从 `UNINITIALIZED` 开始。`initialize` 必须使用：
 ```
 
 Protocol 不匹配返回产品错误 `protocol_version_incompatible`。`client_name` 不是 `awesome`，
-或产品版本与 Core 不相等时，返回 `client_version_incompatible`。因此，即使 v2 客户端的包版本
+或产品版本与 Core 不相等时，返回 `client_version_incompatible`。因此，即使 v3 客户端的包版本
 碰巧与 Core 相同，也会明确失败。
 
 成功的 `InitializeResult` 包含产品/protocol 版本、session ID、Workspace 展示信息、
@@ -100,16 +102,28 @@ capability 和一种状态：
 | 状态 | 含义 | 下一步操作 |
 | --- | --- | --- |
 | `ready` | Workspace 和状态已激活。 | 允许普通 method。 |
-| `trust_required` | 由仓库控制的输入尚未获得信任。 | 解决提供的 interaction；`trust` 会让此 Host 进入 ready。 |
+| `trust_required` | 由仓库控制的输入尚未获得信任。 | 解决提供的 interaction；`trust` 会让 Application 进入 ready。 |
 | `state_reset_required` | Application 状态早于 schema 7。 | 解决 reset/deny；reset 后再次 initialize。 |
 
 当前 capability 是 `threads`、`turns`、`direct_commands`、`commands`、`tools`、`skills`、
-`mcp`、`local_memory` 和 `mem0_cloud`。
+`mcp`、`local_memory`、`mem0_cloud`、`web` 和 `citations`。
+
+Host 绝不会通过解析序列化 result payload 来推进 readiness；类型化 initialize 与 interaction
+结果会先更新 Application；该路径属于 Protocol v4 wire contract。
 
 Ready 前，普通 request 会收到 JSON-RPC `-32002`，diagnostic 为 `server_not_initialized` 或
-`server_not_ready`。Initialize 运行期间，第二次 initialize 会收到 `initialization_in_progress`。
-等待期间允许匹配 bootstrap 的 `interaction.respond`。`operation.cancel` 和 `shutdown` 是紧急
-control，在 ready 前仍然允许。
+`server_not_ready`。有意保留的例外是 `skill.list`、`skill.install` 与 `skill.remove`：三者都
+只在 Application 恰好处于 `UNINITIALIZED` 时准入。Application 会为请求保留一个互斥的
+pre-initialize transition；该 transition 活动期间，另一个 Skill 包请求或 `initialize` 会收到
+`preinitialize_operation_in_progress`。请求完成不会调用 `initialize`，也不会推进 bootstrap
+phase；Application 仍处于 `UNINITIALIZED`。
+
+一旦 initialization 已开始，或 Application 已进入任何后续 phase，三个 Skill 包 method 都会
+收到 `skill_management_requires_uninitialized`。因此，私有 client 可以在同一个 Core 上依次
+运行包 method，再调用 initialize；初始化会发现变更后的 User 包。这不会热更新已经初始化的
+Session 所持有的不可变 catalog。Initialize 运行期间，第二次 initialize 会收到
+`initialization_in_progress`。等待期间允许匹配 bootstrap 的 `interaction.respond`。
+`operation.cancel` 和 `shutdown` 是紧急 control，在 ready 前仍然允许。
 
 ## Method catalog
 
@@ -119,38 +133,74 @@ Unicode string 长度。
 | Method | 严格 params | 成功 value |
 | --- | --- | --- |
 | `initialize` | `protocol_version`；1–128 的 `client_name`；1–64 的 `client_version` | `InitializeResult` |
+| `skill.list` | `{}` | `{ "skills": [{ "name": string, "description": string }] }`；最多 512 个唯一且按名称排序的条目 |
+| `skill.install` | 1–4,096 的 `source_path`，不得有首尾空白、NUL、CR 或 LF；可选严格 Boolean `replace`，默认 false | `{ "name": string, "status": "installed" | "replaced" }`；name 是规范名称 |
+| `skill.remove` | 匹配 `[a-z][a-z0-9-]{0,63}` 的规范 `name` | `{ "name": string, "status": "removed" }` |
 | `application.getState` | `{}` | 当前 `ApplicationState` snapshot |
 | `thread.list` | 可选 1–1,024 的 `cursor`；`limit` 为 1–200，默认 50 | Thread、`has_more`、可选 next cursor |
+| `thread.search` | trim 后 1–200 的 `query`；可选 1–1,024 的 `cursor`；`limit` 为 1–50，默认 50 | 与 `thread.list` 相同的 `ThreadListResult` |
 | `thread.read` | 1–128 的 `thread_id`；可选 `before_sequence >= 1`；`limit` 为 1–500，默认 100 | Thread view、ChangeSet、反向 pagination marker |
 | `turn.submit` | `thread_id`；1–200,000 的 `content`；匹配 `client_[A-Za-z0-9_-]+` 且最多 128 的 `client_message_id` | Operation、Thread、Turn 和 client-message ID |
-| `direct.execute` | `thread_id`；transport 接受 1–30,000 的 `command`；委托的 `execute` 工具最多接受 8,000 | Operation 和 Thread ID |
+| `direct.execute` | `thread_id`；`command` 为 1–8,000，与委托的 `execute` 工具一致 | Operation 和 Thread ID |
 | `command.execute` | `name`；可选 string array `arguments` | 一个有类型的 `CommandOutcome` |
 | `provider.credential.set` | 见下文 | Provider、status、可选 selected source、diagnostic code |
 | `interaction.respond` | 1–128 的 `interaction_id`；`decision` enum | Accepted flag 和 status |
 | `operation.cancel` | 1–128 的 `operation_id` | Operation ID 以及是否请求了 cancellation |
 | `shutdown` | `{}` | `{ "stopped": true }` |
 
-`direct.execute` 当前会在验证委托的 `execute` 参数之前预留并返回 Operation。因此，8,001–
-30,000 个字符的命令会通过 transport model、收到 `OperationAccepted`，然后在没有启动进程的
-情况下以 `invalid_arguments` 异步结束。30,000/8,000 的分裂边界是已知契约缺口；调用方应
-保持在 8,000 个字符以内。
+三个 `skill.*` method 是一次性 `awesome skills` CLI 的私有包管理支持，不是 Agent tool。它们
+不会创建 Thread 或 Turn，也不会构建 Workspace Runtime。其 phase 与 concurrency 规则属于
+bootstrap admission，不是第二套由 Host 持有的状态机。
+
+`direct.execute` 会在预留 Operation 前执行与委托 `execute` 工具相同的 8,000 字符边界。
+超限命令会作为 invalid params 同步拒绝，且绝不会启动进程。
 
 ### `application.getState`
 
-Snapshot 包含 initialization/session/workspace identity 与 trust、已选 Thread、model identity、
-Thinking/Skill/permission mode、活动 operation 与 pending interaction ID、配置有效性/diagnostic、
-secret presence 与 credential source 状态、Memory/MCP summary、usage，以及结构化
-workspace-instruction diagnostic。Secret value 从来不属于 state。
+Snapshot 包含 initialization/session/workspace identity 与 trust、已选 Thread、model catalog
+与 model identity、Thinking/Skill/permission mode、活动 operation 与 pending interaction ID、
+配置有效性/diagnostic、secret presence 与 credential source 状态、Memory/MCP summary、
+usage，以及结构化 workspace-instruction diagnostic。Secret value 从来不属于 state。
+
+`model_catalog` 是静态、提供商中立的
+`ModelCatalog -> ProviderDescriptor -> ModelProfile` 目录在 Protocol v4 上的 projection。
+Provider descriptor 包含 `id`、`credential_id`、`supported_regions`、可选
+`default_region` 及其 model profile。Model profile 包含 `id`、`context_limit`、
+`supports_tools`、`supports_reasoning` 和 `is_default`。Provider 与 model ID 唯一，每个
+model 都使用所属 Provider 前缀，且每个 Provider 恰好有一个 catalog 默认项。当前值包含
+DeepSeek、Kimi 和四个模型；Tavily Web Provider selection data 留在独立的
+Web/configuration 边界，绝不会出现在这里。
+
+静态 catalog 与 `provider_credentials`、`model_identity` 不同：credential 存在性/来源、
+已配置默认选择、活动 Thread 选择和 Kimi region 选择仍是动态的 Application/configuration
+事实。每个 model Provider 的 `credential_id` 都有匹配的 credential status，且
+`model_identity` 中的所有 ID 都必须能在 catalog 中解析。
+
+TUI 会校验该 snapshot，并从 `model_catalog` 与 `provider_credentials` 推导 startup 和
+provider setup；它没有复制 model/Provider 枚举。`/model` choice 是 Application 从同一
+catalog 生成的 `CommandSelection`，TUI 只做通用渲染。
 
 `workspace_instruction_diagnostic` 独立于 `configuration_valid`。例如，超大的 `AGENTS.md`
 可以被忽略并发出 warning，而不会使其他方面有效的 YAML 配置不可用。
 
 ### Pagination
 
-`thread.list` 使用不透明 cursor；客户端不得解码或合成它。`thread.read` 使用
+`thread.list` 使用不透明 cursor；客户端不得解码或合成它。`thread.search` 会 trim query，
+只搜索活动 Workspace，并按 `updated_at DESC, id DESC` 排序。其不透明 cursor 通过 hash
+绑定该 Workspace 与规范化 query；换 scope 重放会失败，且 cursor 不携带明文 workspace key。
+搜索对 Thread 标题与所有持久 transcript entry 内容执行 ASCII 大小写不敏感的字面
+substring operation。它排除 ToolActivity、summary、checkpoint 与 metadata，也不提供 FTS、
+分词、snippet、relevance ranking 或完整 Unicode case folding。每个 page query 都受
+5,000,000 SQLite VM-op scan budget 限制；预算耗尽时返回既有的 `result_too_large` Product
+error，client 应缩小 query。RPC 与最多显示 50 条的 `/search` picker 不同，仍可通过
+`has_more` 和 `next_cursor` 进行 keyset pagination。`thread.read` 使用
 `before_sequence` 向后分页，并在存在更多条目时返回 `next_before_sequence`。显式 null 的
 pagination 字段无效，因此“不提供”只有一种无歧义 wire 表示。Application 会动态缩小请求的
 page，直到编码结果符合 900 KiB 预算，并为被省略的条目保留 `next_before_sequence`。
+
+Assistant entry metadata 包含有序 `citations` 数组。每个严格 source 包含 `id`（`S1...`）、
+有界单行 `title` 与绝对 HTTPS `url`；一个 Turn 内 ID 连续且 URL 唯一。Turn budget 和 usage
+还包含非负 `web_requests`，其配置硬上限为八。
 
 ### Turn 与 direct 准入
 
@@ -171,10 +221,30 @@ Params 是封闭的 `CommandIntent`：
 {"name":"mcp","arguments":["status","repository-index"]}
 ```
 
-通常只有 Application 拥有的 21 个名称通过此 method 发送。Ink 在本地拥有 `help`、`theme`、
+通常只有 Application 拥有的 26 个名称通过此 method 发送。Ink 在本地拥有 `help`、`theme`、
 `copy` 和 `quit`。`CommandOutcome` 恰好包含一个分支：有类型的 `result`、有类型的
 `interaction` 或稳定的 command `error`。精确语法和 foreground snapshot 例外见
 [Slash Commands](commands.zh-CN.md)。
+
+Protocol v4 的每个 Thread projection 都有必需且可空的 `lineage` 字段。根 Thread 的值为
+`null`；具有一个直接父级的 Thread 则使用严格 object，其中包含 `kind`（`fork` 或
+`retry`）、`source_thread_id` 与 `source_turn_id`。该字段只记录来源；client 不得据此
+推断存在共享 transcript DAG，也不能通过它读取历史。
+
+`thread_transition` 携带一份权威 Application/Thread snapshot。其 `reason` 为 `new`、
+`resume` 或 `fork`：`new` 要求 lineage 为 null，`fork` 要求 fork lineage，`resume` 可以
+选择根 Thread 或物化 Thread。reason 为 `retry` 的普通 transition 无效。Retry 改为返回
+严格的组合 `thread_retry` payload：一份 reason 与 lineage 都为 retry 的 transition，以及
+包含非空 `operation_id`、`thread_id`、`turn_id` 和 `client_message_id` 的 `operation`。
+Transition Thread 必须等于 Operation Thread，且 Operation Turn 必须已存在于该 transition
+中。这一原子 result 可以防止界面安装新 Thread 后却不知道它所拥有的前台 Operation。
+
+`thread_export` command result 仅包含 `kind`、`thread_id`、1–1,000 的 `path`、`format`
+（`markdown` 或 `json`）、`write_status`（`created`、`updated` 或 `unchanged`）、
+`byte_count`，以及可选的 `change_set_id`。创建或更新导出必须带 ChangeSet ID；未变化导出
+禁止携带该字段。此 payload 不携带导出内容、workspace identity 或内部 transcript metadata。
+导出输出本身限制为 5 MiB；path 在规范化后、mutation 前执行长度检查。失败且没有
+reconciliation file evidence 的尝试不会发出空 ChangeSet result。
 
 `/tools` 结果不分页。Catalog 准入会执行自己的聚合边界；如果其他 producer 仍破坏该不变量，
 transport 的最终字节检查会返回 `result_too_large`，而不是发送无效 frame。
@@ -193,12 +263,12 @@ transport 的最终字节检查会返回 `result_too_large`，而不是发送无
 
 只有 Core 能报告已选择的 credential source 时，result 才包含 `source`。成功保存后通常为
 `awesome`；invalid、save-unverified confirmation 或 delete 结果可能没有已选择 source，此时
-会省略该字段。显式的 `"source": null` 不是合法的 v3 result。
+会省略该字段。显式的 `"source": null` 不是合法的 v4 result。
 
 ### `interaction.respond`
 
 Decision 值为 `trust`、`reset_state`、`allow_once`、`allow_thread_writes`、
-`enable_full_access`、`retry`、`abort` 和 `deny`。Interaction kind 和公布的 choice 决定哪些值
+`allow_thread_network`、`enable_full_access`、`retry`、`abort` 和 `deny`。Interaction kind 和公布的 choice 决定哪些值
 有效。Core 会重新验证 pending interaction 的 generation，以及它必需的 Thread/Turn/
 operation/permission binding。陈旧响应不会修改当前权限。
 
@@ -206,10 +276,12 @@ operation/permission binding。陈旧响应不会修改当前权限。
 
 Cancel 是 best-effort 且针对特定 identity。True result 表示取消在匹配 Operation 仍可取消
 时已经传递，其终态为 `operation.cancelled`。False 也包括未知 ID、已经进入 cancelling 的
-Operation，或 completed/failed outcome 已越过 commit point 的 Operation。Commit point 之后
-的取消不能重写持久化 outcome；系统会继续发布原来的 completed/failed terminal event。
-Handler/process/MCP cleanup 和 terminal publication 均有界，之后继续传播 commit 前的原始
-cancellation。
+Operation，以及处于 `committing` 或终态的 Operation。Commit boundary 之后的取消不能重写
+持久化 outcome。已经准入的 durable write 会先等到明确的 COMMIT 或 ROLLBACK，再重新抛出
+caller 的第一次 cancellation；shutdown 也会等待同一边界。系统会继续发布原来的
+completed/failed terminal event。本地 activity、transcript、ChangeSet 和 checkpoint
+finalization 会继续持有 Operation lease，直到结果明确；process/MCP cleanup 与 best-effort
+terminal publication 仍有界。
 
 Shutdown 是紧急操作。有效 request 会先取消其他 background request、阻止新 foreground
 lease、取消/等待活动 operation 和 mutation、关闭 MCP 与其他资源，然后返回。有效 shutdown
@@ -254,7 +326,7 @@ diagnostic。
 
 客户端使用 `retryable` flag 和当前 state 判断是否适合重试，不会匹配 message 字符串。
 
-在 Protocol v3 中，Application 级 `state_unavailable` error 可重试，并携带有界的
+在 Protocol v4 中，Application 级 `state_unavailable` error 可重试，并携带有界的
 `state_directory` metadata。它与内置 Memory tool 的 `ToolOutput` 中不可重试的
 `state_unavailable` 不同；客户端不能仅按 code 字符串把两个 envelope 归一化。
 
@@ -310,7 +382,7 @@ event 要求 operation ID；Turn lifecycle event 要求 Thread 和 Turn ID。
 | Provider retry | `provider.retrying` | attempt 2–7、maximum 1–7、delay 0–30 秒、error code |
 | Tool | `tool.started`、`.completed`、`.failed`、`.cancelled` | call/name/verb/target；终态 outcome、summary/detail、duration、可选 error code |
 | Context | `context.prepared`、`context.compressed` | source count 和 estimated token |
-| Usage | `usage.updated` | 非负 input/output/reasoning/cache token counter |
+| Usage | `usage.updated` | 非负 input/output/reasoning/cache token 与 Web-request counter |
 | Memory | `memory.status` | `local` 或 `external`、enabled flag、status |
 | Interaction | `interaction.required`、`interaction.resolved` | 绑定的 ID/kind/prompt/operation/target/capability/choice 或 decision |
 | Warning | `warning` | 稳定 code 和有界 message |
@@ -320,6 +392,13 @@ Executor 同样为每次调用终结一条 ToolActivity 和一个 terminal tool 
 sequence 和 correlation ID 渲染，而不能假定并发 request 之间 response/event 的到达顺序。
 尤其是，被接受的 Turn 或 Direct command 的 `operation.started` 会先于 acceptance response，
 后续 event 也可能在该 response 被处理前到达。
+
+`thread_retry` 也遵循相同顺序，但在组合 command response 安装前，其 Thread identity 尚不
+存在于界面。Protocol v4 界面因此会在发出命令前打开本地 retry gate，按 sequence 缓存
+event，安装返回的 transition，把新 generation 绑定到返回的 Operation/Thread/Turn
+identity，再重放缓存。Gate 最多接受 1,024 个 event 和 4 MiB 编码内容。容量或 identity
+违规属于 protocol desynchronization，必须 fail closed；不能仅因为 event 先到就把它
+渲染到来源 Thread。
 
 ## 并发与背压
 
@@ -334,7 +413,7 @@ shutdown。只有命令契约明确允许时，snapshot command 才能在 Operat
 
 ## Fixture 与兼容性测试
 
-`protocol/fixtures/v3/` 是跨语言 source of truth。它包含有效和无效 method、command result、
+`protocol/fixtures/v4/` 是跨语言 source of truth。它包含有效和无效 method、command result、
 event、产品失败，以及记录 file hash、method name、event name、产品版本和 protocol 版本的
 manifest。Python Pydantic model 与 TUI 的严格 TypeScript/Zod schema 都会验证这些 fixture。
 

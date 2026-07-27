@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import empty_checkpoint
+from pydantic import JsonValue
 
 from awesome_agent.agent import new_agent_state
+from awesome_agent.core.citations import Citation
+from awesome_agent.core.tools import ToolResult, ToolStatus
 from awesome_agent.storage.checkpoints import (
     CheckpointCorrupt,
     LangGraphCheckpointStore,
@@ -54,6 +57,23 @@ async def test_checkpoint_store_reads_valid_state_rejects_corrupt_and_deletes(
         model="deepseek/deepseek-v4-flash",
         thinking_enabled=False,
     )
+    citation = Citation(
+        id="S1",
+        title="Checkpoint source",
+        url="https://example.com/source",
+    )
+    state["tool_results"] = [
+        cast(
+            dict[str, JsonValue],
+            ToolResult(
+                call_id="call_1",
+                tool_name="read_file",
+                status=ToolStatus.SUCCESS,
+                content="bounded",
+                citations=(citation,),
+            ).model_dump(mode="json"),
+        )
+    ]
     channel_values: dict[str, Any] = dict(state)
     channel_values["branch:to:call_model"] = None
     valid["channel_values"] = channel_values
@@ -88,7 +108,16 @@ async def test_checkpoint_store_reads_valid_state_rejects_corrupt_and_deletes(
         )
         store = LangGraphCheckpointStore(saver)
 
-        assert await store.latest_state(valid_id) == state
+        restored = await store.latest_state(valid_id)
+        assert restored == state
+        assert restored is not None
+        [restored_result] = restored["tool_results"]
+        [restored_citation] = ToolResult.model_validate(restored_result).citations
+        assert (
+            restored_citation.id,
+            restored_citation.title,
+            restored_citation.url,
+        ) == (citation.id, citation.title, citation.url)
         with pytest.raises(CheckpointCorrupt):
             await store.latest_state(corrupt_id)
         with pytest.raises(CheckpointCorrupt):

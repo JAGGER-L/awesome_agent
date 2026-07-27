@@ -15,6 +15,7 @@ function page(): MethodValue["thread.read"] {
         title_source: "automatic",
         thinking_enabled: false,
         skill_mode: "auto",
+        lineage: null,
         created_at: now,
         updated_at: now,
       },
@@ -35,7 +36,15 @@ function page(): MethodValue["thread.read"] {
           sequence: 2,
           kind: "assistant_message",
           content: "Done",
-          metadata: {},
+          metadata: {
+            citations: [
+              {
+                id: "S1",
+                title: "Primary source",
+                url: "https://example.com/source",
+              },
+            ],
+          },
           created_at: now,
         },
         {
@@ -123,6 +132,10 @@ describe("hydrateThreadPage", () => {
     expect(projection.blocks[3]).toMatchObject({
       kind: "change",
       changes: [expect.objectContaining({ path: "src/a.py" })],
+    });
+    expect(projection.blocks[4]).toMatchObject({
+      kind: "assistant",
+      citations: [expect.objectContaining({ id: "S1" })],
     });
     expect(projection.blocks[6]).toMatchObject({
       kind: "tools",

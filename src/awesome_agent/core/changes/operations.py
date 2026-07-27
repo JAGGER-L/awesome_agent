@@ -79,8 +79,8 @@ class ChangeOperations:
         self._workspace = workspace
         self._analyzer = analyzer or ChangeAnalyzer(store, blobs, workspace)
 
-    def _get(self, change_set_id: str) -> ChangeSet:
-        change_set = self._store.get(change_set_id)
+    async def _get(self, change_set_id: str) -> ChangeSet:
+        change_set = await self._store.get(change_set_id)
         if change_set is None:
             raise ChangeSetNotFound(change_set_id)
         if change_set.workspace_key != self._workspace.key:
@@ -123,8 +123,8 @@ class ChangeOperations:
             )
         return NodeSnapshot(node_type, content, mode)
 
-    def diff(self, change_set_id: str) -> str:
-        return self._analyzer.analyze(change_set_id).diff
+    async def diff(self, change_set_id: str) -> str:
+        return (await self._analyzer.analyze(change_set_id)).diff
 
     def _pending(
         self,
@@ -211,7 +211,7 @@ class ChangeOperations:
             )
         return prepared
 
-    def _rollback(
+    async def _rollback(
         self,
         tree: WorkspaceTreeTransaction,
         prepared: list[_PreparedRestore],
@@ -233,18 +233,18 @@ class ChangeOperations:
             return False
         try:
             for item in prepared:
-                self._store.delete_pending(item.pending.id)
+                await self._store.delete_pending(item.pending.id)
         except Exception:
             return False
         return True
 
-    def _operate(
+    async def _operate(
         self,
         change_set_id: str,
         *,
         undo: bool,
     ) -> ChangeOperationResult:
-        change_set = self._get(change_set_id)
+        change_set = await self._get(change_set_id)
         expected_lifecycle = ChangeLifecycle.APPLIED if undo else ChangeLifecycle.UNDONE
         target_lifecycle = ChangeLifecycle.UNDONE if undo else ChangeLifecycle.APPLIED
         if change_set.lifecycle is not expected_lifecycle:
@@ -268,7 +268,7 @@ class ChangeOperations:
                         undo=undo,
                     )
                     for item in prepared:
-                        self._store.save_pending(item.pending)
+                        await self._store.save_pending(item.pending)
                     for item in prepared:
                         actual = tree.restore(item.target, item.desired)
                         if not snapshots_match(actual, item.desired):
@@ -280,14 +280,14 @@ class ChangeOperations:
                     updated = change_set.model_copy(
                         update={"lifecycle": target_lifecycle}
                     )
-                    self._store.save(updated)
+                    await self._store.save(updated)
                     committed = True
                     for item in prepared:
-                        self._store.delete_pending(item.pending.id)
+                        await self._store.delete_pending(item.pending.id)
                 except Exception:
                     if prepared and not committed:
                         try:
-                            persisted = self._store.get(change_set.id)
+                            persisted = await self._store.get(change_set.id)
                         except Exception:
                             persisted = None
                         if (
@@ -299,7 +299,7 @@ class ChangeOperations:
                             persisted is not None
                             and persisted.lifecycle is expected_lifecycle
                         ):
-                            self._rollback(tree, prepared, applied)
+                            await self._rollback(tree, prepared, applied)
                     raise
         except (MutationTargetChanged, UnsafeWorkspacePath, OSError) as error:
             raise ChangeConflict(
@@ -317,8 +317,8 @@ class ChangeOperations:
             warning=warning,
         )
 
-    def undo(self, change_set_id: str) -> ChangeOperationResult:
-        return self._operate(change_set_id, undo=True)
+    async def undo(self, change_set_id: str) -> ChangeOperationResult:
+        return await self._operate(change_set_id, undo=True)
 
-    def redo(self, change_set_id: str) -> ChangeOperationResult:
-        return self._operate(change_set_id, undo=False)
+    async def redo(self, change_set_id: str) -> ChangeOperationResult:
+        return await self._operate(change_set_id, undo=False)

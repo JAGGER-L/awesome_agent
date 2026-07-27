@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from awesome_agent.agent import AgentState
 from awesome_agent.conversation import UsageSummary
+from awesome_agent.core.citations import Citation
 
 
 class ObservedTurnFacts(BaseModel):
@@ -11,6 +12,7 @@ class ObservedTurnFacts(BaseModel):
 
     usage: UsageSummary = Field(default_factory=UsageSummary)
     context_manifest: tuple[dict[str, JsonValue], ...] = ()
+    citations: tuple[Citation, ...] = Field(default=(), max_length=128)
 
 
 def observed_turn_facts(state: AgentState | None) -> ObservedTurnFacts:
@@ -28,7 +30,9 @@ def observed_turn_facts(state: AgentState | None) -> ObservedTurnFacts:
             tool_calls=state["tool_calls"],
             provider_retries=state["provider_retries"],
             compressions=state["compressions"],
+            web_requests=state["web_requests"],
             active_execution_seconds=state["active_execution_seconds"],
         ),
         context_manifest=tuple(state["context_manifest"]),
+        citations=tuple(Citation.model_validate(item) for item in state["citations"]),
     )

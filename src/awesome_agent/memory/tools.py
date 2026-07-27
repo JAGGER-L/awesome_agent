@@ -3,22 +3,29 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field, field_validator
 
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
 )
-from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolExecutionOrigin,
+    ToolInvocationDescription,
     ToolOutput,
     ToolSpec,
 )
 from awesome_agent.core.tools.errors import ExpectedToolFailure
-from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
+from awesome_agent.core.tools.registry import (
+    RegisteredTool,
+    ToolAdmitter,
+    ToolRegistry,
+    ToolReplaySafety,
+)
 from awesome_agent.memory.models import (
     MemoryMutationResult,
     MemoryMutationStatus,
@@ -35,16 +42,22 @@ MEMORY_TOOL_NAMES = (
 _MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS = 23.0
 
 
-class MemoryListArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _MemoryArguments(ToolArguments):
+    scope: MemoryScope = Field(strict=False)
 
-    scope: MemoryScope
+    @field_validator("scope", mode="before")
+    @classmethod
+    def validate_scope_type(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError("memory scope must be a string")
+        return value
 
 
-class MemoryAddArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class MemoryListArguments(_MemoryArguments):
+    pass
 
-    scope: MemoryScope
+
+class MemoryAddArguments(_MemoryArguments):
     content: str = Field(min_length=1, max_length=2_000)
     expected_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -53,10 +66,7 @@ class MemoryReplaceArguments(MemoryAddArguments):
     entry_id: str = Field(pattern=r"^memory_[a-f0-9]{32}$")
 
 
-class MemoryRemoveArguments(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    scope: MemoryScope
+class MemoryRemoveArguments(_MemoryArguments):
     entry_id: str = Field(pattern=r"^memory_[a-f0-9]{32}$")
     expected_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -91,6 +101,8 @@ def validate_local_memory_tools(
 def _registered_local_memory_tools(
     service: LocalMemoryService,
 ) -> tuple[RegisteredTool, ...]:
+    read_admit = _memory_admitter(service, mutation=False)
+    mutation_admit = _memory_admitter(service, mutation=True)
     return (
         RegisteredTool(
             spec=ToolSpec(
@@ -105,6 +117,9 @@ def _registered_local_memory_tools(
             ),
             input_model=MemoryListArguments,
             handler=_list_handler(service),
+            describe=_memory_describer("List Memory", "list"),
+            admit=read_admit,
+            replay_safety=ToolReplaySafety.REPLAYABLE,
         ),
         RegisteredTool(
             spec=ToolSpec(
@@ -120,6 +135,9 @@ def _registered_local_memory_tools(
             ),
             input_model=MemoryAddArguments,
             handler=_add_handler(service),
+            describe=_memory_describer("Add Memory", "add"),
+            admit=mutation_admit,
+            replay_safety=ToolReplaySafety.REPLAYABLE,
             cancellation_grace_seconds=_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS,
         ),
         RegisteredTool(
@@ -136,6 +154,13 @@ def _registered_local_memory_tools(
             ),
             input_model=MemoryReplaceArguments,
             handler=_replace_handler(service),
+            describe=_memory_describer(
+                "Replace Memory",
+                "replace",
+                target_field="entry_id",
+            ),
+            admit=mutation_admit,
+            replay_safety=ToolReplaySafety.REPLAYABLE,
             cancellation_grace_seconds=_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS,
         ),
         RegisteredTool(
@@ -152,9 +177,54 @@ def _registered_local_memory_tools(
             ),
             input_model=MemoryRemoveArguments,
             handler=_remove_handler(service),
+            describe=_memory_describer(
+                "Remove Memory",
+                "remove",
+                target_field="entry_id",
+            ),
+            admit=mutation_admit,
+            replay_safety=ToolReplaySafety.REPLAYABLE,
             cancellation_grace_seconds=_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS,
         ),
     )
+
+
+def _memory_admitter(
+    service: LocalMemoryService,
+    *,
+    mutation: bool,
+) -> ToolAdmitter:
+    def admit(arguments: BaseModel, context: ToolExecutionContext) -> None:
+        del arguments
+        if mutation:
+            _require_mutation_context(service, context)
+        else:
+            _require_workspace(service, context)
+
+    return admit
+
+
+def _memory_describer(
+    verb: str,
+    operation: str,
+    *,
+    target_field: str | None = None,
+) -> Callable[[BaseModel], ToolInvocationDescription]:
+    def describe(arguments: BaseModel) -> ToolInvocationDescription:
+        if target_field is None:
+            scope = getattr(arguments, "scope", None)
+            target = scope.value if isinstance(scope, MemoryScope) else "memory"
+        else:
+            candidate = getattr(arguments, target_field, None)
+            target = candidate if isinstance(candidate, str) else "memory"
+        return ToolInvocationDescription(
+            verb=verb,
+            display_target=target[:2_000],
+            approval_operation=operation,
+            approval_target=target[:8_000],
+        )
+
+    return describe
 
 
 def _list_handler(service: LocalMemoryService) -> ToolHandler:

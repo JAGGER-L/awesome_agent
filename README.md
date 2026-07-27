@@ -23,14 +23,31 @@ change, and helps verify the result.
 - understand a project and explain how its code fits together;
 - implement, debug, refactor, and test code;
 - show controlled file changes with `/diff`, `/undo`, and `/redo`;
+- search this Workspace's conversation history, then resume a result;
+- fork a conversation at a terminal Turn, or retry that Turn in a fresh fork;
+- export the current Thread as deterministic Markdown or JSON through the
+  Change Journal;
 - continue the latest Thread or resume one by ID;
+- run one Agent Turn non-interactively with deterministic text or JSON output;
 - choose Request approval, Accept edits, or Thread-scoped Full access;
 - extend tasks with Skills, MCP tools, local Memory, and Mem0 Cloud;
+- list, install, replace, and remove validated local User Skill packages without
+  opening an interactive chat;
+- search and extract public Web content through an optional, cited Tavily
+  integration;
 - work with DeepSeek and Kimi models.
 
 Awesome starts with `ls`, `read_file`, `write_file`, `edit_file`, `delete`,
 `glob`, `grep`, and `execute`. Extensions can add more tools; the total is not limited to eight.
 Local memory and Mem0 Cloud are independent and default off.
+
+Web tools also default off. Set `TAVILY_API_KEY`, enable them with `/web on`,
+and approve the first `network.read` request in each Thread. Search queries and
+Fetch URLs are sent to Tavily under its [Privacy
+Policy](https://www.tavily.com/privacy) and [Platform
+Terms](https://www.tavily.com/terms); Awesome assigns stable `S1...` sources
+and carries them into the final answer. Use `/web off` or `/web revoke` to
+disable the integration or clear the active Thread grant.
 
 ## Install
 
@@ -81,13 +98,42 @@ Useful launch options:
 awesome --continue
 awesome --resume
 awesome --resume <thread_id>
+awesome run "Analyze the test failure" --trust-workspace
+awesome skills list
+awesome skills install ./review-api
+awesome skills remove review-api --yes
 awesome --version
 awesome --help
 ```
 
+`awesome run "<prompt>"` is the non-interactive path for scripts. It creates a
+new Thread by default, writes only the final answer to stdout (`--format text`
+or `--format json`), and sends diagnostics to stderr. Use `--thread <id>` to
+target an existing Thread. Trust, permission checks, cancellation, and the same
+private Core/Application lifecycle still apply; an unresolved interaction
+exits without printing a partial answer. See the [CLI reference](docs/reference/cli.md)
+for options and exit codes.
+
+`awesome skills` is the standalone, non-chat package-management path for User
+Skills. Install from a local package directory or ZIP, add `--replace` to
+replace an existing package, and use `remove --yes` for unattended removal.
+Without `--yes`, removal asks for confirmation only in an interactive terminal.
+The official package command is one-shot and closes its private Core. An
+already initialized Awesome Session keeps its immutable Skill catalog, so
+restart that Session before selecting or loading a changed package. See
+[Skills](docs/extensions/skills.md) for the package and safety contract.
+
 If startup finds an unfinished Turn, Awesome asks before continuing it. A
-verified local checkpoint offers Retry first; a shell or MCP call whose outcome
-is uncertain offers Abort first and is never replayed automatically.
+verified local checkpoint offers Retry first only when the pending tool is safe
+to repeat. An uncertain file mutation, shell command, MCP call, or Web request
+offers Abort first and is never replayed automatically.
+
+`/fork [turn_id]` materializes conversation history through a terminal Turn in
+a new Thread. `/retry [turn_id]` materializes the prefix before that Turn, then
+runs its original request again with the Turn's frozen model, Thinking, Skill,
+and budgets. Both commands create independent records rather than a shared
+history graph. They do not copy checkpoints, Tool activity, or ChangeSets;
+retry does not replay old tool calls or undo their side effects.
 
 ## First Task
 
@@ -136,3 +182,10 @@ or hard-link aliases. Bounded process-tree cleanup limits orphaned children but
 does not isolate host execution.
 Process-environment variables and `<AWESOME_HOME>/.env` remain advanced
 configuration options; never put credentials in project files.
+Optional Web search sends its query to Tavily. `web_fetch` sends one public
+HTTPS URL to Tavily, whose cloud service retrieves and extracts that page;
+Awesome Core does not connect to the target site itself. Neither tool inherits
+ambient proxy variables or records query, URL, or result text in structured
+diagnostics. Use `AWESOME_WEB_PROXY_URL` only when an explicit proxy is
+required. Web Fetch is not a browser: it has no Cookie, login, JavaScript, PDF,
+binary, local-fetch, cache, or backend-fallback capability.

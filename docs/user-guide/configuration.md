@@ -5,6 +5,16 @@ small supported configuration surface. It emphasizes safe workflows and
 precedence; the complete schema, defaults, and field constraints live in the
 [configuration reference](../reference/configuration.md).
 
+Web access is independent from the model Provider. It defaults off, always
+reads the Tavily credential from `TAVILY_API_KEY`, and ignores ambient proxy
+variables because its async HTTP client uses `trust_env=False`. Set an explicit
+proxy only with `AWESOME_WEB_PROXY_URL` (or its selected Awesome secret), then
+use `/web on|off|status|revoke`; do not hand-edit Workspace config to enable
+it. Search queries and requested Fetch URLs are sent to Tavily under its
+[Privacy Policy](https://www.tavily.com/privacy) and
+[Platform Terms](https://www.tavily.com/terms). Tavily's cloud service performs
+Fetch extraction; Awesome Core does not connect to the requested target.
+
 ## Prefer Commands for Interactive Choices
 
 For normal use, configure models and credentials from the TUI:
@@ -46,12 +56,13 @@ Workspace configuration is not read until trust is accepted. It cannot select
 a Provider, define credentials, or enable Memory. Its budget values can only
 restrict the user's values; the effective value is the lower of the two.
 
-Trust is currently the only filesystem admission boundary for this particular
-file: unlike `AGENTS.md` and Workspace Skills, the `.awesome/config.yaml` reader
-does not yet use a size-bounded no-follow open with post-open identity checking.
-Do not use a link/reparse point for it, and treat a trusted repository as able
-to supply a large or replaced YAML file. See the
-[reference limitation](../reference/configuration.md#workspace-configuration).
+After trust, `.awesome/config.yaml` is read through the same bounded no-follow
+boundary used for other Workspace-controlled inputs. The reader accepts one
+plain UTF-8 file up to 1 MiB, rejects NUL, links/reparse points, hard links, and
+non-regular nodes, and pins and rechecks directory and file identities. Unsafe,
+replaced, oversized, or invalid YAML fails configuration activation instead of
+being followed, truncated, or partially accepted. See the
+[configuration reference](../reference/configuration.md#workspace-configuration).
 
 ## How a Turn Is Resolved
 
@@ -89,7 +100,7 @@ Thinking and Skill are durable Thread choices changed through `/thinking` and
 A minimal user file can set a model and budgets:
 
 ```yaml
-version: 1
+version: 2
 providers:
   default_model: deepseek/deepseek-v4-flash
   kimi_region: cn
@@ -100,6 +111,11 @@ budgets:
   compressions: 2
   active_execution_seconds: 1800
   total_context_tokens: 262144
+  web_requests: 8
+web:
+  enabled: false
+  provider: tavily
+  blocked_domains: []
 ```
 
 The curated model IDs are:
@@ -134,6 +150,7 @@ version: 1
 budgets:
   model_calls: 24
   active_execution_seconds: 900
+  web_requests: 4
 skills:
   disabled: []
 mcp_servers: []
@@ -150,7 +167,7 @@ content and may be committed.
 ## Defaults and Hard Guardrails
 
 At a glance, the default total context budget is 262,144 Tokens, with 32 model
-calls, 64 tool calls, 2 Provider retries, 2 compressions, and 1,800 seconds of
+calls, 64 tool calls, 2 Provider retries, 2 compressions, 8 Web requests, and 1,800 seconds of
 active execution per Turn. Configuration remains bounded by:
 
 - model calls: 256;
@@ -158,6 +175,7 @@ active execution per Turn. Configuration remains bounded by:
 - active execution: 21,600 seconds;
 - provider retries: 6;
 - compressions: 10.
+- Web requests: 8.
 
 The selected model's real context window may lower the configured context
 total. Core also reserves output capacity and a safety margin before deriving
@@ -225,7 +243,9 @@ Thread and applied to future Turns.
 
 ## Validation and Reload Behavior
 
-Both YAML documents must be mappings with `version: 1`. Unknown keys,
+User YAML must be a mapping with `version: 2`; Workspace YAML remains
+`version: 1`. User version 1 is read compatibly in memory and the first
+supported write upgrades it atomically. Unknown keys,
 duplicate keys, malformed YAML, invalid names, unsupported models, and
 out-of-range budgets are errors. Core does not infer renamed fields.
 

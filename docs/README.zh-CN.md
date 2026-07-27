@@ -72,7 +72,7 @@ Awesome 的文档按照读者要解决的问题组织，而不是照搬 Python �
 - [内置工具](reference/built-in-tools.zh-CN.md)
 - [权限模式](reference/permission-modes.zh-CN.md)
 - [文件与状态](reference/files-and-state.zh-CN.md)
-- [Protocol v3](reference/protocol.zh-CN.md)
+- [Protocol v4](reference/protocol.zh-CN.md)
 
 ### 系统架构
 

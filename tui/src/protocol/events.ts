@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { EVENT_ENVELOPE_VERSION } from "../contract-versions.js";
 import {
   boundedText,
   interactionDecisionSchema,
@@ -112,6 +113,57 @@ function contextPayload<Kind extends "context.prepared" | "context.compressed">(
   });
 }
 
+const interactionRequiredPayloadSchema = z
+  .strictObject({
+    kind: z.literal("interaction.required"),
+    interaction_id: boundedText(1, 128),
+    interaction_kind: z.enum([
+      "workspace_trust",
+      "state_reset",
+      "tool_approval",
+      "full_access_confirmation",
+      "recovery_decision",
+    ]),
+    prompt: boundedText(1, 2_000),
+    operation: boundedText(1, 128),
+    target: boundedText(1, 8_000),
+    capability: boundedText(1, 200)
+      .nullish()
+      .transform((value) => value ?? undefined),
+    choices: z
+      .array(
+        z.strictObject({
+          decision: interactionDecisionSchema,
+          label: boundedText(1, 200),
+          description: boundedText(0, 1_000)
+            .nullish()
+            .transform((value) => value ?? undefined),
+        }),
+      )
+      .min(1)
+      .max(16),
+  })
+  .superRefine((interaction, context) => {
+    if (interaction.capability !== "network.read") return;
+    if (interaction.interaction_kind !== "tool_approval") {
+      context.addIssue({
+        code: "custom",
+        message: "network.read requires a tool approval interaction",
+      });
+    }
+    const decisions = interaction.choices.map((choice) => choice.decision);
+    const expected = ["deny", "allow_once", "allow_thread_network"];
+    if (
+      decisions.length !== expected.length ||
+      decisions.some((decision, index) => decision !== expected[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "network.read choices must be deny, once, then thread",
+      });
+    }
+  });
+
 export const eventPayloadSchema = z.discriminatedUnion("kind", [
   lifecyclePayload("operation.started"),
   lifecyclePayload("operation.completed"),
@@ -157,6 +209,7 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
     reasoning_tokens: boundedInteger,
     cache_read_tokens: boundedInteger,
     cache_write_tokens: boundedInteger,
+    web_requests: boundedInteger,
   }),
   z.strictObject({
     kind: z.literal("memory.status"),
@@ -164,35 +217,7 @@ export const eventPayloadSchema = z.discriminatedUnion("kind", [
     enabled: z.boolean(),
     status: boundedText(1, 128),
   }),
-  z.strictObject({
-    kind: z.literal("interaction.required"),
-    interaction_id: boundedText(1, 128),
-    interaction_kind: z.enum([
-      "workspace_trust",
-      "state_reset",
-      "tool_approval",
-      "full_access_confirmation",
-      "recovery_decision",
-    ]),
-    prompt: boundedText(1, 2_000),
-    operation: boundedText(1, 128),
-    target: boundedText(1, 8_000),
-    capability: boundedText(1, 200)
-      .nullish()
-      .transform((value) => value ?? undefined),
-    choices: z
-      .array(
-        z.strictObject({
-          decision: interactionDecisionSchema,
-          label: boundedText(1, 200),
-          description: boundedText(0, 1_000)
-            .nullish()
-            .transform((value) => value ?? undefined),
-        }),
-      )
-      .min(1)
-      .max(16),
-  }),
+  interactionRequiredPayloadSchema,
   z.strictObject({
     kind: z.literal("interaction.resolved"),
     interaction_id: boundedText(1, 128),
@@ -220,7 +245,7 @@ const turnTypes = new Set<EventType>([
 
 export const eventEnvelopeSchema = z
   .strictObject({
-    version: z.literal(1),
+    version: z.literal(EVENT_ENVELOPE_VERSION),
     event_id: z
       .string()
       .max(128)
@@ -241,6 +266,17 @@ export const eventEnvelopeSchema = z
       context.addIssue({
         code: "custom",
         message: "event_type must match payload kind",
+      });
+    }
+    if (
+      event.payload.kind === "interaction.required" &&
+      event.payload.capability === "network.read" &&
+      (!event.thread_id || !event.turn_id || !event.operation_id)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "network.read approval requires thread, turn, and operation identity",
       });
     }
     if (operationTypes.has(event.event_type) && !event.operation_id) {

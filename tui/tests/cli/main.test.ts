@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CoreSpawnError } from "../../src/core/errors.js";
 import {
   clearCurrentInkFrame,
+  closeHeadlessSurface,
   executeFatalRecoverySelection,
   flushCurrentInkFrame,
   reconnectAndReplaceSurface,
@@ -14,6 +15,7 @@ import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
 import { StartupProductError } from "../../src/surface/startup.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 type ReadyApplication = Extract<
   StartupResult,
@@ -34,6 +36,7 @@ const readyApplication: ReadyApplication = {
   workspace_key: "workspace_1",
   workspace: { display_path: "E:\\workspace" },
   workspace_trusted: true,
+  model_catalog: freshModelCatalog(),
   model_identity: {
     provider: "deepseek",
     configured_model: "deepseek/deepseek-v4-flash",
@@ -96,6 +99,7 @@ const ready: StartupResult = {
           current_model: "deepseek/deepseek-v4-flash",
           thinking_enabled: false,
           skill_mode: "auto",
+          lineage: null,
           created_at: "2026-07-11T00:00:00Z",
           updated_at: "2026-07-11T00:00:00Z",
         },
@@ -113,7 +117,29 @@ function harness(overrides: Partial<CliDependencies> = {}) {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const surface = {
+    request: vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "skill.list") {
+        return { ok: true, value: { skills: [] } };
+      }
+      if (method === "skill.install") {
+        return {
+          ok: true,
+          value: {
+            name: "review",
+            status: params.replace === true ? "replaced" : "installed",
+          },
+        };
+      }
+      return { ok: true, value: { name: params.name, status: "removed" } };
+    }),
     close: vi.fn(async () => undefined),
+    session: {
+      exit: Promise.resolve({
+        code: 0,
+        signal: null,
+        shutdown_requested: true,
+      }),
+    },
   } as unknown as ConnectedSurface;
   const dependencies: CliDependencies = {
     argv: [],
@@ -276,6 +302,267 @@ describe("runCli", () => {
     await expect(runCli(value.dependencies)).resolves.toBe(2);
     expect(value.stderr.join("")).toContain("interactive terminal");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+  });
+
+  it("runs headless without TTY or Ink and closes the same Surface", async () => {
+    const runHeadlessApplication = vi.fn(async (_surface, _intent, io) => {
+      io.writeStdout("durable answer\n");
+      return 0 as const;
+    });
+    const value = harness({
+      argv: ["run", "do the work"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      runHeadlessApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+
+    expect(runHeadlessApplication).toHaveBeenCalledWith(
+      value.surface,
+      expect.objectContaining({
+        kind: "run",
+        prompt: "do the work",
+        target: { kind: "new" },
+      }),
+      expect.objectContaining({
+        writeStdout: expect.any(Function),
+        writeStderr: expect.any(Function),
+      }),
+    );
+    expect(value.dependencies.startApplication).not.toHaveBeenCalled();
+    expect(value.dependencies.renderApplication).not.toHaveBeenCalled();
+    expect(value.surface.close).toHaveBeenCalledOnce();
+    expect(value.stdout.join("")).toBe("durable answer\n");
+  });
+
+  it("runs Skills list before initialize without requiring a TTY or Ink", async () => {
+    const value = harness({
+      argv: ["skills", "list"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+
+    expect(value.surface.request).toHaveBeenCalledWith("skill.list", {});
+    expect(value.dependencies.startApplication).not.toHaveBeenCalled();
+    expect(value.dependencies.renderApplication).not.toHaveBeenCalled();
+    expect(value.surface.close).toHaveBeenCalledOnce();
+    expect(value.stdout.join("")).toBe("No User Skills are installed.\n");
+    expect(value.stderr).toEqual([]);
+    expect(
+      vi.mocked(value.surface.request).mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      vi.mocked(value.surface.close).mock.invocationCallOrder[0] ??
+        Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("refuses non-TTY removal without --yes before starting Core", async () => {
+    const confirmSkillRemoval = vi.fn(async () => true);
+    const value = harness({
+      argv: ["skills", "remove", "review"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      confirmSkillRemoval,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(2);
+
+    expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+    expect(confirmSkillRemoval).not.toHaveBeenCalled();
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toContain("requires --yes");
+  });
+
+  it("rejects --replace without an install source before starting Core", async () => {
+    const value = harness({ argv: ["skills", "install", "--replace"] });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(2);
+
+    expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toContain(
+      "awesome skills install <local-directory-or-zip> [--replace]",
+    );
+  });
+
+  it("treats the default TTY removal response as a clean cancellation", async () => {
+    const confirmSkillRemoval = vi.fn(async () => false);
+    const value = harness({
+      argv: ["skills", "remove", "review"],
+      confirmSkillRemoval,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+
+    expect(confirmSkillRemoval).toHaveBeenCalledWith("review");
+    expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+    expect(value.stdout.join("")).toBe("Skill removal cancelled.\n");
+    expect(value.stderr).toEqual([]);
+  });
+
+  it("allows --yes removal without a TTY and closes Core after the RPC", async () => {
+    const confirmSkillRemoval = vi.fn(async () => false);
+    const value = harness({
+      argv: ["skills", "remove", "review", "--yes"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      confirmSkillRemoval,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+
+    expect(confirmSkillRemoval).not.toHaveBeenCalled();
+    expect(value.surface.request).toHaveBeenCalledWith("skill.remove", {
+      name: "review",
+    });
+    expect(value.surface.close).toHaveBeenCalledOnce();
+    expect(value.stdout.join("")).toContain("Removed Skill review.");
+    expect(value.stderr).toEqual([]);
+  });
+
+  it("reports a completed Skill mutation when Core shutdown cannot be confirmed", async () => {
+    const value = harness({
+      argv: ["skills", "install", "review.zip"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      closeSkillApplication: vi.fn(async () => false),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(1);
+
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toBe(
+      "Installed Skill review. Restart Awesome to use this change.\n" +
+        "Awesome Core did not shut down cleanly.\n",
+    );
+  });
+
+  it("reports a missing Core for non-interactive Skill commands", async () => {
+    const value = harness({
+      argv: ["skills", "list"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      startSurface: vi.fn(async () => {
+        throw new CoreSpawnError(
+          "Unable to spawn Core executable: private-awesome-core",
+        );
+      }),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(2);
+
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toContain("Awesome Core");
+    expect(value.stderr.join("")).not.toContain("private-awesome-core");
+    expect(value.dependencies.startApplication).not.toHaveBeenCalled();
+  });
+
+  it("keeps unresolved headless interaction paths off stdout", async () => {
+    const value = harness({
+      argv: ["run", "do the work"],
+      stdoutIsTTY: false,
+      runHeadlessApplication: vi.fn(async () => 3 as const),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(3);
+
+    expect(value.stdout).toEqual([]);
+    expect(value.surface.close).toHaveBeenCalledOnce();
+  });
+
+  it("suppresses successful output when Core shutdown cannot be confirmed", async () => {
+    const value = harness({
+      argv: ["run", "do the work"],
+      runHeadlessApplication: vi.fn(async (_surface, _intent, io) => {
+        io.writeStdout("must not escape\n");
+        return 0 as const;
+      }),
+      closeHeadlessApplication: vi.fn(async () => false),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(1);
+
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toContain("did not shut down cleanly");
+  });
+
+  it("closes Core after the headless SIGINT path requests cancellation", async () => {
+    const order: string[] = [];
+    const surface = {
+      close: vi.fn(async () => {
+        order.push("shutdown");
+      }),
+      session: {
+        exit: Promise.resolve({
+          code: 0,
+          signal: null,
+          shutdown_requested: true,
+        }),
+      },
+    } as unknown as ConnectedSurface;
+    const value = harness({
+      argv: ["run", "do the work"],
+      startSurface: vi.fn(async () => surface),
+      runHeadlessApplication: vi.fn(async () => {
+        order.push("cancel");
+        return 130 as const;
+      }),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(130);
+
+    expect(order).toEqual(["cancel", "shutdown"]);
+    expect(value.stdout).toEqual([]);
+  });
+
+  it("forces termination when graceful headless close stalls", async () => {
+    const exit = deferred<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      shutdown_requested: boolean;
+    }>();
+    const surface = {
+      close: vi.fn(async () => await new Promise<never>(() => undefined)),
+      session: {
+        exit: exit.promise,
+        terminate: vi.fn(async () => {
+          exit.resolve({
+            code: null,
+            signal: "SIGTERM",
+            shutdown_requested: true,
+          });
+        }),
+      },
+    } as unknown as ConnectedSurface;
+
+    await expect(
+      closeHeadlessSurface(surface, {
+        gracefulTimeoutMs: 2,
+        totalTimeoutMs: 50,
+      }),
+    ).resolves.toBe(true);
+    expect(surface.session.terminate).toHaveBeenCalledOnce();
+  });
+
+  it("returns from headless close when termination and exit both stall", async () => {
+    const never = new Promise<never>(() => undefined);
+    const surface = {
+      close: vi.fn(async () => await never),
+      session: {
+        exit: never,
+        terminate: vi.fn(async () => await never),
+      },
+    } as unknown as ConnectedSurface;
+
+    await expect(
+      closeHeadlessSurface(surface, {
+        gracefulTimeoutMs: 2,
+        totalTimeoutMs: 10,
+      }),
+    ).resolves.toBe(false);
   });
 
   it("rejects Node versions older than 22", async () => {

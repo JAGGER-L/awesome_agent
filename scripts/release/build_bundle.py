@@ -17,6 +17,10 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.release.compatibility_manifest import (
+    CompatibilityManifestError,
+    render_release_compatibility,
+)
 from scripts.release.contracts import (
     MAX_RELEASE_REQUIREMENTS_BYTES,
     ReleaseContractError,
@@ -229,6 +233,10 @@ def assemble_bundle(root: Path, version: str) -> BundleResult:
     wheel = root / "dist" / f"awesome_agent-{version}-py3-none-any.whl"
     _validate_wheel(wheel, version, license_content)
     requirements = _locked_requirements(root)
+    try:
+        compatibility = render_release_compatibility(root, version)
+    except CompatibilityManifestError as error:
+        raise BundleError("release compatibility manifest is invalid") from error
     tui_dist = _tui_dist_files(root)
     tui = root / "tui"
     required = (tui / "package.json", tui / "package-lock.json", tui / "LICENSE")
@@ -246,6 +254,7 @@ def assemble_bundle(root: Path, version: str) -> BundleResult:
     members: dict[str, bytes] = {
         f"{prefix}/LICENSE": license_content,
         f"{prefix}/VERSION": (root / "VERSION").read_bytes(),
+        f"{prefix}/compatibility.json": compatibility,
         f"{prefix}/core/{wheel.name}": wheel.read_bytes(),
         f"{prefix}/core/requirements.lock": requirements,
         f"{prefix}/tui/LICENSE": (tui / "LICENSE").read_bytes(),

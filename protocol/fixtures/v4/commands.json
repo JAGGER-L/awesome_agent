@@ -1,0 +1,124 @@
+{
+  "commands": [
+    {
+      "name": "new",
+      "owner": "application"
+    },
+    {
+      "name": "rename",
+      "owner": "application"
+    },
+    {
+      "name": "resume",
+      "owner": "application"
+    },
+    {
+      "name": "fork",
+      "owner": "application"
+    },
+    {
+      "name": "retry",
+      "owner": "application"
+    },
+    {
+      "name": "search",
+      "owner": "application"
+    },
+    {
+      "name": "export",
+      "owner": "application"
+    },
+    {
+      "name": "context",
+      "owner": "application"
+    },
+    {
+      "name": "compact",
+      "owner": "application"
+    },
+    {
+      "name": "auth",
+      "owner": "application"
+    },
+    {
+      "name": "model",
+      "owner": "application"
+    },
+    {
+      "name": "thinking",
+      "owner": "application"
+    },
+    {
+      "name": "workspace",
+      "owner": "application"
+    },
+    {
+      "name": "diff",
+      "owner": "application"
+    },
+    {
+      "name": "undo",
+      "owner": "application"
+    },
+    {
+      "name": "redo",
+      "owner": "application"
+    },
+    {
+      "name": "tools",
+      "owner": "application"
+    },
+    {
+      "name": "skills",
+      "owner": "application"
+    },
+    {
+      "name": "mcp",
+      "owner": "application"
+    },
+    {
+      "name": "web",
+      "owner": "application"
+    },
+    {
+      "name": "memory",
+      "owner": "application"
+    },
+    {
+      "name": "status",
+      "owner": "application"
+    },
+    {
+      "name": "usage",
+      "owner": "application"
+    },
+    {
+      "name": "doctor",
+      "owner": "application"
+    },
+    {
+      "name": "config",
+      "owner": "application"
+    },
+    {
+      "name": "permissions",
+      "owner": "application"
+    },
+    {
+      "name": "help",
+      "owner": "ink"
+    },
+    {
+      "name": "theme",
+      "owner": "ink"
+    },
+    {
+      "name": "copy",
+      "owner": "ink"
+    },
+    {
+      "name": "quit",
+      "owner": "ink"
+    }
+  ]
+}

@@ -42,6 +42,9 @@ Composer 会去掉前导空白，并按第一个非空白字符路由文本：
 | `/new` | 在当前 Workspace 创建并选择一个新 Thread。 |
 | `/rename <title>` | 为当前 Thread 持久化用户选择的标题。 |
 | `/resume [thread_id]` | 选择或指定当前 Workspace 中之前的 Thread。 |
+| `/fork [turn_id]` | 将截至某个终态 Turn 的历史物化为独立的新 Thread，并选中它。 |
+| `/retry [turn_id]` | 在某个终态 Turn 之前创建分支，并重新运行该 Turn 的请求。 |
+| `/search <query> [thread_id]` | 搜索当前 Workspace 的持久会话历史，再选择或恢复一个结果；多词 query 必须加引号。 |
 | `/thinking [on\|off]` | 检查或设置当前 Thread 未来 Turn 的 Thinking。 |
 | `/model [deepseek\|kimi]` | 为当前 Thread 和用户默认值选择 Provider 与模型。 |
 | `/skills [auto\|off\|name]` | 检查或选择未来 Turn 的 Skill 模式。 |
@@ -49,6 +52,19 @@ Composer 会去掉前导空白，并按第一个非空白字符路由文本：
 新 Thread 接受的第一条自然语言消息会提供一个长度受限的自动标题。`/rename` 要求标题非空，标题过长时会拒绝，而不是静默修改。`/new` 不接受标题参数。
 
 选择 Thread 会恢复其持久消息、Turn、模型、Thinking 和 Skill 选项，同时将 Session 权限重置为 Request approval 并清除临时 grant。之前的 Thread 仍可通过 `/resume` 访问。
+
+未提供 ID 时，`/fork` 与 `/retry` 选择最近的终态 Turn；显式 ID 必须属于当前 Thread
+且已终态。Fork 会把截至该 Turn 的持久会话前缀复制成具有全新身份的记录。Retry 会复制
+目标之前的前缀，追加其用户请求的新副本，再使用目标 Turn 冻结的 Provider、模型、
+Thinking、Skill 和预算启动新 Turn。这些是物理独立的 Thread，而不是共享历史 DAG。
+两条路径都不复制 summary、checkpoint、Tool activity 或 ChangeSet；Retry 不会重放目标
+原有的工具调用，也不会撤销它们已经产生的副作用。
+
+搜索对 Thread 标题以及持久 user、assistant、direct-command transcript 文本执行字面
+substring match。它不是全文或相关性搜索，也绝不会跨越活动 Workspace。例如运行
+`/search "provider retry"` 后选择结果；picker 会保留 query 并追加选中的 Thread ID。它最多
+显示最近更新的 50 条匹配；仍有更早的匹配时会要求缩小 query。搜索若耗尽有界 SQLite scan，
+会返回 `result_too_large`，而不是无界运行。
 
 ## 上下文与检查命令
 
@@ -72,10 +88,18 @@ Composer 会去掉前导空白，并按第一个非空白字符路由文本：
 | 命令 | 作用 |
 | --- | --- |
 | `/diff [change_set_id]` | 渲染最近或指定的已记录文件 delta。 |
+| `/export <workspace-relative-path> [markdown\|json]` | 确定性导出当前 Thread；默认 Markdown。 |
 | `/undo [change_set_id]` | 恢复所选 applied ChangeSet 的已记录文件状态。 |
 | `/redo [change_set_id]` | 重新应用已经成功撤销的 ChangeSet。 |
 
 这些命令使用精确的 ChangeSet 生命周期和冲突检查，不声称能够撤销任意 shell 或 MCP 影响。参见[审查、撤销与重做](changes.zh-CN.md)。
+
+导出使用与受控文件编辑相同的 workspace-safe write 和 Change Journal 路径，因此创建或更新
+的导出可撤销；重复导出未变化内容不会创建 ChangeSet。规范化路径必须为 1–1,000 字符，
+输出上限为 5 MiB，渲染在 event loop 外执行。失败且 reconciliation 后没有文件 evidence 的
+尝试不会发布空 ChangeSet。有引用的 Markdown assistant entry 保留自己的 Sources 区域，
+每个 JSON assistant entry 都有 `citations` list；两种格式均省略内部 workspace identity 与
+metadata。
 
 ## Provider 与凭据命令
 

@@ -139,6 +139,16 @@ class MemoryDistiller:
                     operation="distill",
                 ),
             )
+        except _DistillationFailed as error:
+            return DistillationResult(
+                status=DistillationStatus.WARNING,
+                usage=ModelUsage(provider_retries=error.provider_retries),
+                model_calls=1,
+                diagnostic=Mem0Diagnostic(
+                    code="memory_distillation_failed",
+                    operation="distill",
+                ),
+            )
         except Exception:
             return DistillationResult(
                 status=DistillationStatus.WARNING,
@@ -191,24 +201,44 @@ class MemoryDistiller:
     ) -> ModelTurn:
         completed: list[ModelTurn] = []
         retries = 0
-        async for event in self._gateway.stream(selected_model, request):
-            if isinstance(event, ProviderRetrying):
-                if (
-                    retries >= remaining_provider_retries
-                    or 1 + retries >= remaining_model_calls
-                ):
-                    raise _DistillationBudgetExceeded(retries)
-                retries += 1
-            elif isinstance(event, TurnCompleted):
-                completed.append(event.turn)
-            elif isinstance(event, TurnFailed):
-                raise RuntimeError("memory distillation provider failure")
-        if len(completed) != 1:
-            raise RuntimeError("memory distillation provider protocol")
-        return completed[0]
+        try:
+            async for event in self._gateway.stream(selected_model, request):
+                if isinstance(event, ProviderRetrying):
+                    if (
+                        retries >= remaining_provider_retries
+                        or 1 + retries >= remaining_model_calls
+                    ):
+                        raise _DistillationBudgetExceeded(retries)
+                    retries += 1
+                elif isinstance(event, TurnCompleted):
+                    completed.append(event.turn)
+                elif isinstance(event, TurnFailed):
+                    raise _DistillationFailed(retries)
+            if len(completed) != 1:
+                raise _DistillationFailed(retries)
+            turn = completed[0]
+            if type(turn) is not ModelTurn:
+                raise _DistillationFailed(retries)
+            validated_turn = ModelTurn.model_validate(
+                turn.model_dump(mode="python", warnings="error"),
+                strict=True,
+            )
+            if validated_turn.usage.provider_retries != retries:
+                raise _DistillationFailed(retries)
+            return validated_turn
+        except (_DistillationBudgetExceeded, _DistillationFailed):
+            raise
+        except Exception as error:
+            raise _DistillationFailed(retries) from error
 
 
 class _DistillationBudgetExceeded(RuntimeError):
     def __init__(self, provider_retries: int) -> None:
         self.provider_retries = provider_retries
         super().__init__("memory distillation budget exceeded")
+
+
+class _DistillationFailed(RuntimeError):
+    def __init__(self, provider_retries: int) -> None:
+        self.provider_retries = provider_retries
+        super().__init__("memory distillation failed")

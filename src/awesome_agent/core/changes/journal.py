@@ -77,7 +77,7 @@ class ChangeJournal:
         self._blobs = blobs
         self._workspace = workspace
 
-    def begin(
+    async def begin(
         self,
         *,
         session_id: str,
@@ -99,17 +99,17 @@ class ChangeJournal:
             reversibility=ChangeReversibility.FULL,
             created_at=datetime.now(UTC),
         )
-        self._store.save(change_set)
+        await self._store.save(change_set)
         return change_set
 
-    def _open(self, change_set_id: str) -> ChangeSet:
-        change_set = self._owned(change_set_id)
+    async def _open(self, change_set_id: str) -> ChangeSet:
+        change_set = await self._owned(change_set_id)
         if change_set.lifecycle is not ChangeLifecycle.OPEN:
             raise ChangeLifecycleError("ChangeSet is not open.")
         return change_set
 
-    def _owned(self, change_set_id: str) -> ChangeSet:
-        change_set = self._store.get(change_set_id)
+    async def _owned(self, change_set_id: str) -> ChangeSet:
+        change_set = await self._store.get(change_set_id)
         if change_set is None:
             raise ChangeSetNotFound(change_set_id)
         if change_set.workspace_key != self._workspace.key:
@@ -148,24 +148,24 @@ class ChangeJournal:
         ):
             raise ChangeCapacityExceeded("ChangeSet byte limit exceeded.")
 
-    def _ensure_no_pending(self, change_set_id: str) -> None:
+    async def _ensure_no_pending(self, change_set_id: str) -> None:
         if any(
             pending.change_set_id == change_set_id
-            for pending in self._store.list_pending()
+            for pending in await self._store.list_pending()
         ):
             raise PendingMutationConflict(
                 "ChangeSet has an unresolved pending mutation."
             )
 
-    def preflight_batch(
+    async def preflight_batch(
         self,
         *,
         change_set_id: str,
         additional_nodes: int,
         additional_bytes: int,
     ) -> None:
-        change_set = self._open(change_set_id)
-        self._ensure_no_pending(change_set_id)
+        change_set = await self._open(change_set_id)
+        await self._ensure_no_pending(change_set_id)
         if additional_nodes < 0 or additional_bytes < 0:
             raise ValueError("Capacity additions cannot be negative.")
         if len(change_set.files) + additional_nodes > MAX_CHANGESET_FILES:
@@ -173,7 +173,7 @@ class ChangeJournal:
         if self._stored_bytes(change_set) + additional_bytes > MAX_CHANGESET_BYTES:
             raise ChangeCapacityExceeded("ChangeSet byte limit exceeded.")
 
-    def apply_file_mutation(
+    async def apply_file_mutation(
         self,
         *,
         change_set_id: str,
@@ -181,8 +181,8 @@ class ChangeJournal:
         intended_after: NodeSnapshot | None,
         target: BoundFileMutation,
     ) -> FileChange:
-        change_set = self._open(change_set_id)
-        self._ensure_no_pending(change_set_id)
+        change_set = await self._open(change_set_id)
+        await self._ensure_no_pending(change_set_id)
         relative = self._relative_path(target.relative_path)
         before = target.before
         if before is None and intended_after is None:
@@ -224,11 +224,11 @@ class ChangeJournal:
             ),
             created_at=datetime.now(UTC),
         )
-        self._store.save_pending(pending)
+        await self._store.save_pending(pending)
         try:
             target.mutate()
         except MutationTargetChanged:
-            self._store.delete_pending(pending.id)
+            await self._store.delete_pending(pending.id)
             raise
         actual_after = target.capture_after()
         if not _matches(
@@ -243,8 +243,8 @@ class ChangeJournal:
 
         change = self._file_change(pending, actual_after)
         updated = change_set.model_copy(update={"files": [*change_set.files, change]})
-        self._store.save(updated)
-        self._store.delete_pending(pending.id)
+        await self._store.save(updated)
+        await self._store.delete_pending(pending.id)
         return change
 
     def _file_change(
@@ -275,15 +275,15 @@ class ChangeJournal:
             after_mode=actual_after.mode if actual_after is not None else None,
         )
 
-    def record_execute(
+    async def record_execute(
         self,
         *,
         change_set_id: str,
         command: str,
         observed_paths: list[str],
     ) -> ChangeSet:
-        change_set = self._open(change_set_id)
-        self._ensure_no_pending(change_set_id)
+        change_set = await self._open(change_set_id)
+        await self._ensure_no_pending(change_set_id)
         observation = ExecuteObservation(
             command=command,
             observed_paths=observed_paths,
@@ -291,14 +291,14 @@ class ChangeJournal:
         updated = change_set.model_copy(
             update={"execute": [*change_set.execute, observation]}
         )
-        self._store.save(updated)
+        await self._store.save(updated)
         return updated
 
-    def seal(self, change_set_id: str) -> ChangeSet:
-        change_set = self._open(change_set_id)
+    async def seal(self, change_set_id: str) -> ChangeSet:
+        change_set = await self._open(change_set_id)
         if any(
             pending.change_set_id == change_set_id
-            for pending in self._store.list_pending()
+            for pending in await self._store.list_pending()
         ):
             raise PendingMutationConflict(
                 "ChangeSet has unresolved pending mutations and cannot be sealed."
@@ -310,7 +310,7 @@ class ChangeJournal:
                 "sealed_at": datetime.now(UTC),
             }
         )
-        self._store.save(sealed)
+        await self._store.save(sealed)
         return sealed
 
     @staticmethod
@@ -400,13 +400,13 @@ class ChangeJournal:
                 "Pending mutation path is outside the workspace boundary."
             ) from error
 
-    def _reconcile_mutation(
+    async def _reconcile_mutation(
         self,
         tree: WorkspaceTreeTransaction,
         pending: PendingMutation,
     ) -> None:
         try:
-            change_set = self._owned(pending.change_set_id)
+            change_set = await self._owned(pending.change_set_id)
         except (ChangeLifecycleError, ChangeSetNotFound) as error:
             raise PendingMutationConflict(
                 "Pending mutation lifecycle is inconsistent."
@@ -443,7 +443,7 @@ class ChangeJournal:
                     or committed_change.node_type
                 ),
             ):
-                self._store.delete_pending(pending.id)
+                await self._store.delete_pending(pending.id)
                 return
             raise PendingMutationConflict(
                 "Pending state conflicts with a committed mutation."
@@ -463,7 +463,7 @@ class ChangeJournal:
             mode=pending.before_mode,
             node_type=before_node_type,
         ):
-            self._store.delete_pending(pending.id)
+            await self._store.delete_pending(pending.id)
             return
         if _matches(
             current,
@@ -482,14 +482,14 @@ class ChangeJournal:
                 updated = updated.model_copy(
                     update={"reversibility": self._reversibility(updated)}
                 )
-            self._store.save(updated)
-            self._store.delete_pending(pending.id)
+            await self._store.save(updated)
+            await self._store.delete_pending(pending.id)
             return
         raise PendingMutationConflict(
             f"Pending mutation for {pending.relative_path} conflicts."
         )
 
-    def _reconcile_operation(
+    async def _reconcile_operation(
         self,
         tree: WorkspaceTreeTransaction,
         action: str,
@@ -501,7 +501,7 @@ class ChangeJournal:
                 "Interrupted change operation has inconsistent ownership."
             )
         try:
-            change_set = self._owned(next(iter(change_set_ids)))
+            change_set = await self._owned(next(iter(change_set_ids)))
         except (ChangeLifecycleError, ChangeSetNotFound) as error:
             raise PendingMutationConflict(
                 "Interrupted change operation has inconsistent ownership."
@@ -567,12 +567,12 @@ class ChangeJournal:
                     )
 
         for pending, _, _, _ in bound:
-            self._store.delete_pending(pending.id)
+            await self._store.delete_pending(pending.id)
 
-    def reconcile_pending(self, *, change_set_id: str | None = None) -> None:
+    async def reconcile_pending(self, *, change_set_id: str | None = None) -> None:
         pending_items = [
             pending
-            for pending in self._store.list_pending()
+            for pending in await self._store.list_pending()
             if pending.workspace_key == self._workspace.key
             and (change_set_id is None or pending.change_set_id == change_set_id)
         ]
@@ -593,20 +593,20 @@ class ChangeJournal:
                 }
                 for change_set_id, pending_items in ordinary.items():
                     for pending in pending_items:
-                        self._reconcile_mutation(tree, pending)
-                    change_set = self._owned(change_set_id)
+                        await self._reconcile_mutation(tree, pending)
+                    change_set = await self._owned(change_set_id)
                     if (
                         change_set.lifecycle is ChangeLifecycle.OPEN
                         and change_set_id not in operation_change_sets
                     ):
-                        self.seal(change_set_id)
+                        await self.seal(change_set_id)
                 for (_, action), operation_items in operations.items():
-                    self._reconcile_operation(tree, action, operation_items)
+                    await self._reconcile_operation(tree, action, operation_items)
         except (MutationTargetChanged, UnsafeWorkspacePath, OSError) as error:
             raise PendingMutationConflict(
                 "Pending mutation could not be inspected safely and was preserved."
             ) from error
 
-    def seal_orphaned_open(self) -> None:
-        for change_set in self._store.list_open(self._workspace.key):
-            self.seal(change_set.id)
+    async def seal_orphaned_open(self) -> None:
+        for change_set in await self._store.list_open(self._workspace.key):
+            await self.seal(change_set.id)

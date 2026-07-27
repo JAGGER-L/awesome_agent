@@ -11,16 +11,32 @@ from awesome_agent.application.command_results import (
     CommandSecretPrompt,
     CommandSelection,
     NoticeCommandPayload,
+    ThreadExportCommandPayload,
+    ThreadRetryCommandPayload,
     ThreadTransitionCommandPayload,
     ThreadTransitionSnapshot,
     error,
     interaction,
     result,
 )
-from awesome_agent.application.contracts import ApplicationState, ThreadReadResult
-from awesome_agent.config.models import SecretStatus
-from awesome_agent.conversation import Thread, ThreadView
+from awesome_agent.application.contracts import (
+    ApplicationState,
+    OperationAccepted,
+    ThreadReadResult,
+    WorkspacePresentation,
+)
+from awesome_agent.config.models import BudgetConfig, SecretStatus
+from awesome_agent.conversation import (
+    Thread,
+    ThreadEntry,
+    ThreadEntryKind,
+    ThreadLineage,
+    ThreadView,
+    Turn,
+    TurnStatus,
+)
 from awesome_agent.core.tools.permissions import PermissionMode
+from awesome_agent.modeling import MODEL_CATALOG
 
 
 def test_untyped_arbitrary_command_result_is_rejected() -> None:
@@ -141,4 +157,301 @@ def test_thread_transition_requires_matching_application_and_thread_identity() -
                 application=application,
                 thread=ThreadReadResult(view=ThreadView(thread=thread)),
             )
+        )
+
+
+def test_thread_transition_reason_requires_matching_lineage() -> None:
+    now = datetime.now(UTC)
+    root = Thread(
+        id="thread_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        workspace_key="workspace_1",
+        title="Root Thread",
+        created_at=now,
+        updated_at=now,
+    )
+    fork = root.model_copy(
+        update={
+            "lineage": ThreadLineage(
+                kind="fork",
+                source_thread_id="thread_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                source_turn_id="turn_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+        }
+    )
+    retry = root.model_copy(
+        update={
+            "lineage": ThreadLineage(
+                kind="retry",
+                source_thread_id="thread_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                source_turn_id="turn_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+        }
+    )
+    application = ApplicationState(
+        initialized=True,
+        session_id="session_fixture",
+        workspace_key="workspace_1",
+        workspace=WorkspacePresentation(display_path="E:/fixture"),
+        workspace_trusted=True,
+        current_thread_id=root.id,
+        model_catalog=MODEL_CATALOG,
+        thinking_enabled=False,
+        skill_mode="auto",
+        permission_mode=PermissionMode.REQUEST_APPROVAL,
+        configuration_valid=True,
+        secret_status=SecretStatus(),
+    )
+
+    def transition(reason: str, thread: Thread) -> ThreadTransitionSnapshot:
+        return ThreadTransitionSnapshot.model_validate(
+            {
+                "reason": reason,
+                "application": application,
+                "thread": ThreadReadResult(view=ThreadView(thread=thread)),
+            }
+        )
+
+    ThreadTransitionCommandPayload(transition=transition("new", root))
+    ThreadTransitionCommandPayload(transition=transition("fork", fork))
+    ThreadTransitionCommandPayload(transition=transition("resume", root))
+    ThreadTransitionCommandPayload(transition=transition("resume", retry))
+
+    with pytest.raises(ValidationError, match="root Thread"):
+        ThreadTransitionCommandPayload(transition=transition("new", fork))
+    with pytest.raises(ValidationError, match="Fork Thread lineage"):
+        ThreadTransitionCommandPayload(transition=transition("fork", root))
+    with pytest.raises(ValidationError, match="Fork Thread lineage"):
+        ThreadTransitionCommandPayload(transition=transition("fork", retry))
+
+
+def test_thread_retry_payload_requires_one_matching_transition_operation_turn() -> None:
+    now = datetime.now(UTC)
+    thread = Thread(
+        id="thread_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        workspace_key="workspace_1",
+        title="Retry Thread",
+        lineage=ThreadLineage(
+            kind="retry",
+            source_thread_id="thread_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            source_turn_id="turn_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+        created_at=now,
+        updated_at=now,
+    )
+    entry = ThreadEntry(
+        id="entry_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        thread_id=thread.id,
+        sequence=1,
+        kind=ThreadEntryKind.USER_MESSAGE,
+        content="Retry this request.",
+        client_message_id="client_retry",
+        created_at=now,
+    )
+    turn = Turn(
+        id="turn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        thread_id=thread.id,
+        checkpoint_key="turn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        status=TurnStatus.IN_PROGRESS,
+        provider="deepseek",
+        model="deepseek-chat",
+        budgets=BudgetConfig(),
+        user_entry_id="entry_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        created_at=now,
+        updated_at=now,
+    )
+    application = ApplicationState(
+        initialized=True,
+        session_id="session_fixture",
+        workspace_key="workspace_1",
+        workspace=WorkspacePresentation(display_path="E:/fixture"),
+        workspace_trusted=True,
+        current_thread_id=thread.id,
+        model_catalog=MODEL_CATALOG,
+        thinking_enabled=False,
+        skill_mode="auto",
+        permission_mode=PermissionMode.REQUEST_APPROVAL,
+        configuration_valid=True,
+        secret_status=SecretStatus(),
+    )
+    transition = ThreadTransitionSnapshot(
+        reason="retry",
+        application=application,
+        thread=ThreadReadResult(
+            view=ThreadView(thread=thread, entries=(entry,), turns=(turn,))
+        ),
+    )
+    operation = OperationAccepted(
+        operation_id="operation_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        thread_id=thread.id,
+        turn_id=turn.id,
+        client_message_id="client_retry",
+    )
+
+    payload = ThreadRetryCommandPayload(
+        transition=transition,
+        operation=operation,
+    )
+
+    assert payload.kind == "thread_retry"
+    assert COMMAND_OUTCOME_ADAPTER.validate_python(
+        result(payload).model_dump(mode="json")
+    ) == result(payload)
+    with pytest.raises(ValidationError, match="thread_retry payload"):
+        ThreadTransitionCommandPayload(transition=transition)
+    with pytest.raises(ValidationError, match="identities must match"):
+        ThreadRetryCommandPayload(
+            transition=transition,
+            operation=operation.model_copy(update={"thread_id": "thread_other"}),
+        )
+    with pytest.raises(ValidationError, match="must belong"):
+        ThreadRetryCommandPayload(
+            transition=transition,
+            operation=operation.model_copy(update={"turn_id": "turn_other"}),
+        )
+    with pytest.raises(ValidationError, match="client identity"):
+        ThreadRetryCommandPayload(
+            transition=transition,
+            operation=operation.model_copy(
+                update={"client_message_id": "client_other"}
+            ),
+        )
+    missing_entry = transition.model_copy(
+        update={
+            "thread": ThreadReadResult(
+                view=ThreadView(thread=thread, entries=(), turns=(turn,))
+            )
+        }
+    )
+    with pytest.raises(ValidationError, match="user Entry"):
+        ThreadRetryCommandPayload(
+            transition=missing_entry,
+            operation=operation,
+        )
+    terminal = Turn.model_validate(
+        turn.model_copy(
+            update={
+                "status": TurnStatus.CANCELLED,
+                "termination_reason": "cancelled",
+                "completed_at": now,
+            }
+        ).model_dump()
+    )
+    terminal_transition = transition.model_copy(
+        update={
+            "thread": ThreadReadResult(
+                view=ThreadView(thread=thread, entries=(entry,), turns=(terminal,))
+            )
+        }
+    )
+    with pytest.raises(ValidationError, match="only in-progress"):
+        ThreadRetryCommandPayload(
+            transition=terminal_transition,
+            operation=operation,
+        )
+    other_turn = turn.model_copy(
+        update={
+            "id": "turn_cccccccccccccccccccccccccccccccc",
+            "checkpoint_key": "turn_cccccccccccccccccccccccccccccccc",
+        }
+    )
+    multiple_in_progress = transition.model_copy(
+        update={
+            "thread": ThreadReadResult(
+                view=ThreadView(
+                    thread=thread,
+                    entries=(entry,),
+                    turns=(other_turn, turn),
+                )
+            )
+        }
+    )
+    with pytest.raises(ValidationError, match="only in-progress"):
+        ThreadRetryCommandPayload(
+            transition=multiple_in_progress,
+            operation=operation,
+        )
+    trailing_terminal = terminal.model_copy(
+        update={
+            "id": "turn_dddddddddddddddddddddddddddddddd",
+            "checkpoint_key": "turn_dddddddddddddddddddddddddddddddd",
+        }
+    )
+    operation_not_last = transition.model_copy(
+        update={
+            "thread": ThreadReadResult(
+                view=ThreadView(
+                    thread=thread,
+                    entries=(entry,),
+                    turns=(turn, trailing_terminal),
+                )
+            )
+        }
+    )
+    with pytest.raises(ValidationError, match="final and only"):
+        ThreadRetryCommandPayload(
+            transition=operation_not_last,
+            operation=operation,
+        )
+
+
+def test_thread_export_payload_serializes_the_stable_wire_contract() -> None:
+    payload = ThreadExportCommandPayload(
+        thread_id="fixture-thread",
+        path="exports/thread.json",
+        format="json",
+        write_status="created",
+        byte_count=321,
+        change_set_id="changeset_1",
+    )
+
+    assert payload.model_dump(mode="json", exclude_none=True) == {
+        "kind": "thread_export",
+        "thread_id": "fixture-thread",
+        "path": "exports/thread.json",
+        "format": "json",
+        "write_status": "created",
+        "byte_count": 321,
+        "change_set_id": "changeset_1",
+    }
+    assert COMMAND_OUTCOME_ADAPTER.validate_python(
+        result(payload).model_dump(mode="json")
+    ) == result(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "thread_id": "fixture-thread",
+            "path": "exports/thread.md",
+            "format": "markdown",
+            "write_status": "created",
+            "byte_count": 1,
+        },
+        {
+            "thread_id": "fixture-thread",
+            "path": "exports/thread.md",
+            "format": "markdown",
+            "write_status": "unchanged",
+            "byte_count": 1,
+            "change_set_id": "changeset_1",
+        },
+    ],
+)
+def test_thread_export_payload_change_set_identity_matches_write_status(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError, match="exactly one ChangeSet"):
+        ThreadExportCommandPayload.model_validate(payload)
+
+
+def test_thread_export_payload_rejects_empty_change_set_identity() -> None:
+    with pytest.raises(ValidationError):
+        ThreadExportCommandPayload(
+            thread_id="fixture-thread",
+            path="exports/thread.md",
+            format="markdown",
+            write_status="created",
+            byte_count=1,
+            change_set_id="",
         )

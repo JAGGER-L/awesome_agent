@@ -30,6 +30,7 @@ from awesome_agent.modeling import (
     UserMessage,
 )
 from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
+from awesome_agent.storage import ApplicationSQLite
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 from awesome_agent.version import PRODUCT_VERSION
 
@@ -229,7 +230,7 @@ def _success_value(frame: dict[str, Any] | None) -> dict[str, Any]:
     return cast(dict[str, Any], result["value"])
 
 
-def _freeze_context(
+async def _freeze_context(
     state: AgentState,
     turn: Turn,
     backend: composition._LocalApplicationBackend,
@@ -272,7 +273,7 @@ def _freeze_context(
         turn.budgets.total_context_tokens,
         turn.budgets.total_context_tokens,
     ).effective_input_limit
-    backend._conversation.store_context_manifest(
+    await backend._conversation.store_context_manifest(
         turn.id,
         tuple(state["context_manifest"]),
     )
@@ -284,13 +285,13 @@ async def _store_checkpoint(
     name: str,
     tool_name: str | None = None,
 ) -> tuple[Turn, AgentState]:
-    thread = backend._conversation.create_thread(
+    thread = await backend._conversation.create_thread(
         backend._workspace.key,
         name,
         current_model="deepseek/deepseek-v4-flash",
     )
     config: TurnConfig = backend._turn_config(thread)
-    turn = backend._conversation.begin_turn(
+    turn = await backend._conversation.begin_turn(
         thread.id,
         "inspect",
         config,
@@ -306,7 +307,7 @@ async def _store_checkpoint(
     )
     state["usage"] = {"input_tokens": 2, "output_tokens": 1}
     state["model_calls"] = 1
-    _freeze_context(state, turn, backend)
+    await _freeze_context(state, turn, backend)
     if tool_name is not None:
         call = ToolCall(
             call_id=f"call_{name}",
@@ -336,9 +337,14 @@ async def _seed_recovery_application(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    WorkspaceTrustService(
-        SQLiteWorkspaceTrustStore(home / "state" / "application.db")
-    ).accept(resolve_workspace(workspace))
+    database = ApplicationSQLite(home / "state" / "application.db")
+    await database.initialize()
+    try:
+        await WorkspaceTrustService(SQLiteWorkspaceTrustStore(database)).accept(
+            resolve_workspace(workspace)
+        )
+    finally:
+        await database.aclose()
     first = await composition.compose_local_application(
         home=home,
         workspace=workspace,
@@ -385,7 +391,7 @@ async def _restart_with_graph(
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -405,7 +411,10 @@ def _recovery_events(sink: CollectingEventSink) -> list[Any]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", [None, "execute", "mcp.example.change"])
+@pytest.mark.parametrize(
+    "tool_name",
+    [None, "write_file", "edit_file", "delete", "execute", "mcp.example.change"],
+)
 async def test_checkpoint_retries_at_most_once_through_application_protocol(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -432,7 +441,7 @@ async def test_checkpoint_retries_at_most_once_through_application_protocol(
     assert required.payload.target == (
         f"unfinished Turn {turn.id}"
         if tool_name is None
-        else "uncertain external tool call"
+        else "uncertain side-effecting tool call"
     )
     state = _success_value(
         await dispatcher.dispatch(
@@ -466,8 +475,8 @@ async def test_checkpoint_retries_at_most_once_through_application_protocol(
         if event.event_type is EventType.OPERATION_STARTED and event.turn_id == turn.id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     stale = _success_value(
         await dispatcher.dispatch(
@@ -485,16 +494,18 @@ async def test_checkpoint_retries_at_most_once_through_application_protocol(
     assert stale["accepted"] is False
     assert stale["status"] == "not_found"
     assert graph.calls == [turn.id]
-    assert (
-        backend._conversation.read_thread(turn.thread_id).turns[0].status
-        is TurnStatus.COMPLETED
-    )
+    assert (await backend._conversation.read_thread(turn.thread_id)).turns[
+        0
+    ].status is TurnStatus.COMPLETED
     await application.shutdown()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["execute", "mcp.example.change"])
-async def test_uncertain_external_checkpoint_aborts_without_replay(
+@pytest.mark.parametrize(
+    "tool_name",
+    ["write_file", "edit_file", "delete", "execute", "mcp.example.change"],
+)
+async def test_uncertain_side_effecting_checkpoint_aborts_without_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     tool_name: str,
@@ -514,7 +525,7 @@ async def test_uncertain_external_checkpoint_aborts_without_replay(
     )
     [required] = _recovery_events(sink)
     assert required.turn_id == turn.id
-    assert required.payload.target == "uncertain external tool call"
+    assert required.payload.target == "uncertain side-effecting tool call"
 
     aborted = _success_value(
         await dispatcher.dispatch(
@@ -531,7 +542,7 @@ async def test_uncertain_external_checkpoint_aborts_without_replay(
     )
 
     assert aborted["accepted"] is True
-    recovered = backend._conversation.read_thread(turn.thread_id).turns[0]
+    recovered = (await backend._conversation.read_thread(turn.thread_id)).turns[0]
     assert recovered.status is TurnStatus.FAILED
     assert recovered.error_code == "recovery_aborted"
     assert backend._checkpoints is not None
@@ -582,8 +593,8 @@ async def test_recovery_queue_presents_one_item_and_rejects_old_response(
         and event.turn_id == first.turn_id
     )
     assert first_operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(first_operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(first_operation_id)
     [_, second] = _recovery_events(sink)
     assert second.payload.interaction_id != first_id
     assert second.turn_id != first.turn_id
@@ -637,7 +648,7 @@ async def test_recovery_queue_presents_one_item_and_rejects_old_response(
     )
     assert graph.calls == [first.turn_id]
     statuses = {
-        turn.id: backend._conversation.read_thread(turn.thread_id).turns[0]
+        turn.id: (await backend._conversation.read_thread(turn.thread_id)).turns[0]
         for turn in turns
     }
     assert statuses[first.turn_id].status is TurnStatus.COMPLETED
@@ -663,8 +674,9 @@ async def test_retry_publishes_resolution_before_presenting_next_recovery(
         sink,
         monkeypatch,
     )
-    assert backend._turns is not None
-    resume_unfinished = backend._turns.resume_unfinished
+    assert backend._runtime is not None
+    turn_coordinator = backend._runtime.turns
+    resume_unfinished = turn_coordinator.resume_unfinished
 
     async def delay_response_until_turn_completion(
         *args: Any,
@@ -675,7 +687,7 @@ async def test_retry_publishes_resolution_before_presenting_next_recovery(
         return accepted
 
     monkeypatch.setattr(
-        backend._turns,
+        turn_coordinator,
         "resume_unfinished",
         delay_response_until_turn_completion,
     )
@@ -702,7 +714,7 @@ async def test_retry_publishes_resolution_before_presenting_next_recovery(
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    await backend._turns.wait(operation_id)
+    await turn_coordinator.wait(operation_id)
 
     interaction_events = [
         event
@@ -778,8 +790,8 @@ async def test_retry_claim_survives_response_cancellation_without_replay(
     assert len(operation_events) == 1
     operation_id = operation_events[0].operation_id
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
     stale = await backend.resolve_interaction(
         required.payload.interaction_id,
         "retry",
@@ -788,10 +800,9 @@ async def test_retry_claim_survives_response_cancellation_without_replay(
     assert stale.accepted is False
     assert stale.status == "not_found"
     assert graph.calls == [turn.id]
-    assert (
-        backend._conversation.read_thread(turn.thread_id).turns[0].status
-        is TurnStatus.COMPLETED
-    )
+    assert (await backend._conversation.read_thread(turn.thread_id)).turns[
+        0
+    ].status is TurnStatus.COMPLETED
     assert backend._interactions.pending is None
     assert backend._recovery_queue == []
     await application.shutdown()
@@ -827,8 +838,8 @@ async def test_retry_emitter_failure_does_not_replay_claimed_recovery(
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     stale = await backend.resolve_interaction(first.payload.interaction_id, "retry")
     assert stale.accepted is False
@@ -885,8 +896,8 @@ async def test_continuous_retry_resolution_failure_blocks_next_until_reinitializ
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     assert sink.resolution_attempt_ids == [
         first.payload.interaction_id,
@@ -959,8 +970,8 @@ async def test_retry_resolution_cancellation_releases_next_without_replay(
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     stale = await backend.resolve_interaction(first.payload.interaction_id, "retry")
     assert stale.accepted is False
@@ -1035,14 +1046,12 @@ async def test_abort_resolution_failure_once_advances_without_replay(
         await backend.resolve_interaction(first.payload.interaction_id, "abort")
     ).status == "not_found"
     assert graph.calls == []
-    assert (
-        sum(
-            backend._conversation.read_thread(turn.thread_id).turns[0].status
-            is TurnStatus.FAILED
-            for turn in turns
-        )
-        == 1
-    )
+    failed = [
+        (await backend._conversation.read_thread(turn.thread_id)).turns[0].status
+        is TurnStatus.FAILED
+        for turn in turns
+    ]
+    assert sum(failed) == 1
 
     await backend.resolve_interaction(second.payload.interaction_id, "abort")
     await application.shutdown()
@@ -1098,14 +1107,12 @@ async def test_abort_resolution_repeated_cancellation_finishes_once_before_next(
         await backend.resolve_interaction(first.payload.interaction_id, "abort")
     ).status == "not_found"
     assert graph.calls == []
-    assert (
-        sum(
-            backend._conversation.read_thread(turn.thread_id).turns[0].status
-            is TurnStatus.FAILED
-            for turn in turns
-        )
-        == 1
-    )
+    failed = [
+        (await backend._conversation.read_thread(turn.thread_id)).turns[0].status
+        is TurnStatus.FAILED
+        for turn in turns
+    ]
+    assert sum(failed) == 1
 
     await backend.resolve_interaction(second.payload.interaction_id, "abort")
     await application.shutdown()
@@ -1140,8 +1147,8 @@ async def test_next_recovery_required_failure_once_reuses_interaction_id(
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     [_, second] = _recovery_events(sink)
     assert sink.required_attempt_ids == [
@@ -1186,8 +1193,8 @@ async def test_continuous_next_required_failure_keeps_same_pending_for_reinitial
         and event.turn_id == first.turn_id
     )
     assert operation_id is not None
-    assert backend._turns is not None
-    await backend._turns.wait(operation_id)
+    assert backend._runtime is not None
+    await backend._runtime.turns.wait(operation_id)
 
     pending = backend._interactions.pending
     assert pending is not None
@@ -1269,7 +1276,7 @@ async def test_recovery_response_waits_for_startup_bootstrap_to_finish(
                 "id": 1,
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 3,
+                    "protocol_version": 4,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -1297,7 +1304,7 @@ async def test_recovery_response_waits_for_startup_bootstrap_to_finish(
     sink.release.set()
     assert _success_value(await initializing)["status"] == "ready"
     assert _success_value(await responding)["accepted"] is True
-    recovered = backend._conversation.read_thread(turn.thread_id).turns[0]
+    recovered = (await backend._conversation.read_thread(turn.thread_id)).turns[0]
     assert recovered.error_code == "recovery_aborted"
     assert graph.calls == []
     await application.shutdown()

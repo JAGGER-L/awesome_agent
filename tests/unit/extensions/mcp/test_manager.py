@@ -1,8 +1,10 @@
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
 
 import pytest
+import pytest_asyncio
 from mcp.types import CallToolResult, TextContent, Tool
 from pydantic import BaseModel
 
@@ -21,7 +23,11 @@ from awesome_agent.extensions.mcp import (
     McpSource,
     McpUnavailable,
 )
-from awesome_agent.storage import SQLiteMcpEnablementStore, mcp_config_hash
+from awesome_agent.storage import (
+    ApplicationSQLite,
+    SQLiteMcpEnablementStore,
+    mcp_config_hash,
+)
 
 
 class FakeClient:
@@ -95,11 +101,22 @@ async def unused_handler(
     return ToolOutput(content="unused")
 
 
+@pytest_asyncio.fixture
+async def database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    database = ApplicationSQLite(tmp_path / "state.db")
+    await database.initialize()
+    try:
+        yield database
+    finally:
+        await database.aclose()
+
+
 @pytest.mark.asyncio
 async def test_manager_is_lazy_reuses_sessions_and_isolates_failure(
     tmp_path: Path,
+    database: ApplicationSQLite,
 ) -> None:
-    store = SQLiteMcpEnablementStore(tmp_path / "state.db")
+    store = SQLiteMcpEnablementStore(database)
     user = McpServerConfig(
         id="user",
         command="user-server",
@@ -117,7 +134,7 @@ async def test_manager_is_lazy_reuses_sessions_and_isolates_failure(
         source=McpSource.USER,
         enabled=True,
     )
-    store.enable("workspace", project.id, mcp_config_hash(project))
+    await store.enable("workspace", project.id, mcp_config_hash(project))
     clients: dict[str, FakeClient] = {}
 
     def factory(config: McpServerConfig) -> FakeClient:
@@ -127,9 +144,8 @@ async def test_manager_is_lazy_reuses_sessions_and_isolates_failure(
 
     manager = McpManager(
         configs=(user, project, broken),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=store,
+        enablements=await store.snapshot("workspace"),
         registry=ToolRegistry(),
         client_factory=factory,
     )
@@ -173,9 +189,8 @@ async def test_enabled_servers_connect_independently(tmp_path: Path) -> None:
     clients = {"slow": slow, "fast": fast}
     manager = McpManager(
         configs=(slow_config, fast_config),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda config: clients[config.id],
     )
@@ -221,9 +236,8 @@ async def test_connected_is_published_only_after_registry_installation(
     registry = ObservingRegistry()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=lambda _: FakeClient("user"),
     )
@@ -259,9 +273,8 @@ async def test_registry_publication_failure_closes_candidate_and_is_sanitized(
     registry = FailingRegistry()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=lambda _: client,
     )
@@ -306,9 +319,8 @@ async def test_concurrent_catalog_failure_preserves_the_committed_namespace(
     registry = ToolRegistry()
     manager = McpManager(
         configs=(full_config, extra_config),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=lambda config: clients[config.id],
     )
@@ -373,9 +385,8 @@ async def test_aggregate_catalog_byte_budget_rejects_whole_candidate(
     )
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=lambda _: client,
     )
@@ -393,8 +404,9 @@ async def test_aggregate_catalog_byte_budget_rejects_whole_candidate(
 @pytest.mark.asyncio
 async def test_workspace_trust_and_hash_gate_project_but_not_user(
     tmp_path: Path,
+    database: ApplicationSQLite,
 ) -> None:
-    store = SQLiteMcpEnablementStore(tmp_path / "state.db")
+    store = SQLiteMcpEnablementStore(database)
     user = McpServerConfig(
         id="user",
         command="user-server",
@@ -406,7 +418,7 @@ async def test_workspace_trust_and_hash_gate_project_but_not_user(
         command="project-server",
         source=McpSource.WORKSPACE,
     )
-    store.enable("workspace", project.id, mcp_config_hash(project))
+    await store.enable("workspace", project.id, mcp_config_hash(project))
 
     created: list[str] = []
 
@@ -416,9 +428,8 @@ async def test_workspace_trust_and_hash_gate_project_but_not_user(
 
     manager = McpManager(
         configs=(user, project.model_copy(update={"args": ("changed",)})),
-        workspace_key="workspace",
         workspace_trusted=False,
-        enablements=store,
+        enablements=await store.snapshot("workspace"),
         registry=ToolRegistry(),
         client_factory=factory,
     )
@@ -441,9 +452,8 @@ async def test_connection_loss_is_uncertain_and_current_call_is_not_replayed(
     client = FakeClient("user")
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
@@ -484,9 +494,8 @@ async def test_call_tool_never_connects_lazily(tmp_path: Path) -> None:
 
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=factory,
     )
@@ -513,9 +522,8 @@ async def test_next_turn_preparation_may_reconnect_after_uncertain_call(
     clients = [first, second]
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: clients.pop(0),
     )
@@ -560,9 +568,8 @@ async def test_invalid_catalog_is_never_committed_and_is_sanitized(
     )
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
@@ -598,9 +605,8 @@ async def test_overlong_namespaced_tool_atomically_fails_with_safe_diagnostic(
     registry = ToolRegistry()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=lambda _: client,
     )
@@ -643,9 +649,8 @@ async def test_restart_with_invalid_json_pointer_atomically_removes_old_catalog(
     registry = ToolRegistry()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=lambda _: clients.pop(0),
     )
@@ -680,9 +685,8 @@ async def test_catalog_connection_deadline_closes_client_without_publication(
     client.list_release = asyncio.Event()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
         catalog_timeout_seconds=0.01,
@@ -723,9 +727,8 @@ async def test_catalog_deadline_never_accepts_late_backend_success(
     client.list_started = asyncio.Event()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
         catalog_timeout_seconds=0.01,
@@ -772,9 +775,8 @@ async def test_catalog_timeout_cannot_accumulate_cancellation_ignoring_tasks(
 
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=factory,
         catalog_timeout_seconds=0.01,
@@ -813,9 +815,8 @@ async def test_catalog_load_cancellation_closes_client_and_preserves_cancel(
     client.connect_release = asyncio.Event()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
@@ -865,9 +866,8 @@ async def test_restart_invalidates_old_catalog_generation_before_reconnect(
     registry = ToolRegistry()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=lambda _: clients.pop(0),
     )
@@ -938,9 +938,8 @@ async def test_restart_publication_failure_leaves_no_stale_namespace(
     registry = ToolRegistry()
     manager = McpManager(
         configs=(base_config, user_config),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=factory,
     )
@@ -980,9 +979,8 @@ async def test_restart_removes_stale_catalog_before_waiting_for_reconnect(
     registry = ToolRegistry()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=registry,
         client_factory=lambda _: clients.pop(0),
     )
@@ -1015,9 +1013,8 @@ async def test_timeout_invalidates_catalog_without_replaying(tmp_path: Path) -> 
     client.call_release = asyncio.Event()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
         call_timeout_seconds=0.01,
@@ -1064,9 +1061,8 @@ async def test_timeout_never_accepts_late_success_from_backend_that_swallows_can
     client = LateSuccessClient("user")
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
         call_timeout_seconds=0.01,
@@ -1099,9 +1095,8 @@ async def test_cancel_invalidates_catalog_and_preserves_cancellation(
     client.call_release = asyncio.Event()
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
     )
@@ -1150,9 +1145,8 @@ async def test_backend_self_cancellation_is_uncertain_not_caller_cancellation(
     client = SelfCancellingClient("user")
     manager = McpManager(
         configs=(config,),
-        workspace_key="workspace",
         workspace_trusted=True,
-        enablements=SQLiteMcpEnablementStore(tmp_path / "state.db"),
+        enablements={},
         registry=ToolRegistry(),
         client_factory=lambda _: client,
     )

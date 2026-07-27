@@ -13,7 +13,7 @@ design rationale, use the [architecture documentation](../architecture/README.md
 | [Built-in tools](built-in-tools.md) | Tool names, capabilities, argument fields, limits, output, and conditional support tools |
 | [Permission modes](permission-modes.md) | Exact three-mode matrix, one-call and Thread grants, hard denials, and Full access confirmation |
 | [Files and state](files-and-state.md) | User/workspace paths, SQLite ownership, schema behavior, locks, backup, and reset boundaries |
-| [Protocol v3](protocol.md) | Private stdio JSON-RPC methods, events, errors, handshake, and fixtures |
+| [Protocol v4](protocol.md) | Private stdio JSON-RPC methods, events, errors, handshake, and fixtures |
 
 ## How to read a Reference page
 
@@ -32,12 +32,30 @@ and tests in the same change.
 Awesome has several independent versions:
 
 - the product version in `VERSION` and package metadata;
-- configuration document version `1`;
-- Application SQLite schema version `7`;
-- private Core/TUI protocol version `3`;
+- private Core/TUI Protocol version `4`;
 - event envelope version `1`;
-- UI preferences schema version `1`.
+- Application diagnostic log record version `1`;
+- Application SQLite schema version `8`, with migration floor `7`;
+- user configuration version `2`, with readable versions `{1, 2}`;
+- workspace configuration version `1`, with readable versions `{1}`;
+- UI preferences schema version `1`, with readable versions `{1}`;
+- headless JSON result version `2`;
+- Thread export version `1`, shared by its JSON document and Markdown marker.
+
+This catalog covers cross-process wire contracts, user-editable persisted
+formats, the Application database, public machine-readable outputs, and the
+documented structured log. Same-release recovery markers and other internal
+implementation records are intentionally excluded.
 
 Matching one does not imply compatibility in another. In particular, the
-private protocol handshake requires both protocol v3 and the exact installed
+private protocol handshake requires both protocol v4 and the exact installed
 product version so independently upgraded Core and TUI components fail clearly.
+`contract-versions.json` is the machine-readable catalog for the contract
+identifiers; generated Python and TypeScript constants keep runtime code free of
+JSON loading. A release combines that catalog with `VERSION` in its generated
+`compatibility.json`. It does not make the numbers equal or increment every
+format for every product release.
+
+The catalog document and bundled compatibility manifest each currently use
+envelope version `1`. Those metadata versions govern their own document shapes;
+they are not additional entries in the runtime contract tuple above.

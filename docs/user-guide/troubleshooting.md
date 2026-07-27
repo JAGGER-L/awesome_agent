@@ -18,6 +18,9 @@ Also record `awesome --version`, host/architecture, Workspace path, the exact
 command or interaction that failed, and any displayed diagnostic code. For a
 Tool failure, expand its bounded detail with Ctrl+O. Redact project-private
 paths and outputs before sharing them; never include API keys or secret values.
+When Core has started, use the approximate `timestamp` and `operation` to find
+its bounded local record in `<AWESOME_HOME>/logs/application.jsonl`. Include
+that line's `correlation_id` when sharing the record.
 
 Use this decision path:
 
@@ -73,12 +76,29 @@ launcher directory manually, check `awesome --version`, close running Awesome
 sessions, and rerun once to clean rollback residue. Do not interpret a cleanup
 warning as permission to overwrite release assets or bypass checksums.
 
-### Awesome requires an interactive terminal
+### Interactive Awesome requires a TTY
 
-The Ink UI requires TTY input and output. Start it directly in a terminal, not
-through a non-interactive pipe or redirected standard output. Use normal shell
-tools for automation; Awesome does not currently expose the TUI as a batch
-interface.
+The Ink UI requires TTY input and output. Start `awesome`, `--continue`, and
+`--resume` directly in a terminal, not through a non-interactive pipe or
+redirected standard output. For automation, use the dedicated headless path:
+
+```text
+awesome run "<prompt>" [--new | --thread <id>] [--format text|json]
+```
+
+`awesome run` deliberately skips only the TTY requirement. It still starts the
+same private Core, performs the same Application startup and trust checks, and
+uses normal Thread/Turn persistence and permission policy.
+
+### `awesome run` exits without stdout
+
+This is intentional for every nonzero exit; read stderr and inspect the exit
+code. Code 1 is a run failure, code 2 is an invocation/runtime failure, code 3
+means an interaction such as trust, state reset, Thread selection, or approval
+was not resolved, and 130 means SIGINT requested cancellation. Add
+`--trust-workspace` only after verifying the current directory. Select an
+appropriate `--permission-mode` only when its consequences are acceptable.
+The runner never emits a partial final answer on failure or interruption.
 
 ### Core cannot start or the protocol/version handshake fails
 
@@ -128,12 +148,14 @@ and produces no warning.
 ### Configuration is invalid
 
 Inspect `<AWESOME_HOME>/config.yaml` and, after trust,
-`<workspace>/.awesome/config.yaml`. Each must be a YAML mapping with
-`version: 1`. Duplicate keys, unknown keys, unsupported model IDs, invalid
+`<workspace>/.awesome/config.yaml`. User configuration uses `version: 2` and
+Workspace configuration uses `version: 1`; user version 1 remains readable and
+is upgraded on the next supported write. Duplicate keys, unknown keys, unsupported model IDs, invalid
 names, and out-of-range budgets are errors.
 
-Temporarily reducing the document to `version: 1` can isolate which optional
-section is invalid, but preserve a backup outside the repository before manual
+Temporarily reducing User configuration to `version: 2`, or Workspace
+configuration to `version: 1`, can isolate which optional section is invalid,
+but preserve a backup outside the repository before manual
 editing. Do not move credentials into Workspace configuration. Restart Awesome
 after a manual fix and run `/config`.
 
@@ -277,9 +299,10 @@ remain. Verify shell and MCP targets manually.
 ### Awesome asks whether to recover an unfinished Turn
 
 For a verified local checkpoint, Retry is listed first and continues from the
-frozen context. When a shell or MCP call may have acted, Abort is listed first;
-Retry may repeat remaining external work. Inspect the target before deciding.
-Awesome never transparently replays an uncertain call.
+frozen context. When a file mutation, shell, MCP, or Web call may have acted,
+Abort is listed first; Retry may repeat remaining side effects. Inspect affected
+files and external targets before deciding. Awesome never transparently replays
+an uncertain call.
 
 ### Awesome asks to reset local state
 
@@ -294,6 +317,33 @@ Unknown, corrupt, unreadable, or locked state produces a diagnostic instead of
 a destructive prompt. Do not delete the data directory manually.
 
 ## Extensions
+
+### Web Search or Fetch is unavailable or fails
+
+Run `/web status`. `enabled: false` means run `/web on`; a missing credential
+requires a non-empty `TAVILY_API_KEY`. `web_proxy_invalid` means the explicit
+`AWESOME_WEB_PROXY_URL` is not a bounded credential-free `http` or `https` URL.
+Ambient `HTTP_PROXY`/`HTTPS_PROXY` settings are intentionally ignored because
+the Web client uses `trust_env=False`.
+
+For `web_fetch`, `invalid_arguments` means the requested value is not one public
+absolute HTTPS URL, names a private/special-use host, includes unsupported user
+information/fragment syntax, or appears to target a PDF or another recognized
+binary format. `web_request_rejected` means Web configuration blocks the host
+or Tavily rejected an otherwise admitted request. Tavily's cloud service, not
+Awesome Core, connects to an admitted target.
+
+If the tool asks despite Full access, that is expected: `network.read` asks on
+first use in every permission mode. Choose once or current Thread, or use
+`--allow-network` for one exact headless Turn. `web_request_budget_exhausted`
+means Search and Fetch have consumed the current Turn's shared request budget;
+it is distinct from provider-account `web_quota_exhausted`. `web_rate_limited`,
+`web_quota_exhausted`, `web_timeout`, `web_connection_failed`, and
+`web_provider_unavailable` are stable provider-boundary failures; Awesome does
+not transparently retry them. `web_malformed_response` means the bounded Tavily
+response did not satisfy the strict contract. Queries and result URLs are
+intentionally absent from structured logs, as are requested Fetch URLs and
+extracted content.
 
 ### A Skill is missing or invalid
 
@@ -346,6 +396,22 @@ namespace and does not disturb another server's namespace.
 After an MCP timeout or connection loss, the server may already have acted.
 Awesome invalidates the catalog and reports a non-retryable uncertain outcome
 instead of reconnecting and replaying inside the same Turn.
+
+## Application invocation diagnostics
+
+Awesome writes local structured invocation records to
+`<AWESOME_HOME>/logs/application.jsonl`, with `.1` through `.4` as older rotated
+files. Each file is capped at 5 MiB. Locate a line by its approximate timestamp
+and `operation`, then inspect its `outcome`, duration, and optional stable
+`error_code`. The `correlation_id` identifies that diagnostic line when
+reporting it. Do not expect request arguments, prompt text, model or Tool
+bodies, queries, URLs, paths, or secrets to appear.
+
+Logging is deliberately nonblocking and fail-open. A missing line can mean the
+bounded queue was full or local file I/O failed; it does not mean the
+Application invocation failed. Conversely, a successful invocation record may
+only mean that Agent work was accepted. Use terminal Turn events and
+Conversation state to determine the later asynchronous Turn outcome.
 
 ## Reporting a Reproducible Problem
 

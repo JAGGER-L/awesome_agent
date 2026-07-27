@@ -13,6 +13,7 @@ TUI 可用时，收集：
 ```
 
 同时记录 `awesome --version`、主机/架构、Workspace 路径、失败的精确命令或 interaction，以及界面显示的诊断码。Tool 失败时用 Ctrl+O 展开有界细节。分享前请脱敏项目私有路径和输出；绝不要包含 API Key 或 secret 值。
+Core 启动后，可以按大致 `timestamp` 与 `operation` 在 `<AWESOME_HOME>/logs/application.jsonl` 中定位有界本地记录；分享该记录时，请同时提供这一行的 `correlation_id`。
 
 使用这条决策路径：
 
@@ -54,9 +55,25 @@ version-bound installer；安装器会先验证记录的 owner，再回收死亡
 再运行一次以清理 rollback 遗留项。不要把 cleanup warning 理解成覆盖 release asset 或绕过
 checksum 的许可。
 
-### Awesome 要求交互式终端
+### 交互式 Awesome 要求 TTY
 
-Ink UI 需要 TTY 输入和输出。请直接在终端中启动，不要通过非交互式 pipe 或重定向的标准输出启动。自动化请使用普通 shell 工具；Awesome 当前不提供 TUI batch interface。
+Ink UI 需要 TTY 输入和输出。请直接在终端中启动 `awesome`、`--continue` 和 `--resume`，
+不要通过非交互式 pipe 或重定向的标准输出启动。自动化请使用专用 headless 路径：
+
+```text
+awesome run "<prompt>" [--new | --thread <id>] [--format text|json]
+```
+
+`awesome run` 只跳过 TTY 要求。它仍启动同一个私有 Core，执行相同的 Application 启动与
+信任检查，并使用正常的 Thread/Turn 持久化和权限策略。
+
+### `awesome run` 退出但 stdout 为空
+
+所有非零退出都会有意保持 stdout 为空；请读取 stderr 并检查退出码。退出码 1 表示运行
+失败，2 表示调用或 runtime 失败，3 表示信任、状态重置、Thread 选择或审批等 interaction
+未解决，130 表示 SIGINT 已请求取消。只有在核对当前目录后才添加 `--trust-workspace`；
+只有在能接受对应后果时才选择 `--permission-mode`。运行失败或中断时，runner 绝不会输出
+部分最终回答。
 
 ### Core 无法启动，或协议/版本握手失败
 
@@ -86,9 +103,9 @@ Awesome 会整份忽略无效文件。修复后启动新 Session；当前 Sessio
 
 ### 配置无效
 
-检查 `<AWESOME_HOME>/config.yaml`，以及完成信任后的 `<workspace>/.awesome/config.yaml`。每个文件都必须是带 `version: 1` 的 YAML mapping。重复 key、未知 key、不受支持的模型 ID、无效名称和超范围预算都会产生错误。
+检查 `<AWESOME_HOME>/config.yaml`，以及完成信任后的 `<workspace>/.awesome/config.yaml`。User 配置使用 `version: 2`，Workspace 配置使用 `version: 1`；User version 1 仍可读取，并在下一次受支持写操作时升级。重复 key、未知 key、不受支持的模型 ID、无效名称和超范围预算都会产生错误。
 
-手动编辑时，可暂时把文档缩减为 `version: 1`，以定位无效的可选 section；但请先在仓库外保存备份。不要把凭据移入 Workspace 配置。手动修复后重启 Awesome 并运行 `/config`。
+手动编辑时，可暂时把 User 配置缩减为 `version: 2`，或把 Workspace 配置缩减为 `version: 1`，以定位无效的可选 section；但请先在仓库外保存备份。不要把凭据移入 Workspace 配置。手动修复后重启 Awesome 并运行 `/config`。
 
 ### 未配置模型
 
@@ -170,7 +187,9 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 
 ### Awesome 询问是否恢复未完成 Turn
 
-对于已验证的本地 checkpoint，Retry 排在第一位，并从冻结上下文继续。当 shell 或 MCP 调用可能已经执行时，Abort 排在第一位；Retry 可能重复剩余外部工作。决定前检查目标。Awesome 绝不会透明重放结果不确定的调用。
+对于已验证的本地 checkpoint，Retry 排在第一位，并从冻结上下文继续。当文件修改、shell、
+MCP 或 Web 调用可能已经执行时，Abort 排在第一位；Retry 可能重复剩余副作用。决定前检查
+受影响文件和外部目标。Awesome 绝不会透明重放结果不确定的调用。
 
 ### Awesome 要求重置本地状态
 
@@ -179,6 +198,27 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 如果另一个 Session 正在使用该状态，请关闭后重试。由更新版 Awesome 创建的状态要求升级，旧二进制绝不会重置它。未知、损坏、不可读或锁定的状态会产生诊断，而不会显示破坏性提示。不要手动删除数据目录。
 
 ## 扩展
+
+### Web Search 或 Fetch 不可用或失败
+
+运行 `/web status`。`enabled: false` 表示需要运行 `/web on`；credential 缺失时需设置非空
+`TAVILY_API_KEY`。`web_proxy_invalid` 表示显式 `AWESOME_WEB_PROXY_URL` 不是有界、不含凭据的
+`http` 或 `https` URL。Web client 使用 `trust_env=False`，因此会有意忽略环境中的
+`HTTP_PROXY`/`HTTPS_PROXY`。
+
+对于 `web_fetch`，`invalid_arguments` 表示请求值不是一个公共绝对 HTTPS URL、host 属于
+私有/特殊用途、包含不支持的用户信息/fragment 语法，或看起来指向 PDF 或其他已识别二进制
+格式。`web_request_rejected` 表示 Web 配置阻止该 host，或 Tavily 拒绝了其它方面已准入的
+请求。被准入的目标由 Tavily 云服务连接，而不是 Awesome Core。
+
+即使 Full access 下仍出现 prompt 也是预期行为：`network.read` 在每种 permission mode 下
+首次使用都会 ASK。可选择 once 或当前 Thread，headless 单 Turn 可使用 `--allow-network`。
+`web_request_budget_exhausted` 表示 Search 与 Fetch 已耗尽当前 Turn 共享的请求预算；它与
+provider account 的 `web_quota_exhausted` 不同。`web_rate_limited`、`web_quota_exhausted`、
+`web_timeout`、`web_connection_failed` 与
+`web_provider_unavailable` 是稳定 provider-boundary failure；Awesome 不会透明重试。
+`web_malformed_response` 表示有界 Tavily response 不满足严格契约。结构化日志会有意省略
+query、result URL、请求的 Fetch URL 与提取正文。
 
 ### Skill 缺失或无效
 
@@ -206,6 +246,19 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 确认配置的命令、参数、allowlist 中的环境变量名、可执行文件可用性和 server schema。`/mcp restart <id>` 会先删除旧 namespace，再重新连接。`connected` 表示存活 client、完整编译的 catalog 和完整 Registry namespace 均已发布。如果发布报告 `error`，请检查 server catalog 是否包含无效 schema，或最终 `mcp.<server>.<tool>` 名称是否超过 128 个字符。如果有效共享 Registry 将超过 128 个工具或 1 MiB，也需要减少启用的工具集或 schema 定义；被拒绝的候选项不会留下过期 namespace，也不会影响其他服务器的 namespace。
 
 MCP 超时或连接丢失后，server 可能已经执行。Awesome 会使 catalog 失效并报告不可重试的不确定结果，而不会在同一 Turn 中重连和重放。
+
+## Application invocation diagnostics
+
+Awesome 把本地结构化 invocation record 写入 `<AWESOME_HOME>/logs/application.jsonl`，较旧
+的轮转文件为 `.1` 至 `.4`。每个文件上限为 5 MiB。可以按大致 timestamp 与 `operation`
+定位相关行，再用该行的 `correlation_id` 标识所报告的诊断；同时检查 `outcome`、duration 与
+可选稳定 `error_code`。不要期待其中出现 request argument、prompt 文本、模型或 Tool 正文、
+query、URL、path 或 secret。
+
+日志写入有意保持非阻塞、fail-open。缺少某一行可能表示有界 queue 已满或本地文件 I/O
+失败，并不表示 Application invocation 失败。反过来，一条成功的 invocation record 可能只
+表示 Agent 工作已被接受。请用终端 Turn event 和 Conversation state 判断之后的异步 Turn
+终态。
 
 ## 报告可复现问题
 

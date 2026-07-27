@@ -17,14 +17,18 @@ from pydantic import (
 
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     InitializeParams,
     InitializeResult,
     ProductError,
     ProductErrorCode,
     ProviderCredentialSetRequest,
+    SkillInstallRequest,
+    SkillRemoveRequest,
     ThreadListQuery,
     ThreadReadQuery,
+    ThreadSearchQuery,
 )
 from awesome_agent.application.facade import ApplicationFacade
 from awesome_agent.application.interactions import InteractionDecision
@@ -36,7 +40,6 @@ from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
 JSONRPC_VERSION = "2.0"
-PROTOCOL_VERSION = 3
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +88,22 @@ class _ThreadListParams(BaseModel):
         return _reject_explicit_nulls(value, frozenset({"cursor", "limit"}))
 
 
+class _ThreadSearchParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query: str = Field(min_length=1, max_length=200, strict=True)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
+    limit: JsonSafeInteger = Field(default=50, ge=1, le=50)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_and_reject_null_fields(cls, value: object) -> object:
+        checked = _reject_explicit_nulls(value, frozenset({"cursor", "limit"}))
+        if isinstance(checked, Mapping) and isinstance(checked.get("query"), str):
+            return {**checked, "query": checked["query"].strip()}
+        return checked
+
+
 class _ThreadReadParams(_ThreadParams):
     before_sequence: JsonSafeInteger | None = Field(default=None, ge=1)
     limit: JsonSafeInteger = Field(default=100, ge=1, le=500)
@@ -107,7 +126,7 @@ class _TurnParams(_ThreadParams):
 
 
 class _DirectParams(_ThreadParams):
-    command: str = Field(min_length=1, max_length=30_000)
+    command: str = Field(min_length=1, max_length=8_000)
 
 
 class _InteractionParams(BaseModel):
@@ -148,8 +167,12 @@ class JsonRpcDispatcher:
         self._method_completed = method_completed
         self._methods: dict[str, MethodHandler] = {
             "initialize": self._initialize,
+            "skill.list": self._list_skills,
+            "skill.install": self._install_skill,
+            "skill.remove": self._remove_skill,
             "application.getState": self._get_state,
             "thread.list": self._list_threads,
+            "thread.search": self._search_threads,
             "thread.read": self._read_thread,
             "turn.submit": self._submit_turn,
             "direct.execute": self._execute_direct,
@@ -239,10 +262,31 @@ class JsonRpcDispatcher:
         _EmptyParams.model_validate(params)
         return await self._facade.get_state()
 
+    async def _list_skills(self, params: Mapping[str, object]) -> object:
+        _EmptyParams.model_validate(params)
+        return await self._facade.list_skills()
+
+    async def _install_skill(self, params: Mapping[str, object]) -> object:
+        request = SkillInstallRequest.model_validate(params)
+        return await self._facade.install_skill(request)
+
+    async def _remove_skill(self, params: Mapping[str, object]) -> object:
+        request = SkillRemoveRequest.model_validate(params)
+        return await self._facade.remove_skill(request)
+
     async def _list_threads(self, params: Mapping[str, object]) -> object:
         wire = _ThreadListParams.model_validate(params)
         query = ThreadListQuery(cursor=wire.cursor, limit=wire.limit)
         return await self._facade.list_threads(query)
+
+    async def _search_threads(self, params: Mapping[str, object]) -> object:
+        wire = _ThreadSearchParams.model_validate(params)
+        query = ThreadSearchQuery(
+            query=wire.query,
+            cursor=wire.cursor,
+            limit=wire.limit,
+        )
+        return await self._facade.search_threads(query)
 
     async def _read_thread(self, params: Mapping[str, object]) -> object:
         wire = _ThreadReadParams.model_validate(params)

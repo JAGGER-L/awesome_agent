@@ -11,18 +11,24 @@ from awesome_agent.config import (
     ConfigurationInvalid,
     ConfigurationResolutionError,
     CredentialSource,
+    LoadedConfigSources,
     MemoryConfig,
     ProjectBudgetConfig,
+    ProjectWebConfig,
     ProviderConfig,
     ProviderCredentialStatus,
     ProviderCredentialStatuses,
     SecretStatus,
+    SecretValues,
     StartupOverrides,
     ThreadConfigState,
+    UserBudgetConfig,
     UserConfigDocument,
     UserConfigWriter,
+    WebConfig,
     WorkspaceConfigDocument,
     load_config_sources,
+    missing_provider_credential_statuses,
     resolve_application_config,
     resolve_turn_config,
 )
@@ -34,7 +40,7 @@ def _application(
     default_model: str | None = None,
     deepseek: bool = False,
     kimi: bool = False,
-    user_budgets: BudgetConfig | None = None,
+    user_budgets: UserBudgetConfig | None = None,
     project_budgets: ProjectBudgetConfig | None = None,
 ) -> ApplicationConfig:
     from awesome_agent.config.loader import LoadedConfigSources, SecretValues
@@ -43,7 +49,7 @@ def _application(
         LoadedConfigSources(
             user=UserConfigDocument(
                 providers=ProviderConfig(default_model=default_model),
-                budgets=user_budgets or BudgetConfig(),
+                budgets=user_budgets or UserBudgetConfig(),
             ),
             workspace=WorkspaceConfigDocument(
                 budgets=project_budgets or ProjectBudgetConfig()
@@ -240,13 +246,14 @@ def test_explicit_empty_selection_overrides_fail_closed() -> None:
 def test_workspace_limits_can_only_reduce_user_limits() -> None:
     application = _application(
         deepseek=True,
-        user_budgets=BudgetConfig(
+        user_budgets=UserBudgetConfig(
             model_calls=32,
             tool_calls=64,
             provider_retries=2,
             compressions=2,
             active_execution_seconds=1_800,
             total_context_tokens=262_144,
+            web_requests=8,
         ),
         project_budgets=ProjectBudgetConfig(
             model_calls=16,
@@ -255,13 +262,13 @@ def test_workspace_limits_can_only_reduce_user_limits() -> None:
             compressions=4,
             active_execution_seconds=900,
             total_context_tokens=200_000,
+            web_requests=3,
         ),
     )
     turn = resolve_turn_config(
         application,
         thread=ThreadConfigState(),
         environ={},
-        model_context_limit=180_000,
     )
 
     assert application.budgets == BudgetConfig(
@@ -271,8 +278,71 @@ def test_workspace_limits_can_only_reduce_user_limits() -> None:
         compressions=2,
         active_execution_seconds=900,
         total_context_tokens=200_000,
+        web_requests=3,
     )
-    assert turn.budgets.total_context_tokens == 180_000
+    assert application.budgets.web_requests == 3
+    assert turn.budgets.total_context_tokens == 200_000
+
+
+def test_selected_catalog_profile_caps_total_context_tokens() -> None:
+    application = _application(
+        deepseek=True,
+        user_budgets=UserBudgetConfig(total_context_tokens=300_000),
+    )
+
+    turn = resolve_turn_config(
+        application,
+        thread=ThreadConfigState(),
+        environ={},
+    )
+
+    assert turn.budgets.total_context_tokens == 262_144
+
+
+def test_workspace_web_domains_only_add_restrictions() -> None:
+    sources = LoadedConfigSources(
+        user=UserConfigDocument(
+            web=WebConfig(
+                enabled=True,
+                blocked_domains=("user.example",),
+            )
+        ),
+        workspace=WorkspaceConfigDocument(
+            web=ProjectWebConfig(blocked_domains=("workspace.example", "user.example"))
+        ),
+        secrets=SecretValues(),
+        secret_status=SecretStatus(),
+        provider_credentials=missing_provider_credential_statuses(),
+    )
+
+    application = resolve_application_config(sources)
+
+    assert application.web.enabled is True
+    assert application.web.blocked_domains == (
+        "user.example",
+        "workspace.example",
+    )
+
+
+def test_effective_web_domain_restrictions_remain_bounded() -> None:
+    sources = LoadedConfigSources(
+        user=UserConfigDocument(web=WebConfig(blocked_domains=("user.example",))),
+        workspace=WorkspaceConfigDocument(
+            web=ProjectWebConfig(
+                blocked_domains=tuple(
+                    f"workspace-{index}.example" for index in range(128)
+                )
+            )
+        ),
+        secrets=SecretValues(),
+        secret_status=SecretStatus(),
+        provider_credentials=missing_provider_credential_statuses(),
+    )
+
+    with pytest.raises(ConfigurationResolutionError) as caught:
+        resolve_application_config(sources)
+
+    assert caught.value.code == "configuration_invalid"
 
 
 def test_hard_budget_limits_fail_during_source_validation() -> None:
@@ -286,6 +356,10 @@ def test_hard_budget_limits_fail_during_source_validation() -> None:
         BudgetConfig(compressions=11)
     with pytest.raises(ValidationError):
         BudgetConfig(active_execution_seconds=21_601)
+    with pytest.raises(ValidationError):
+        UserBudgetConfig(web_requests=9)
+    with pytest.raises(ValidationError):
+        ProjectBudgetConfig(web_requests=9)
 
 
 def test_application_snapshot_does_not_change_after_source_edit(tmp_path: Path) -> None:
@@ -332,6 +406,28 @@ def test_user_config_writer_updates_atomically_and_never_writes_secrets(
     content = path.read_text(encoding="utf-8")
     assert "local_file_memory: true" in content
     assert "API_KEY" not in content
+    assert list(path.parent.glob(f".{path.name}.*.tmp")) == []
+
+
+def test_first_supported_write_atomically_upgrades_user_v1_to_v2(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "home" / "config.yaml"
+    path.parent.mkdir()
+    path.write_text(
+        "version: 1\nbudgets:\n  model_calls: 12\n",
+        encoding="utf-8",
+    )
+
+    updated = UserConfigWriter(path).update(lambda current: current)
+
+    content = path.read_text(encoding="utf-8")
+    assert updated.version == 2
+    assert content.startswith("version: 2\n")
+    assert "tavily: environment" in content
+    assert "web_proxy: null" in content
+    assert "web_requests: 8" in content
+    assert "enabled: false" in content
     assert list(path.parent.glob(f".{path.name}.*.tmp")) == []
 
 

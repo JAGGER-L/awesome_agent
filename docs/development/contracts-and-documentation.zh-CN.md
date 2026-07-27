@@ -55,7 +55,23 @@ API：package 所有权、唯一 graph compiler、命令 inventory、schema iden
 这些测试将高价值架构决策变成立即失败。如果新增 package、table、command、dependency
 或 graph field，只有在说明架构为何改变之后才能更新测试。
 
-## Protocol v3 变更工作流
+## 契约版本目录
+
+`contract-versions.json` 是公共 contract identifier 的唯一手工维护目录。产品版本仍由
+`VERSION` 管理；同一 release 内使用的 recovery marker 和其他内部 record version 不会
+纳入。生成的 Python 与 TypeScript 常量让运行时路径无需读取 JSON。
+
+当纳入目录的 contract 发生不兼容变化时：
+
+1. 将 catalog entry 与 owner behavior、migration 或 rejection policy 一同修改；
+2. 运行 `uv run python scripts/release/contract_versions.py --write` 重新生成 binding；
+3. 检查两个生成文件，不要手工编辑；
+4. 运行 `uv run python scripts/release/contract_versions.py`，以及受影响的 Python、
+   TUI、fixture、persistence 或 output test。
+
+该目录是一组 release tuple，而不是共享计数器。只递增真正发生不兼容变化的 contract。
+
+## Protocol v4 变更工作流
 
 Protocol fixture 是 Python/TypeScript 双向证据。若要变更 method、result、event、command
 outcome 或 projection：
@@ -68,13 +84,16 @@ outcome 或 projection：
    uv run python scripts/generate_protocol_fixtures.py
    ```
 
-4. 检查 `protocol/fixtures/v3/` 和 manifest hash；绝不手工编辑。
-5. 更新 `tui/src/protocol/` 下严格 Zod schema。
-6. 为权威状态变更更新 reducer/effect 代码。
-7. 为可见事实更新 exhaustive Presenter/component。
-8. 运行：
+4. 检查 `protocol/fixtures/v4/` 和 manifest hash；绝不手工编辑。
+5. 对 breaking change，更新 `contract-versions.json` 中的 Protocol entry 并重新生成
+   binding。
+6. 更新 `tui/src/protocol/` 下严格 Zod schema。
+7. 为权威状态变更更新 reducer/effect 代码。
+8. 为可见事实更新 exhaustive Presenter/component。
+9. 运行：
 
    ```powershell
+   uv run python scripts/release/contract_versions.py
    uv run python scripts/generate_protocol_fixtures.py --check
    uv run pytest -q tests/unit/protocol tests/e2e/test_stdio_product.py
    npm --prefix tui run typecheck
@@ -88,12 +107,12 @@ outcome 或 projection：
 ## 命令契约
 
 `application/commands.py` 中的 `CommandName` 和 `COMMAND_OWNERS` 是运行时权威。
-当前 catalog 有 21 个 Application 命令和四个 Ink-local 命令：
+当前 catalog 有 22 个 Application 命令和四个 Ink-local 命令：
 
 ```text
 Application:
   new rename resume context compact auth model thinking workspace
-  diff undo redo tools skills mcp memory status usage doctor config permissions
+  diff undo redo tools skills mcp web memory status usage doctor config permissions
 
 Ink:
   help theme copy quit
@@ -110,6 +129,8 @@ Ink:
 - 没有斜杠命令提交隐藏的 Agent Turn；
 - 返回唯一可辨识 result/interaction/error；
 - 权威 effect 与纯 presentation 保持分离；
+- citation 值在 tool result、Agent checkpoint、Conversation、fixture、TUI hydration 与
+  headless JSON 中保持一致；
 - empty、invalid、unavailable、busy 与 interaction 状态可见；
 - foreground observation 分类显式；
 - Help、Presenter、transcript 和聚焦 UI 测试一致。

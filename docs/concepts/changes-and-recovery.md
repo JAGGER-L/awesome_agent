@@ -11,8 +11,8 @@ Awesome does not use one database row as proof of everything:
 | Record | What it proves | What it cannot prove |
 | --- | --- | --- |
 | Thread and Turn | The request, terminal status, answer, and usage | Exact filesystem state |
-| LangGraph checkpoint | Where a resumable Agent loop stopped | Whether an external side effect occurred |
-| Change Journal | Observed built-in file before/after states and shell attempts | Arbitrary effects created by shell or MCP |
+| LangGraph checkpoint | Where a resumable Agent loop stopped | Whether a pending side-effecting tool already acted |
+| Change Journal | Observed built-in file before/after states and shell attempts | Invocation idempotency or arbitrary effects created by shell or MCP |
 
 Keeping these records separate prevents a conversational “completed” flag from
 being mistaken for a filesystem transaction.
@@ -80,21 +80,25 @@ compares the durable Turn with its checkpoint and frozen context facts.
 ```text
 unfinished Turn
       |
-      +-- checkpoint and context verified --> Retry is the safe default
+      +-- verified; pending work replayable -> Retry is the safe default
       |
-      +-- external tool may have acted -----> Abort is the safe default
+      +-- non-replayable tool may have acted -> Abort is the safe default
       |
       +-- checkpoint/context invalid --------> fail with a diagnostic
 ```
 
 For a verified local checkpoint, Retry continues from that checkpoint; it does
-not rebuild a different context from the current files. For an uncertain shell
-or MCP call, Awesome never transparently reconnects, replays, or assumes
-failure. The user must choose between retrying the remaining Turn with that
-uncertainty visible or aborting it.
+not rebuild a different context from the current files. Recovery resumes
+automatically only when the pending tool registration proves repetition safe.
+The built-in file mutation tools are non-replayable because a user or another
+process may change the same path after the crash. For an uncertain file
+mutation, shell command, MCP call, or Web request, Awesome never transparently
+replays or assumes failure. The user must choose between retrying the remaining
+Turn with that uncertainty visible or aborting it.
 
 Abort marks the unfinished Turn failed without continuing it. It does not roll
-back external systems or erase Change Journal evidence.
+back the filesystem or external systems, and it does not erase Change Journal
+evidence.
 
 ## Startup State Compatibility
 
@@ -126,10 +130,11 @@ system proves otherwise.
 ## Recovery Checklist
 
 1. Read the exact prompt and identify whether the uncertainty is local,
-   filesystem, shell, or MCP.
-2. Inspect `/status`, `/diff`, and the external target when available.
+   filesystem, shell, MCP, or Web.
+2. Inspect `/status`, `/diff`, the affected files, and the external target when
+   available.
 3. Choose Retry only when replaying the remaining logical work is safe.
-4. Choose Abort when duplicate external effects would be worse than an
+4. Choose Abort when duplicate side effects would be worse than an
    incomplete Turn.
 5. Start a new Turn explaining any manually verified state.
 

@@ -1,0 +1,357 @@
+{
+  "events": [
+    {
+      "event_id": "event_001",
+      "event_type": "operation.started",
+      "operation_id": "operation_33333333333333333333333333333333",
+      "payload": {
+        "kind": "operation.started",
+        "message": ""
+      },
+      "sequence": 1,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_002",
+      "event_type": "operation.completed",
+      "operation_id": "operation_33333333333333333333333333333333",
+      "payload": {
+        "kind": "operation.completed",
+        "message": ""
+      },
+      "sequence": 2,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_003",
+      "event_type": "operation.failed",
+      "operation_id": "operation_33333333333333333333333333333333",
+      "payload": {
+        "kind": "operation.failed",
+        "message": ""
+      },
+      "sequence": 3,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_004",
+      "event_type": "operation.cancelled",
+      "operation_id": "operation_33333333333333333333333333333333",
+      "payload": {
+        "kind": "operation.cancelled",
+        "message": ""
+      },
+      "sequence": 4,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "client_message_id": "client_44444444444444444444444444444444",
+      "event_id": "event_005",
+      "event_type": "turn.started",
+      "payload": {
+        "kind": "turn.started"
+      },
+      "sequence": 5,
+      "session_id": "session_11111111111111111111111111111111",
+      "thread_id": "thread_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "turn_id": "turn_22222222222222222222222222222222",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "client_message_id": "client_44444444444444444444444444444444",
+      "event_id": "event_006",
+      "event_type": "turn.completed",
+      "payload": {
+        "duration_ms": 1250,
+        "kind": "turn.completed"
+      },
+      "sequence": 6,
+      "session_id": "session_11111111111111111111111111111111",
+      "thread_id": "thread_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "turn_id": "turn_22222222222222222222222222222222",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "client_message_id": "client_44444444444444444444444444444444",
+      "event_id": "event_007",
+      "event_type": "turn.failed",
+      "payload": {
+        "duration_ms": 1250,
+        "kind": "turn.failed"
+      },
+      "sequence": 7,
+      "session_id": "session_11111111111111111111111111111111",
+      "thread_id": "thread_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "turn_id": "turn_22222222222222222222222222222222",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "client_message_id": "client_44444444444444444444444444444444",
+      "event_id": "event_008",
+      "event_type": "turn.cancelled",
+      "payload": {
+        "duration_ms": 1250,
+        "kind": "turn.cancelled"
+      },
+      "sequence": 8,
+      "session_id": "session_11111111111111111111111111111111",
+      "thread_id": "thread_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "turn_id": "turn_22222222222222222222222222222222",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_009",
+      "event_type": "assistant.text.delta",
+      "payload": {
+        "kind": "assistant.text.delta",
+        "text": "answer"
+      },
+      "sequence": 9,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_010",
+      "event_type": "assistant.reasoning.delta",
+      "payload": {
+        "kind": "assistant.reasoning.delta",
+        "text": "reasoning"
+      },
+      "sequence": 10,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_011",
+      "event_type": "provider.retrying",
+      "payload": {
+        "attempt": 2,
+        "delay_seconds": 0.5,
+        "error_code": "provider_unavailable",
+        "kind": "provider.retrying",
+        "maximum": 6
+      },
+      "sequence": 11,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_012",
+      "event_type": "tool.started",
+      "payload": {
+        "call_id": "call_1",
+        "kind": "tool.started",
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
+      },
+      "sequence": 12,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_013",
+      "event_type": "tool.completed",
+      "payload": {
+        "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
+        "kind": "tool.completed",
+        "outcome": "Read",
+        "summary": "Safe tool summary.",
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
+      },
+      "sequence": 13,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_014",
+      "event_type": "tool.failed",
+      "payload": {
+        "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
+        "kind": "tool.failed",
+        "outcome": "Failed",
+        "summary": "Safe tool summary.",
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
+      },
+      "sequence": 14,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_015",
+      "event_type": "tool.cancelled",
+      "payload": {
+        "call_id": "call_1",
+        "detail": "Safe bounded detail.",
+        "duration_ms": 18,
+        "kind": "tool.cancelled",
+        "outcome": "Failed",
+        "summary": "Safe tool summary.",
+        "target": "src/example.py",
+        "tool_name": "read_file",
+        "verb": "Read"
+      },
+      "sequence": 15,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_016",
+      "event_type": "context.prepared",
+      "payload": {
+        "estimated_tokens": 128,
+        "kind": "context.prepared",
+        "source_count": 2
+      },
+      "sequence": 16,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_017",
+      "event_type": "context.compressed",
+      "payload": {
+        "estimated_tokens": 128,
+        "kind": "context.compressed",
+        "source_count": 2
+      },
+      "sequence": 17,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_018",
+      "event_type": "usage.updated",
+      "payload": {
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "input_tokens": 9007199254740991,
+        "kind": "usage.updated",
+        "output_tokens": 4,
+        "reasoning_tokens": 0,
+        "web_requests": 0
+      },
+      "sequence": 18,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_019",
+      "event_type": "memory.status",
+      "payload": {
+        "enabled": false,
+        "kind": "memory.status",
+        "layer": "local",
+        "status": "disabled"
+      },
+      "sequence": 19,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_020",
+      "event_type": "interaction.required",
+      "payload": {
+        "choices": [
+          {
+            "decision": "reset_state",
+            "label": "Reset local state and continue"
+          },
+          {
+            "decision": "deny",
+            "label": "Exit"
+          }
+        ],
+        "interaction_id": "interaction_state_reset",
+        "interaction_kind": "state_reset",
+        "kind": "interaction.required",
+        "operation": "reset_local_state",
+        "prompt": "Awesome needs to reset local state",
+        "target": "local state"
+      },
+      "sequence": 20,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_021",
+      "event_type": "interaction.resolved",
+      "payload": {
+        "decision": "trust",
+        "interaction_id": "interaction_1",
+        "kind": "interaction.resolved"
+      },
+      "sequence": 21,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "event_id": "event_022",
+      "event_type": "warning",
+      "payload": {
+        "code": "safe_warning",
+        "kind": "warning",
+        "message": "Safe warning."
+      },
+      "sequence": 22,
+      "session_id": "session_11111111111111111111111111111111",
+      "timestamp": "2026-07-11T08:00:00Z",
+      "version": 1,
+      "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ]
+}

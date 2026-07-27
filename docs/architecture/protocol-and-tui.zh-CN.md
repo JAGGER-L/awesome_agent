@@ -20,11 +20,17 @@ TUI 把这些事实转换为临时状态和渲染状态。两个边界都不接�
 每个请求并施加明确的输入/背压边界，因为畸形或不匹配的本地组件也不能破坏状态。
 入站与出站 frame 都执行相同的严格 1 MiB UTF-8 JSON 边界，具体见下文。
 
-## Protocol v3 契约
+## Protocol v4 契约
 
-初始化要求字面量 `protocol_version: 3`、客户端名称 `awesome`，以及与 Core 相同的产品
-版本。即使产品版本相同，v2 客户端也会明确失败。协议版本与产品版本回答不同问题：
+初始化要求字面量 `protocol_version: 4`、客户端名称 `awesome`，以及与 Core 相同的产品
+版本。即使产品版本相同，v3 客户端也会明确失败。协议版本与产品版本回答不同问题：
 线缆兼容性与发布身份。
+
+契约数字不会在两个进程中手工复制。`contract-versions.json` 会生成无依赖的字面量
+binding：`src/awesome_agent/contract_versions.py` 与
+`tui/src/contract-versions.ts`。运行时代码只导入这些 binding，不读取 catalog。
+`VERSION` 仍单独管理产品版本；release 会把两类来源组合为只属于 artifact 的
+`compatibility.json` tuple，而不是强制它们使用相同数字。
 
 请求 ID 是 JSON/JavaScript 安全的整数，或由 1–128 个 Unicode 标量组成且不含未配对
 UTF-16 surrogate 的字符串。数字 ID 必须是整数、有限值、非 Boolean，并位于
@@ -41,8 +47,12 @@ Python object，这里仍是最终不变量边界。
 | 方法 | 用途 |
 | --- | --- |
 | `initialize` | 协商身份并执行启动/bootstrap |
+| `skill.list` | 在初始化前列出有效的已安装 User Skill 包 |
+| `skill.install` | 在初始化前校验并安装或替换一个本地 User Skill 包 |
+| `skill.remove` | 在初始化前移除一个已安装 User Skill 包 |
 | `application.getState` | 读取权威 Application 状态 |
 | `thread.list` | 分页读取工作区 Threads |
+| `thread.search` | 分页读取 Workspace 隔离的会话 substring match |
 | `thread.read` | 分页读取一个 Thread 及其 transcript 投影 |
 | `turn.submit` | 准入自然语言前台工作 |
 | `direct.execute` | 准入直接 shell Operation |
@@ -56,15 +66,31 @@ Core 发送带严格 envelope 的 `event` notification。事件族涵盖 Operati
 生命周期、assistant 文本/reasoning delta、提供商重试、工具生命周期、上下文准备/压缩、
 usage、Memory 状态、interaction 和 warning。
 
+`thread.search` 刻意复用 `ThreadListResult`，因此界面无需另一套 Thread card model。
+query 在 Application SQLite 执行字面 substring match 前完成 trim 与 bound；查询受
+5,000,000 VM-op scan budget 限制，不透明 cursor 同时绑定活动 Workspace 和 query hash，
+并保留 RPC keyset pagination。`/search` 复用通用 selection continuation，但只展示最近的
+50 条匹配；存在更多结果时，prompt 会要求缩小 query。耗尽 scan budget 时返回
+`result_too_large`。`/export` 只增加严格的 `thread_export` result：path 长度为 1–1,000，
+且只有字节发生变化时才携带非空 `change_set_id`；穷尽 presenter 不读取原始文件或私有
+metadata。
+
+`/fork` 复用 reason 为 `fork` 的 `thread_transition`；`/retry` 使用一个严格的组合
+`thread_retry` payload，同时包含 retry transition 与已准入 Operation。每个 Thread
+projection 都携带必需且可空的 lineage，因此根、fork 与 retry identity 能在 Python、
+fixture、Zod、effect 和 hydration 间保持明确，而无需增加另一条 RPC 或 surface model。
+
 ## 跨语言证据
 
 Python 负责序列化方法结果、`CommandOutcome` variant 和事件。
-`scripts/generate_protocol_fixtures.py` 在 `protocol/fixtures/v3/` 下写入确定性的有效与
+`scripts/generate_protocol_fixtures.py` 在 `protocol/fixtures/v4/` 下写入确定性的有效与
 无效 fixture。TypeScript Zod schema 校验同一语料库。
 
 ```text
+contract-versions.json
+  -> generated Python + TypeScript literal bindings
 Python Pydantic contracts
-  -> generated v3 fixtures + manifest hashes
+  -> generated v4 fixtures + manifest hashes
   -> TypeScript strict Zod schemas
   -> protocol contract tests
   -> exhaustive reducers/presenters
@@ -76,27 +102,51 @@ TypeScript exhaustive switch 会在编译时暴露遗漏的 case。
 
 ## 握手状态机
 
-stdio Host 会控制 Application 访问：
+`LocalApplication` 持有唯一的 `ApplicationBootstrap` 和唯一可变的
+`BootstrapPhase`。因此，这套状态机属于 Application 生命周期组件，而不是 stdio Host
+状态：
 
 ```text
 UNINITIALIZED
-  -> initialize in flight: INITIALIZING
-  -> ready result: READY
-  -> trust_required/state_reset_required: BOOTSTRAP_INTERACTION
-  -> failure: previous state
+  -> skill.* starts: PREINITIALIZE_ACTIVE
+  -> initialize starts: INITIALIZING
 
-BOOTSTRAP_INTERACTION
-  -> matching interaction.respond
-  -> trust accepted: READY
-  -> reset accepted: initialize again
+PREINITIALIZE_ACTIVE（guard；BootstrapPhase 仍为 UNINITIALIZED）
+  -> owned worker 收敛后的 result/error/cancellation: UNINITIALIZED
+  -> 另一个 skill.* 或 initialize: reject
+
+INITIALIZING
+  -> ready result: READY
+  -> trust_required result: TRUST_REQUIRED
+  -> state_reset_required result: STATE_RESET_REQUIRED
+  -> failure/cancellation: previous phase
+
+TRUST_REQUIRED
+  -> matching trust accepted after activation: READY
+
+STATE_RESET_REQUIRED
+  -> matching reset accepted: remain non-ready
+  -> initialize again
 ```
 
-进入 `READY` 之前，普通请求会收到稳定的 server-not-initialized 或 server-not-ready 错误。
-第二个并发 initialize 会收到 `initialization_in_progress`。Bootstrap 期间，只准入匹配的
-interaction、另一次 initialize、取消和 shutdown。畸形或 v2 initialize 绝不会打开 gate。
+Host 在 dispatch 前把 method 映射到封闭的 `ApplicationOperation` 集合，并向 Application
+查询 admission decision。它只负责把拒绝转换到 wire；不会维护另一套 phase enum，也不会
+检查序列化 request/result payload 来推进 readiness。
+
+三个私有 `skill.*` method 是 plain `UNINITIALIZED` 状态下唯一看似普通但可用的方法。它们
+共用一个由 Application 持有的 pre-initialize guard，彼此互斥，也与 `initialize` 互斥，且绝不
+自行初始化 Application。一个请求完成后，私有 client 可以初始化同一个 Core，discovery 会
+观察到变更后的 User 包目录。官方 `awesome skills` CLI 则执行一个请求后关闭 Core。两条路径
+都不会热更新已经初始化的 Session 所持有的不可变 catalog。
+
+进入 `READY` 之前，其他普通请求会收到稳定的 server-not-initialized 或 server-not-ready
+错误。Initialization 一旦开始，就不再准入 `skill.*`。第二个并发 initialize 会收到
+`initialization_in_progress`；匹配的 bootstrap interaction、cancellation 与 shutdown 保留各自
+定义的 control path。畸形或 v3 initialize 绝不会推进 Application phase。
 
 进入 `READY` 后仍可重复初始化，因此界面重试可以观察当前快照，而不会创建第二个
-Application。
+Application。这些所有权规则保留单一 Application-owned Protocol v4 request、result、status
+与 error shape。
 
 ## Frame 与调度边界
 
@@ -133,6 +183,13 @@ Core output writer 会将一整行串行化，并在写入前检查紧凑 UTF-8 
 会在发出 request 前安装 event consumer，并把 event correlation ID 视为权威，因此 early
 event 不依赖 response-first buffering。
 
+Retry 增加一个本地顺序 gate，因为它的 event 指向组合 response 到达前界面尚不能安装的
+Thread。`ConnectedSurface` 会在 `command.execute` 前打开 gate，按 sequence 缓存 event
+stream；只有权威 retry transition 已递增 Thread generation，并且返回的 Operation identity
+已绑定到该 generation 后，才释放事件。本地 gate 上限为 1,024 个 event 与 4 MiB 编码
+内容。容量或 Operation/Thread/Turn identity 违规属于致命 protocol desynchronization。
+Retry 被拒绝时，合法的来源 Thread event 会被重放而不是丢弃。
+
 `thread.read` 会先按 Application 字节预算缩小 page。Writer 是所有 method 与 event 的最终
 不变量边界：如果任一 request result 仍超过 1 MiB，Core 会使用相同 request ID 返回有界的
 `result_too_large` Application failure。该错误不可重试，因为 method 可能已经产生外部效果；
@@ -148,7 +205,7 @@ Core 发送事实，而不是预格式化的终端 widget：
 
 ```text
 Application fact
-  -> Protocol v3 payload
+  -> Protocol v4 payload
   -> optional authoritative Surface effect
   -> exhaustive presentCommandPayload()
   -> CommandPresentation
@@ -162,6 +219,12 @@ Effect 与 Presenter 相互分离。Effect 可以安装权威 Thread replacement
 
 共享组件负责边框、换行、对齐、符号和语义颜色。它们不接受任意 record 并将其字符串化。
 这会增加新命令的代码量，但能防止意外泄露内部 JSON 或 secret。
+
+Protocol v4 将 citation 放入同一份持久投影，而不是平行 event stream。Assistant-entry
+metadata 携带有序且严格的 `Citation`；transcript hydration 保留它们，reconciliation
+拒绝过期 replacement，`BlockView` 只为 ID 存在于该 entry catalog 的 marker 生成链接。
+未知 `[[S...]]` marker 保持纯文本。使用 Web 但没有有效 marker 时，finalization 已经附加
+有界 Sources 区域。
 
 ## 界面状态与展示状态
 
@@ -178,6 +241,44 @@ Effect 与 Presenter 相互分离。Effect 可以安装权威 Thread replacement
 
 这种区分确保恢复 Thread 时不会同时恢复过时的 UI 控件。新界面可以适配相同的
 facade/event，同时选择不同的展示模型。
+
+## 仅属于会话的编排
+
+两个具体 controller 把请求时序移出大型 React component，同时不引入全局 store 或第二套
+产品 runtime：
+
+- `StartupSessionController` 绑定一个 connected Surface 和 launch intent。它调用既有启动
+  protocol 函数，继续处理类型化的 trust、state reset 和启动 Thread selection outcome；
+  它不拥有或推断 Application bootstrap phase。
+- `SubmissionCoordinator` 负责一条被提升终端输入的事务：在提升时解析、捕获 Thread
+  generation、关联乐观 `client_message_id`、请求 Core 准入，并在 Thread replacement 后
+  拒绝迟到投影。
+
+Composer history、modal selection、notice 和 pending-input queue 仍是 React 展示状态。
+Coordinator 不会独立 drain 输入；Core 继续只准入一个前台 Operation。
+
+## Headless 界面
+
+`awesome run` 是同一个 TypeScript launcher 的第二种展示模式，不是第二套产品 runtime。
+它连接一个 `ConnectedSurface`，通过 `StartupSessionController` 调用同一条 `beginStartup`
+流程，使用现有 command 选择或创建 Thread，通过 Protocol v4 提交，并用 `thread.read` 读取
+持久化的最终 assistant entry。Python Application 仍是唯一的生命周期与 mutation 权威。
+
+Runner 不渲染 Ink，也不消费终端输入。父进程 stdout 只为一次成功的最终文本值或一个带版本
+的 JSON 文档保留；诊断使用父进程 stderr。Core 子进程 stdout 仍是私有 NDJSON，绝不会作为
+命令输出转发。这样可在复用 Protocol v4 时提供确定性的重定向输出。
+
+JSON output version 2 包含持久文本、有序 `citations`、`usage.web_requests`、各项 ID、
+termination reason 与其他 usage counter。Text mode 渲染已经 finalized 的回答，包括可能
+附加的 Sources 区域。
+
+未解决 interaction 是 headless 的终态：runner 会请求取消已准入 Operation，并返回退出码 3，
+而不是虚构审批。SIGINT 使用同一个紧急 `operation.cancel` 方法，在有界期限内尝试取消、抑制
+结果输出，并返回 130。Launcher 随后执行有界 Surface/Core shutdown；优雅关闭无法完成时，
+仍会强制终止进程树。
+
+解析后的 `--allow-network` 值只为当前 headless Turn 精确匹配的 `network.read` interaction
+提供进程级权限，并将其解析为 `allow_once`；它不能创建 Thread grant 或绕过拒绝。
 
 ## 输入所有权
 
@@ -205,14 +306,22 @@ Composer 使用 Ink 的物理光标，而不是打印出来的块状 glyph：
 ```text
 grapheme-aware logical cursor
   -> display-width-aware viewport row/column
+  -> Composer insertion phase 中的当前 Ink Yoga layout
   -> React TerminalFrameMetrics
-  -> InkCursorBridge
-  -> useCursor physical terminal position
+  -> InkCursorBridge fullscreen adjustment
+  -> ancestor useCursor physical terminal position
 ```
 
-该 bridge 隔离了 Ink 7.1 的一个全屏约定：填满 viewport 的 frame 会省略末尾换行。
-终端 frame metric 仍是本地展示状态。未来升级 Ink 后，只有当低于、等于和高于 viewport
-的 ANSI 回归仍全部通过，才能移除该 bridge。
+`TerminalSurfaceLayout` 持有 `useCursor`。每次 active Composer commit 时，后代的
+insertion effect 都会在 host mutation 之后重新计算当前 Ink Yoga layout，并在祖先的 cursor
+effect 运行前发布该位置。因此，流式内容与光标来自同一份 layout；缓存的 `useBoxMetrics`
+坐标只负责首次 readiness 并请求第一次祖先 cursor commit，不会用于定位当前 frame。
+
+该 bridge 还隔离了 Ink 7.1 的一个全屏约定：填满 viewport 的 frame 会省略末尾换行。
+同步 layout pass 会在 Composer 活动时增加一次 Yoga 计算，但可以保留自然终端流和终端 host
+的 IME 渲染。终端 frame metric 仍是本地展示状态。未来升级 Ink 后，只有当逐 frame 的低于、
+等于和高于 viewport 光标回归，以及 resize 和 Composer remount 回归仍全部通过，才能移除
+任一 workaround。
 
 IME preedit 仍由终端 host 负责。Composer 逻辑处理已经提交的 grapheme 输入，不尝试自行
 渲染平台 IME 状态。
@@ -230,7 +339,7 @@ command menu、Composer 或独占 interaction，最后是 status。当前 Thread
 - 每个 head 只在被提升时解析；
 - Composer 为空时，按 Up 可以召回 tail；
 - picker 或 approval 会暂停提升；
-- `/new` 与 `/resume` 会改变随后 item 的目标 Thread；
+- `/new`、`/resume`、`/fork` 与 `/retry` 会改变随后 item 的目标 Thread；
 - 排队的 `/quit` 是一个有序终止 barrier；
 - 可重试的 busy 竞态会把相同 identity 重新放回队首。
 
@@ -246,6 +355,10 @@ outcome、summary、可选 detail、duration 和 error code。
 `client_message_id` 用于校正乐观显示的用户输入与已准入的持久化条目。Thread replacement
 会递增 generation、清空活动 frame、安装权威 Application/Thread 快照，并拒绝前一
 generation 的迟到事件。Event sequence 用于检测重复和缺口。
+
+对 retry 而言，replacement 会先于任何缓存 event 完成安装。因此即使已准入 Operation 的
+start 与后续 delta 早于 command response 到达 stdio，它们仍进入新 generation，绝不会
+出现在来源 Thread。
 
 重连或 resume 后，`thread.read` 是持久化来源。实时投影按稳定 identity 合并，而不是
 盲目追加，从而避免 event 与 hydration transcript 描述同一事实时产生重复消息。
@@ -291,8 +404,9 @@ kill-on-close lifetime Job Object。Core 无法建立这一不变量时会 fail 
 
 - Python schema 与方法：`protocol/jsonrpc.py`
 - Host framing 与调度：`protocol/stdio.py`
-- Fixtures：`protocol/fixtures/v3/`、`scripts/generate_protocol_fixtures.py`
+- Fixtures：`protocol/fixtures/v4/`、`scripts/generate_protocol_fixtures.py`
 - Core 进程适配器：`tui/src/core/process.ts`
+- Headless runner：`tui/src/cli/headless.ts`、`tui/src/cli/main.tsx`
 - TypeScript schema：`tui/src/protocol/`
 - 界面 reducer：`tui/src/state/`
 - 输入 mode：`tui/src/interaction/`、`tui/src/components/Composer.tsx`

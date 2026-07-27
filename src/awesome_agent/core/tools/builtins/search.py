@@ -19,6 +19,7 @@ from awesome_agent.core.tools.builtins.file_enumerator import (
 from awesome_agent.core.tools.builtins.read_file import MAX_FILE_BYTES
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolOutput,
     ToolPresentation,
@@ -27,13 +28,13 @@ from awesome_agent.core.tools.errors import ExpectedToolFailure
 from awesome_agent.core.tools.policy import SafeWorkspacePath, resolve_workspace_path
 
 
-class GlobArguments(BaseModel):
+class GlobArguments(ToolArguments):
     pattern: str = Field(min_length=1, max_length=500)
     path: str = "."
     max_results: int = Field(default=200, ge=1, le=1_000)
 
 
-class GrepArguments(BaseModel):
+class GrepArguments(ToolArguments):
     pattern: str = Field(min_length=1, max_length=1_000)
     path: str = "."
     include: str | None = Field(default=None, max_length=500)
@@ -80,13 +81,30 @@ def _glob_scan_root(
         raise
 
 
-def _validate_pattern(pattern: str) -> None:
+def validate_glob_pattern(pattern: str) -> None:
     candidate = PurePath(pattern)
     if candidate.is_absolute() or ".." in candidate.parts:
         raise ExpectedToolFailure(
             ToolErrorCode.WORKSPACE_ESCAPE,
             "Search pattern escapes the workspace boundary.",
         )
+
+
+def admit_glob(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> None:
+    options = cast(GlobArguments, arguments)
+    _search_root(context, options.path)
+    validate_glob_pattern(options.pattern)
+
+
+def admit_grep(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> None:
+    options = cast(GrepArguments, arguments)
+    _search_root(context, options.path)
 
 
 async def _run_scan[T](scan: Callable[[ScanCancellation], T]) -> T:
@@ -106,7 +124,7 @@ async def glob_files(
     context: ToolExecutionContext,
 ) -> ToolOutput:
     options = cast(GlobArguments, arguments)
-    _validate_pattern(options.pattern)
+    validate_glob_pattern(options.pattern)
     root = _search_root(context, options.path)
     scan_root = _glob_scan_root(root, options.pattern, context)
 

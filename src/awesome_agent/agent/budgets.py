@@ -15,6 +15,7 @@ class TurnBudget(BaseModel):
     provider_retries: int = Field(default=2, ge=0, le=6)
     compressions: int = Field(default=2, ge=0, le=10)
     active_execution_seconds: float = Field(default=1_800, gt=0, le=21_600)
+    web_requests: int = Field(default=8, ge=0, le=8)
 
 
 class BudgetDecision(BaseModel):

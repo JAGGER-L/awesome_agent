@@ -3,12 +3,16 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 import { COMMAND_CATALOG } from "../../src/commands/catalog.js";
+import { PROTOCOL_VERSION } from "../../src/contract-versions.js";
 
 describe("COMMAND_CATALOG", () => {
   it("matches the shared command fixture exactly", async () => {
     const fixture = JSON.parse(
       await readFile(
-        new URL("../../../protocol/fixtures/v3/commands.json", import.meta.url),
+        new URL(
+          `../../../protocol/fixtures/v${PROTOCOL_VERSION}/commands.json`,
+          import.meta.url,
+        ),
         "utf8",
       ),
     ) as { commands: { name: string; owner: string }[] };
@@ -20,11 +24,11 @@ describe("COMMAND_CATALOG", () => {
   it("has exact owner counts and useful metadata", () => {
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "application"),
-    ).toHaveLength(21);
+    ).toHaveLength(26);
     expect(COMMAND_CATALOG.filter(({ owner }) => owner === "ink")).toHaveLength(
       4,
     );
-    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(25);
+    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(30);
     for (const command of COMMAND_CATALOG) {
       expect(command.completion).toBe(`/${command.name}`);
       expect(command.completion).not.toContain("[");
@@ -35,5 +39,8 @@ describe("COMMAND_CATALOG", () => {
     expect(
       COMMAND_CATALOG.find(({ name }) => name === "workspace")?.description,
     ).toBe("Show the current workspace path");
+    expect(
+      COMMAND_CATALOG.find(({ name }) => name === "search")?.examples,
+    ).toContain('/search "provider retry"');
   });
 });

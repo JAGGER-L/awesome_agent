@@ -3,6 +3,7 @@ from pathlib import Path
 from awesome_agent.extensions.mcp import McpServerConfig, McpSource
 from awesome_agent.storage import (
     APPLICATION_SCHEMA_VERSION,
+    ApplicationSQLite,
     SQLiteMcpEnablementStore,
     mcp_config_hash,
 )
@@ -20,24 +21,27 @@ def _workspace_config(
     )
 
 
-def test_store_uses_hash_bound_workspace_enablement(
+async def test_store_uses_hash_bound_workspace_enablement(
     tmp_path: Path,
 ) -> None:
-    database = tmp_path / "state.db"
-    store = SQLiteMcpEnablementStore(database)
-    config = _workspace_config(args=("server.py", "--safe"), env=("TOKEN", "PATH"))
+    database = ApplicationSQLite(tmp_path / "state.db")
+    await database.initialize()
+    try:
+        store = SQLiteMcpEnablementStore(database)
+        config = _workspace_config(args=("server.py", "--safe"), env=("TOKEN", "PATH"))
 
-    store.enable("workspace-key", config.id, mcp_config_hash(config))
+        await store.enable("workspace-key", config.id, mcp_config_hash(config))
 
-    assert APPLICATION_SCHEMA_VERSION == 7
-    assert store.is_enabled("workspace-key", config.id, mcp_config_hash(config))
-    assert not store.is_enabled(
-        "workspace-key",
-        config.id,
-        mcp_config_hash(config.model_copy(update={"args": ("server.py", "--new")})),
-    )
-    store.disable("workspace-key", config.id)
-    assert not store.is_enabled("workspace-key", config.id, mcp_config_hash(config))
+        assert APPLICATION_SCHEMA_VERSION == 8
+        enabled = await store.snapshot("workspace-key")
+        assert enabled == {config.id: mcp_config_hash(config)}
+        assert enabled[config.id] != mcp_config_hash(
+            config.model_copy(update={"args": ("server.py", "--new")})
+        )
+        await store.disable("workspace-key", config.id)
+        assert await store.snapshot("workspace-key") == {}
+    finally:
+        await database.aclose()
 
 
 def test_config_hash_orders_arguments_but_normalizes_environment_names() -> None:

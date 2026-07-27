@@ -1,3 +1,11 @@
+from awesome_agent.config.credential_catalog import (
+    CREDENTIAL_CATALOG,
+    CREDENTIAL_DESCRIPTORS,
+    CredentialDescriptor,
+    CredentialId,
+    awesome_secret_names,
+    credential_descriptor,
+)
 from awesome_agent.config.credential_transaction import (
     ProviderCredentialTransactionError,
     ProviderCredentialTransactionJournal,
@@ -29,15 +37,14 @@ from awesome_agent.config.loader import (
     read_user_config_document,
 )
 from awesome_agent.config.models import (
-    SUPPORTED_MODEL_IDS,
     ApplicationConfig,
     BudgetConfig,
     CredentialSelectionConfig,
     CredentialSource,
-    KimiRegion,
     McpServerDeclaration,
     MemoryConfig,
     ProjectBudgetConfig,
+    ProjectWebConfig,
     ProviderConfig,
     SecretStatus,
     SkillConfig,
@@ -45,8 +52,10 @@ from awesome_agent.config.models import (
     StartupOverrides,
     ThreadConfigState,
     TurnConfig,
+    UserBudgetConfig,
     UserConfigDocument,
     UserMcpServerConfig,
+    WebConfig,
     WorkspaceConfigDocument,
 )
 from awesome_agent.config.resolver import (
@@ -55,14 +64,18 @@ from awesome_agent.config.resolver import (
     resolve_turn_config,
 )
 from awesome_agent.config.writer import UserConfigWriter
+from awesome_agent.modeling import KimiRegion
 
 __all__ = [
-    "SUPPORTED_MODEL_IDS",
+    "CREDENTIAL_CATALOG",
+    "CREDENTIAL_DESCRIPTORS",
     "ApplicationConfig",
     "BudgetConfig",
     "ConfigSourcePaths",
     "ConfigurationInvalid",
     "ConfigurationResolutionError",
+    "CredentialDescriptor",
+    "CredentialId",
     "CredentialSelectionConfig",
     "CredentialService",
     "CredentialSource",
@@ -73,6 +86,7 @@ __all__ = [
     "McpServerDeclaration",
     "MemoryConfig",
     "ProjectBudgetConfig",
+    "ProjectWebConfig",
     "ProviderConfig",
     "ProviderCredentialStatus",
     "ProviderCredentialStatuses",
@@ -89,13 +103,17 @@ __all__ = [
     "StartupOverrides",
     "ThreadConfigState",
     "TurnConfig",
+    "UserBudgetConfig",
     "UserConfigDocument",
     "UserConfigWriter",
     "UserMcpServerConfig",
     "UserSecretStore",
     "UserSecretStoreError",
+    "WebConfig",
     "WorkspaceConfigDocument",
+    "awesome_secret_names",
     "config_source_paths",
+    "credential_descriptor",
     "load_config_sources",
     "missing_provider_credential_statuses",
     "provider_environment_variable",

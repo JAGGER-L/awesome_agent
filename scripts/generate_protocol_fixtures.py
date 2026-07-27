@@ -11,6 +11,7 @@ from typing import Any, cast
 from awesome_agent.application.command_results import (
     COMMAND_OUTCOME_ADAPTER,
     StatusCommandPayload,
+    WebStatusCommandPayload,
     result,
 )
 from awesome_agent.application.commands import (
@@ -19,6 +20,7 @@ from awesome_agent.application.commands import (
     CommandName,
 )
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     ApplicationState,
     CancelResult,
@@ -32,12 +34,18 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
     ShutdownResult,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveResult,
     StatusSnapshot,
     ThreadListResult,
     ThreadReadResult,
     WorkspacePresentation,
 )
+from awesome_agent.application.web_commands import TAVILY_DISCLOSURE
 from awesome_agent.config import (
+    BudgetConfig,
     CredentialSource,
     SecretStatus,
     missing_provider_credential_statuses,
@@ -48,8 +56,13 @@ from awesome_agent.context import (
 )
 from awesome_agent.conversation import (
     Thread,
+    ThreadEntry,
+    ThreadEntryKind,
+    ThreadLineage,
     ThreadTitleSource,
     ThreadView,
+    Turn,
+    TurnStatus,
     UsageSummary,
 )
 from awesome_agent.core.changes import (
@@ -59,6 +72,7 @@ from awesome_agent.core.changes import (
     SymlinkChange,
     TextFileChange,
 )
+from awesome_agent.core.citations import Citation
 from awesome_agent.core.contracts import MAX_JSON_SAFE_INTEGER
 from awesome_agent.core.events import (
     AssistantReasoningDeltaPayload,
@@ -80,22 +94,32 @@ from awesome_agent.core.events import (
     WarningPayload,
 )
 from awesome_agent.core.tools.permissions import PermissionMode
-from awesome_agent.modeling import ModelIdentitySnapshot
+from awesome_agent.modeling import MODEL_CATALOG, ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "protocol" / "fixtures" / "v3"
+TARGET = ROOT / "protocol" / "fixtures" / f"v{PROTOCOL_VERSION}"
 FIXED_TIME = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
 WORKSPACE_KEY = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 THREAD_ID = "thread_11111111111111111111111111111111"
 TURN_ID = "turn_22222222222222222222222222222222"
 OPERATION_ID = "operation_33333333333333333333333333333333"
 CLIENT_MESSAGE_ID = "client_44444444444444444444444444444444"
+RETRY_THREAD_ID = "thread_77777777777777777777777777777777"
+RETRY_TURN_ID = "turn_88888888888888888888888888888888"
+RETRY_OPERATION_ID = "operation_99999999999999999999999999999999"
+RETRY_CLIENT_MESSAGE_ID = "client_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+FORK_THREAD_ID = "thread_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+CAPABILITIES = ("threads", "turns", "commands", "web", "citations")
 
 METHODS = (
     "initialize",
+    "skill.list",
+    "skill.install",
+    "skill.remove",
     "application.getState",
     "thread.list",
+    "thread.search",
     "thread.read",
     "turn.submit",
     "direct.execute",
@@ -138,6 +162,125 @@ def _thread() -> Thread:
     )
 
 
+def _thread_view() -> ThreadView:
+    user_entry_id = "entry_55555555555555555555555555555555"
+    assistant_entry_id = "entry_66666666666666666666666666666666"
+    return ThreadView(
+        thread=_thread(),
+        entries=(
+            ThreadEntry(
+                id=user_entry_id,
+                thread_id=THREAD_ID,
+                sequence=1,
+                kind=ThreadEntryKind.USER_MESSAGE,
+                content="Inspect the repository.",
+                client_message_id=CLIENT_MESSAGE_ID,
+                created_at=FIXED_TIME,
+            ),
+            ThreadEntry(
+                id=assistant_entry_id,
+                thread_id=THREAD_ID,
+                sequence=2,
+                kind=ThreadEntryKind.ASSISTANT_MESSAGE,
+                content="The source confirms the result. [[S1]]",
+                metadata={
+                    "citations": [
+                        Citation(
+                            id="S1",
+                            title="Fixture source",
+                            url="https://example.com/source",
+                        ).model_dump(mode="json")
+                    ]
+                },
+                created_at=FIXED_TIME,
+            ),
+        ),
+        turns=(
+            Turn(
+                id=TURN_ID,
+                thread_id=THREAD_ID,
+                checkpoint_key=TURN_ID,
+                status=TurnStatus.COMPLETED,
+                provider="deepseek",
+                model="deepseek-chat",
+                thinking_enabled=True,
+                skill_mode="auto",
+                budgets=BudgetConfig(web_requests=8),
+                user_entry_id=user_entry_id,
+                assistant_entry_id=assistant_entry_id,
+                usage=UsageSummary(model_calls=1, web_requests=1),
+                termination_reason="stop",
+                created_at=FIXED_TIME,
+                updated_at=FIXED_TIME,
+                completed_at=FIXED_TIME,
+            ),
+        ),
+    )
+
+
+def _retry_thread_read() -> ThreadReadResult:
+    user_entry_id = "entry_77777777777777777777777777777777"
+    thread = Thread(
+        id=RETRY_THREAD_ID,
+        workspace_key=WORKSPACE_KEY,
+        title="Retry Fixture Thread",
+        current_model="deepseek/deepseek-v4-flash",
+        lineage=ThreadLineage(
+            kind="retry",
+            source_thread_id=THREAD_ID,
+            source_turn_id=TURN_ID,
+        ),
+        created_at=FIXED_TIME,
+        updated_at=FIXED_TIME,
+    )
+    user_entry = ThreadEntry(
+        id=user_entry_id,
+        thread_id=RETRY_THREAD_ID,
+        sequence=1,
+        kind=ThreadEntryKind.USER_MESSAGE,
+        content="Inspect the repository.",
+        client_message_id=RETRY_CLIENT_MESSAGE_ID,
+        created_at=FIXED_TIME,
+    )
+    turn = Turn(
+        id=RETRY_TURN_ID,
+        thread_id=RETRY_THREAD_ID,
+        checkpoint_key=RETRY_TURN_ID,
+        status=TurnStatus.IN_PROGRESS,
+        provider="deepseek",
+        model="deepseek-chat",
+        thinking_enabled=True,
+        skill_mode="auto",
+        budgets=BudgetConfig(web_requests=8),
+        user_entry_id=user_entry_id,
+        created_at=FIXED_TIME,
+        updated_at=FIXED_TIME,
+    )
+    return ThreadReadResult(
+        view=ThreadView(thread=thread, entries=(user_entry,), turns=(turn,))
+    )
+
+
+def _fork_thread_read() -> ThreadReadResult:
+    return ThreadReadResult(
+        view=ThreadView(
+            thread=Thread(
+                id=FORK_THREAD_ID,
+                workspace_key=WORKSPACE_KEY,
+                title="Fork Fixture Thread",
+                current_model="deepseek/deepseek-v4-flash",
+                lineage=ThreadLineage(
+                    kind="fork",
+                    source_thread_id=THREAD_ID,
+                    source_turn_id=TURN_ID,
+                ),
+                created_at=FIXED_TIME,
+                updated_at=FIXED_TIME,
+            )
+        )
+    )
+
+
 def _valid_methods() -> dict[str, object]:
     workspace = WorkspacePresentation(
         display_path="C:\\workspace",
@@ -170,18 +313,18 @@ def _valid_methods() -> dict[str, object]:
             "initialize.ready",
             "initialize",
             {
-                "protocol_version": 3,
+                "protocol_version": PROTOCOL_VERSION,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=3,
+                    protocol_version=PROTOCOL_VERSION,
                     status=InitializeStatus.READY,
                     session_id="session_11111111111111111111111111111111",
                     workspace=workspace,
-                    capabilities=("threads", "turns", "commands"),
+                    capabilities=CAPABILITIES,
                 )
             ),
         ),
@@ -189,21 +332,54 @@ def _valid_methods() -> dict[str, object]:
             "initialize.state_reset_required",
             "initialize",
             {
-                "protocol_version": 3,
+                "protocol_version": PROTOCOL_VERSION,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=3,
+                    protocol_version=PROTOCOL_VERSION,
                     status=InitializeStatus.STATE_RESET_REQUIRED,
                     session_id="session_11111111111111111111111111111111",
                     interaction_id="interaction_state_reset",
                     workspace=WorkspacePresentation(display_path="C:\\workspace"),
-                    capabilities=("threads", "turns", "commands"),
+                    capabilities=CAPABILITIES,
                 )
             ),
+        ),
+        (
+            "skill.list",
+            "skill.list",
+            {},
+            _success(
+                SkillListResult(
+                    skills=(
+                        SkillPackageSummary(
+                            name="review",
+                            description="Review code safely",
+                        ),
+                    )
+                )
+            ),
+        ),
+        (
+            "skill.install.installed",
+            "skill.install",
+            {"source_path": "C:\\packages\\review", "replace": False},
+            _success(SkillInstallResult(name="review", status="installed")),
+        ),
+        (
+            "skill.install.replaced",
+            "skill.install",
+            {"source_path": "C:\\packages\\review.zip", "replace": True},
+            _success(SkillInstallResult(name="review", status="replaced")),
+        ),
+        (
+            "skill.remove",
+            "skill.remove",
+            {"name": "review"},
+            _success(SkillRemoveResult(name="review", status="removed")),
         ),
         (
             "application.get_state",
@@ -217,6 +393,7 @@ def _valid_methods() -> dict[str, object]:
                     workspace=workspace,
                     workspace_trusted=True,
                     current_thread_id=THREAD_ID,
+                    model_catalog=MODEL_CATALOG,
                     model_identity=ModelIdentitySnapshot.from_models(
                         configured_model="deepseek/deepseek-v4-flash",
                         effective_model="deepseek/deepseek-v4-flash",
@@ -244,12 +421,18 @@ def _valid_methods() -> dict[str, object]:
             _success(ThreadListResult(threads=(_thread(),))),
         ),
         (
+            "thread.search",
+            "thread.search",
+            {"query": "  fixture source  ", "limit": 50},
+            _success(ThreadListResult(threads=(_thread(),))),
+        ),
+        (
             "thread.read",
             "thread.read",
             {"thread_id": THREAD_ID, "limit": 50},
             _success(
                 ThreadReadResult(
-                    view=ThreadView(thread=_thread()),
+                    view=_thread_view(),
                     change_sets=(
                         ChangeSetSummary(
                             change_set_id="change_11111111111111111111111111111111",
@@ -443,14 +626,17 @@ def _invalid_methods() -> dict[str, object]:
             {
                 "name": "initialize.missing_client_version",
                 "method": "initialize",
-                "params": {"protocol_version": 3, "client_name": "awesome"},
+                "params": {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "client_name": "awesome",
+                },
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
                 "name": "initialize.protocol_incompatible",
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 2,
+                    "protocol_version": 3,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -463,6 +649,42 @@ def _invalid_methods() -> dict[str, object]:
                 "name": "application.get_state.extra",
                 "method": "application.getState",
                 "params": {"extra": True},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.list.extra",
+                "method": "skill.list",
+                "params": {"extra": True},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.install.missing_source",
+                "method": "skill.install",
+                "params": {},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.install.replace_type",
+                "method": "skill.install",
+                "params": {"source_path": "review", "replace": 1},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.install.extra",
+                "method": "skill.install",
+                "params": {"source_path": "review", "extra": True},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.remove.invalid_name",
+                "method": "skill.remove",
+                "params": {"name": "../review"},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.remove.extra",
+                "method": "skill.remove",
+                "params": {"name": "review", "extra": True},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -488,6 +710,24 @@ def _invalid_methods() -> dict[str, object]:
                 "name": "thread.list.explicit_null",
                 "method": "thread.list",
                 "params": {"cursor": None},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.search.blank_query",
+                "method": "thread.search",
+                "params": {"query": "   "},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.search.limit",
+                "method": "thread.search",
+                "params": {"query": "fixture", "limit": 51},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.search.explicit_null",
+                "method": "thread.search",
+                "params": {"query": "fixture", "cursor": None},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -834,6 +1074,26 @@ def _valid_command_results() -> dict[str, object]:
     thread = next(
         case["result"]["value"] for case in methods if case["name"] == "thread.read"
     )
+    retry_thread = _model(_retry_thread_read())
+    retry_application = {
+        **application,
+        "current_thread_id": RETRY_THREAD_ID,
+        "active_operation_id": RETRY_OPERATION_ID,
+    }
+    fork_thread = _model(_fork_thread_read())
+    fork_application = {
+        **application,
+        "current_thread_id": FORK_THREAD_ID,
+        "active_operation_id": None,
+    }
+    fork_payload = {
+        "kind": "thread_transition",
+        "transition": {
+            "reason": "fork",
+            "application": fork_application,
+            "thread": fork_thread,
+        },
+    }
     credentials = _model(missing_provider_credential_statuses())
     usage = _model(UsageSummary(active_execution_seconds=0.5))
     payloads: list[dict[str, object]] = [
@@ -844,6 +1104,20 @@ def _valid_command_results() -> dict[str, object]:
                 "reason": "new",
                 "application": application,
                 "thread": thread,
+            },
+        },
+        {
+            "kind": "thread_retry",
+            "transition": {
+                "reason": "retry",
+                "application": retry_application,
+                "thread": retry_thread,
+            },
+            "operation": {
+                "operation_id": RETRY_OPERATION_ID,
+                "thread_id": RETRY_THREAD_ID,
+                "turn_id": RETRY_TURN_ID,
+                "client_message_id": RETRY_CLIENT_MESSAGE_ID,
             },
         },
         {
@@ -884,6 +1158,15 @@ def _valid_command_results() -> dict[str, object]:
         },
         {"kind": "thinking", "enabled": False},
         {"kind": "workspace", "path": "C:\\workspace"},
+        {
+            "kind": "thread_export",
+            "thread_id": THREAD_ID,
+            "path": "exports/fixture.md",
+            "format": "markdown",
+            "write_status": "created",
+            "byte_count": 1_024,
+            "change_set_id": "change_11111111111111111111111111111111",
+        },
         {"kind": "diff", "change_set_id": None, "content": ""},
         {
             "kind": "change",
@@ -902,9 +1185,32 @@ def _valid_command_results() -> dict[str, object]:
                     "description": "Read file contents",
                     "read_only": True,
                     "approval_required": False,
-                }
+                },
+                {
+                    "name": "web_fetch",
+                    "description": "Fetch readable content from one public HTTPS URL",
+                    "read_only": True,
+                    "approval_required": True,
+                },
+                {
+                    "name": "web_search",
+                    "description": "Search the public web for current information",
+                    "read_only": True,
+                    "approval_required": True,
+                },
             ],
         },
+        _model(
+            WebStatusCommandPayload(
+                enabled=True,
+                available=True,
+                credential_configured=True,
+                proxy_configured=False,
+                thread_authorized=False,
+                requests_per_turn=8,
+                disclosure=TAVILY_DISCLOSURE,
+            )
+        ),
         {
             "kind": "skills",
             "active_mode": "auto",
@@ -972,6 +1278,16 @@ def _valid_command_results() -> dict[str, object]:
             {"kind": "result", "payload": payload}
         )
         cases.append({"name": f"result.{payload['kind']}", "outcome": _model(outcome)})
+    cases.append(
+        {
+            "name": "result.thread_transition.fork",
+            "outcome": _model(
+                COMMAND_OUTCOME_ADAPTER.validate_python(
+                    {"kind": "result", "payload": fork_payload}
+                )
+            ),
+        }
+    )
     for name, raw in (
         (
             "interaction.selection",
@@ -1043,6 +1359,41 @@ def _invalid_command_results() -> dict[str, object]:
     thread = next(
         case["result"]["value"] for case in methods if case["name"] == "thread.read"
     )
+    retry_outcome = next(
+        case["outcome"]
+        for case in cast(list[dict[str, Any]], _valid_command_results()["cases"])
+        if case["name"] == "result.thread_retry"
+    )
+    retry_payload = cast(dict[str, Any], retry_outcome["payload"])
+    retry_transition = cast(dict[str, Any], retry_payload["transition"])
+    retry_thread = cast(dict[str, Any], retry_transition["thread"])
+    retry_view = cast(dict[str, Any], retry_thread["view"])
+    retry_thread_record = cast(dict[str, Any], retry_view["thread"])
+    retry_entries = cast(list[dict[str, Any]], retry_view["entries"])
+    retry_turns = cast(list[dict[str, Any]], retry_view["turns"])
+    retry_turn = retry_turns[-1]
+    retry_operation = cast(dict[str, Any], retry_payload["operation"])
+    fork_outcome = next(
+        case["outcome"]
+        for case in cast(list[dict[str, Any]], _valid_command_results()["cases"])
+        if case["name"] == "result.thread_transition.fork"
+    )
+    fork_payload = cast(dict[str, Any], fork_outcome["payload"])
+    fork_transition = cast(dict[str, Any], fork_payload["transition"])
+    fork_thread = cast(dict[str, Any], fork_transition["thread"])
+    fork_view = cast(dict[str, Any], fork_thread["view"])
+    fork_thread_record = cast(dict[str, Any], fork_view["thread"])
+    web_status = {
+        "kind": "web_status",
+        "enabled": False,
+        "provider": "tavily",
+        "available": False,
+        "credential_configured": False,
+        "proxy_configured": False,
+        "thread_authorized": False,
+        "requests_per_turn": 8,
+        "disclosure": TAVILY_DISCLOSURE,
+    }
     return {
         "cases": [
             {
@@ -1070,6 +1421,247 @@ def _invalid_command_results() -> dict[str, object]:
                             "thread": thread,
                         },
                     },
+                },
+            },
+            {
+                "name": "thread_transition_retry_requires_combined_payload",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_transition",
+                        "transition": retry_transition,
+                    },
+                },
+            },
+            {
+                "name": "thread_transition_fork_requires_lineage",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **fork_payload,
+                        "transition": {
+                            **fork_transition,
+                            "thread": {
+                                **fork_thread,
+                                "view": {
+                                    **fork_view,
+                                    "thread": {
+                                        **fork_thread_record,
+                                        "lineage": None,
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_transition_new_requires_null_lineage",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **fork_payload,
+                        "transition": {**fork_transition, "reason": "new"},
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_wrong_transition_reason",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {**retry_transition, "reason": "fork"},
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_wrong_lineage_kind",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "thread": {
+                                        **retry_thread_record,
+                                        "lineage": {
+                                            **retry_thread_record["lineage"],
+                                            "kind": "fork",
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_thread_mismatch",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "operation": {
+                            **retry_operation,
+                            "thread_id": THREAD_ID,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_turn_missing",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "operation": {
+                            **retry_operation,
+                            "turn_id": TURN_ID,
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_client_message_mismatch",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "operation": {
+                            **retry_operation,
+                            "client_message_id": (
+                                "client_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            ),
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_user_entry_missing",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "turns": [
+                                        {
+                                            **retry_turn,
+                                            "user_entry_id": (
+                                                "entry_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                                            ),
+                                        }
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_turn_terminal",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "turns": [
+                                        {
+                                            **retry_turn,
+                                            "status": "cancelled",
+                                            "termination_reason": "cancelled",
+                                            "completed_at": retry_turn["updated_at"],
+                                        }
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_turn_not_last",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "turns": [
+                                        *retry_turns,
+                                        {
+                                            **retry_turn,
+                                            "id": (
+                                                "turn_cccccccccccccccccccccccccccccccc"
+                                            ),
+                                            "checkpoint_key": (
+                                                "turn_cccccccccccccccccccccccccccccccc"
+                                            ),
+                                            "status": "cancelled",
+                                            "termination_reason": "cancelled",
+                                            "completed_at": retry_turn["updated_at"],
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_operation_multiple_in_progress",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **retry_payload,
+                        "transition": {
+                            **retry_transition,
+                            "thread": {
+                                **retry_thread,
+                                "view": {
+                                    **retry_view,
+                                    "entries": retry_entries,
+                                    "turns": [
+                                        {
+                                            **retry_turn,
+                                            "id": (
+                                                "turn_dddddddddddddddddddddddddddddddd"
+                                            ),
+                                            "checkpoint_key": (
+                                                "turn_dddddddddddddddddddddddddddddddd"
+                                            ),
+                                        },
+                                        *retry_turns,
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            {
+                "name": "thread_retry_unknown_field",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {**retry_payload, "buffered_events": []},
                 },
             },
             {
@@ -1109,6 +1701,82 @@ def _invalid_command_results() -> dict[str, object]:
                             },
                             "thread": thread,
                         },
+                    },
+                },
+            },
+            {
+                "name": "web_status_empty_diagnostic_code",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {**web_status, "diagnostic_code": ""},
+                },
+            },
+            {
+                "name": "thread_export_changed_without_change_set",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_export",
+                        "thread_id": THREAD_ID,
+                        "path": "exports/fixture.md",
+                        "format": "markdown",
+                        "write_status": "updated",
+                        "byte_count": 1_024,
+                    },
+                },
+            },
+            {
+                "name": "thread_export_unchanged_with_change_set",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_export",
+                        "thread_id": THREAD_ID,
+                        "path": "exports/fixture.json",
+                        "format": "json",
+                        "write_status": "unchanged",
+                        "byte_count": 1_024,
+                        "change_set_id": "change_1",
+                    },
+                },
+            },
+            {
+                "name": "thread_export_empty_change_set",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_export",
+                        "thread_id": THREAD_ID,
+                        "path": "exports/fixture.md",
+                        "format": "markdown",
+                        "write_status": "created",
+                        "byte_count": 1_024,
+                        "change_set_id": "",
+                    },
+                },
+            },
+            {
+                "name": "thread_export_path_too_long",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_export",
+                        "thread_id": THREAD_ID,
+                        "path": "x" * 1_001,
+                        "format": "markdown",
+                        "write_status": "created",
+                        "byte_count": 1_024,
+                        "change_set_id": "change_1",
+                    },
+                },
+            },
+            {
+                "name": "web_status_invalid_diagnostic_code",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **web_status,
+                        "diagnostic_code": "Web-Client-Unavailable",
                     },
                 },
             },
@@ -1159,7 +1827,7 @@ def build_files() -> dict[str, bytes]:
     manifest = {
         "fixture_version": 1,
         "product_version": PRODUCT_VERSION,
-        "protocol_version": 3,
+        "protocol_version": PROTOCOL_VERSION,
         "methods": list(METHODS),
         "event_types": [event_type.value for event_type in EventType],
         "command_owners": {

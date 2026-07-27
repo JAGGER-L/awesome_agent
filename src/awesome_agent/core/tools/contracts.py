@@ -5,11 +5,19 @@ from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from awesome_agent.core.citations import Citation
+
 TOOL_NAME_PATTERN = (
     r"^(?:[a-z][a-z0-9_]*|"
     r"mcp\.[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*|"
     r"user\.[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*)$"
 )
+
+
+class ToolArguments(BaseModel):
+    """Closed, strict arguments for Awesome-owned static tools."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class ToolStatus(StrEnum):
@@ -36,6 +44,15 @@ class ToolErrorCode(StrEnum):
     MEMORY_DISABLED = "memory_disabled"
     MEMORY_CONFLICT = "memory_conflict"
     MEMORY_REJECTED = "memory_rejected"
+    WEB_REQUEST_BUDGET_EXHAUSTED = "web_request_budget_exhausted"
+    WEB_REQUEST_REJECTED = "web_request_rejected"
+    WEB_CREDENTIAL_REJECTED = "web_credential_rejected"
+    WEB_RATE_LIMITED = "web_rate_limited"
+    WEB_QUOTA_EXHAUSTED = "web_quota_exhausted"
+    WEB_PROVIDER_UNAVAILABLE = "web_provider_unavailable"
+    WEB_TIMEOUT = "web_timeout"
+    WEB_CONNECTION_FAILED = "web_connection_failed"
+    WEB_MALFORMED_RESPONSE = "web_malformed_response"
     CANCELLED = "cancelled"
 
 
@@ -67,7 +84,7 @@ class ToolActivityDraft(BaseModel):
 
 
 class ToolActivityWriter(Protocol):
-    def finalize(self, activity: ToolActivityDraft) -> None: ...
+    async def finalize(self, activity: ToolActivityDraft) -> None: ...
 
 
 class ToolSpec(BaseModel):
@@ -109,6 +126,17 @@ class ToolPresentation(BaseModel):
     duration_ms: int | None = Field(default=None, ge=0)
 
 
+class ToolInvocationDescription(BaseModel):
+    """Validated display and approval facts derived from strict arguments."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    verb: str = Field(min_length=1, max_length=64)
+    display_target: str | None = Field(default=None, max_length=2_000)
+    approval_operation: str = Field(min_length=1, max_length=128)
+    approval_target: str = Field(min_length=1, max_length=8_000)
+
+
 class ToolResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -119,11 +147,14 @@ class ToolResult(BaseModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     error: ToolError | None = None
     presentation: ToolPresentation | None = None
+    citations: tuple[Citation, ...] = Field(default=(), max_length=128)
 
     @model_validator(mode="after")
     def error_matches_status(self) -> ToolResult:
         if (self.status is ToolStatus.ERROR) != (self.error is not None):
             raise ValueError("error must be present exactly when status is error")
+        if self.status is ToolStatus.ERROR and self.citations:
+            raise ValueError("error tool results must not include citations")
         return self
 
 
@@ -133,3 +164,4 @@ class ToolOutput(BaseModel):
     content: str
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     presentation: ToolPresentation | None = None
+    citations: tuple[Citation, ...] = Field(default=(), max_length=128)

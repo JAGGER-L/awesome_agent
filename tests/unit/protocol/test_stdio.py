@@ -11,6 +11,7 @@ from typing import Any, cast
 
 import pytest
 
+from awesome_agent.application.bootstrap import BootstrapRejection
 from awesome_agent.application.command_results import (
     CommandOutcome,
     NoticeCommandPayload,
@@ -29,14 +30,23 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
     ShutdownResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
 )
+from awesome_agent.application.middleware import ApplicationOperation
 from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
+from awesome_agent.modeling import MODEL_CATALOG
 from awesome_agent.protocol import stdio
 from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
 from awesome_agent.protocol.stdio import (
@@ -45,6 +55,94 @@ from awesome_agent.protocol.stdio import (
     serve_stdio,
 )
 from awesome_agent.version import PRODUCT_VERSION
+
+_INITIALIZATION_IN_PROGRESS = BootstrapRejection(
+    message="Server initialization is in progress",
+    diagnostic_code="initialization_in_progress",
+)
+_SERVER_NOT_INITIALIZED = BootstrapRejection(
+    message="Server not initialized",
+    diagnostic_code="server_not_initialized",
+)
+_SERVER_NOT_READY = BootstrapRejection(
+    message="Server not ready",
+    diagnostic_code="server_not_ready",
+)
+_SKILL_MANAGEMENT_UNAVAILABLE = BootstrapRejection(
+    message="Skill package management is only available before initialization",
+    diagnostic_code="skill_management_requires_uninitialized",
+)
+
+
+class BootstrapAdmissionStub:
+    """Scripted Application-owned admission authority for protocol tests."""
+
+    def __init__(self) -> None:
+        self.operations: list[ApplicationOperation | None] = []
+        self._default: BootstrapRejection | None = _SERVER_NOT_INITIALIZED
+        self._overrides: dict[
+            ApplicationOperation | None,
+            BootstrapRejection | None,
+        ] = {}
+        self.uninitialized()
+
+    def rejection(
+        self,
+        operation: ApplicationOperation | None,
+    ) -> BootstrapRejection | None:
+        self.operations.append(operation)
+        return self._overrides.get(operation, self._default)
+
+    def uninitialized(self) -> None:
+        self._configure(
+            _SERVER_NOT_INITIALIZED,
+            initialize=None,
+            respond=_SERVER_NOT_INITIALIZED,
+            skills=None,
+        )
+
+    def initializing(self) -> None:
+        self._configure(
+            _SERVER_NOT_READY,
+            initialize=_INITIALIZATION_IN_PROGRESS,
+            respond=_SERVER_NOT_READY,
+            skills=_SKILL_MANAGEMENT_UNAVAILABLE,
+        )
+
+    def interaction_required(self) -> None:
+        self._configure(
+            _SERVER_NOT_READY,
+            initialize=None,
+            respond=None,
+            skills=_SKILL_MANAGEMENT_UNAVAILABLE,
+        )
+
+    def ready(self) -> None:
+        self._configure(
+            None,
+            initialize=None,
+            respond=None,
+            skills=_SKILL_MANAGEMENT_UNAVAILABLE,
+        )
+
+    def _configure(
+        self,
+        default: BootstrapRejection | None,
+        *,
+        initialize: BootstrapRejection | None,
+        respond: BootstrapRejection | None,
+        skills: BootstrapRejection | None,
+    ) -> None:
+        self._default = default
+        self._overrides = {
+            ApplicationOperation.INITIALIZE: initialize,
+            ApplicationOperation.RESPOND_INTERACTION: respond,
+            ApplicationOperation.SKILL_LIST: skills,
+            ApplicationOperation.SKILL_INSTALL: skills,
+            ApplicationOperation.SKILL_REMOVE: skills,
+            ApplicationOperation.CANCEL_OPERATION: None,
+            ApplicationOperation.SHUTDOWN: None,
+        }
 
 
 class Chunks:
@@ -144,12 +242,21 @@ class Facade:
     def __init__(self, event_sink: ProtocolEventSink | None = None) -> None:
         self.event_sink = event_sink
         self.shutdown_calls = 0
+        self.skill_calls: list[tuple[str, object]] = []
+        self.bootstrap = BootstrapAdmissionStub()
+
+    def bootstrap_rejection(
+        self,
+        operation: ApplicationOperation | None,
+    ) -> BootstrapRejection | None:
+        return self.bootstrap.rejection(operation)
 
     async def initialize(self) -> ApplicationResult[InitializeResult]:
+        self.bootstrap.ready()
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=3,
+                protocol_version=4,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -164,13 +271,49 @@ class Facade:
                 workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
                 workspace_trusted=True,
+                model_catalog=MODEL_CATALOG,
                 configuration_valid=True,
                 secret_status=SecretStatus(),
             )
         )
 
+    async def list_skills(self) -> ApplicationResult[SkillListResult]:
+        self.skill_calls.append(("list", None))
+        return ApplicationResult.success(
+            SkillListResult(
+                skills=(SkillPackageSummary(name="review", description="Review code"),)
+            )
+        )
+
+    async def install_skill(
+        self,
+        request: SkillInstallRequest,
+    ) -> ApplicationResult[SkillInstallResult]:
+        self.skill_calls.append(("install", request))
+        return ApplicationResult.success(
+            SkillInstallResult(
+                name="review",
+                status="replaced" if request.replace else "installed",
+            )
+        )
+
+    async def remove_skill(
+        self,
+        request: SkillRemoveRequest,
+    ) -> ApplicationResult[SkillRemoveResult]:
+        self.skill_calls.append(("remove", request))
+        return ApplicationResult.success(
+            SkillRemoveResult(name=request.name, status="removed")
+        )
+
     async def list_threads(
         self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        del query
+        return ApplicationResult.success(ThreadListResult())
+
+    async def search_threads(
+        self, query: ThreadSearchQuery
     ) -> ApplicationResult[ThreadListResult]:
         del query
         return ApplicationResult.success(ThreadListResult())
@@ -300,12 +443,14 @@ class BlockingControlFacade(Facade):
 
     async def initialize(self) -> ApplicationResult[InitializeResult]:
         if self._blocked_method == "initialize":
+            self.bootstrap.initializing()
             await self._block()
         if self._blocked_method == "interaction.respond":
+            self.bootstrap.interaction_required()
             return ApplicationResult.success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=3,
+                    protocol_version=4,
                     status=InitializeStatus.TRUST_REQUIRED,
                     session_id="session_1",
                     interaction_id="interaction_1",
@@ -362,12 +507,17 @@ class HandshakeTrackingFacade(Facade):
     async def initialize(self) -> ApplicationResult[InitializeResult]:
         self.initialize_calls += 1
         self.initialize_started.set()
+        self.bootstrap.initializing()
         if self.block_initialize:
             await self.release_initialize.wait()
+        if self.initialize_status is InitializeStatus.READY:
+            self.bootstrap.ready()
+        else:
+            self.bootstrap.interaction_required()
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=3,
+                protocol_version=4,
                 status=self.initialize_status,
                 session_id="session_1",
                 interaction_id=(
@@ -378,6 +528,22 @@ class HandshakeTrackingFacade(Facade):
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
             )
         )
+
+    async def respond_interaction(
+        self,
+        interaction_id: str,
+        decision: str,
+    ) -> ApplicationResult[InteractionResult]:
+        response = await super().respond_interaction(interaction_id, decision)
+        if (
+            self.initialize_status is InitializeStatus.TRUST_REQUIRED
+            and decision == "trust"
+            and response.ok
+            and response.value is not None
+            and response.value.accepted
+        ):
+            self.bootstrap.ready()
+        return response
 
     async def get_state(self) -> ApplicationResult[ApplicationState]:
         self.business_calls.append("application.getState")
@@ -413,6 +579,13 @@ class StateResetThenReadyFacade(HandshakeTrackingFacade):
             else InitializeStatus.READY
         )
         return await super().initialize()
+
+
+class ReadyPayloadWithoutAdmissionFacade(Facade):
+    async def initialize(self) -> ApplicationResult[InitializeResult]:
+        result = await super().initialize()
+        self.bootstrap.uninitialized()
+        return result
 
 
 class InitializeThenPipeline:
@@ -457,7 +630,7 @@ class InvalidShutdownDuringCommand:
                 1,
                 "initialize",
                 {
-                    "protocol_version": 3,
+                    "protocol_version": 4,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -498,7 +671,7 @@ def _initialize_request(identifier: int) -> bytes:
         identifier,
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -511,7 +684,7 @@ async def test_fragmented_ndjson_malformed_duplicate_and_shutdown() -> None:
         1,
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -538,7 +711,43 @@ async def test_fragmented_ndjson_malformed_duplicate_and_shutdown() -> None:
     assert frames[3]["error"]["code"] == -32600
     assert frames[4]["result"] == {"ok": True, "value": {"stopped": True}}
     assert facade.shutdown_calls == 1
+    assert facade.bootstrap.operations == [
+        ApplicationOperation.INITIALIZE,
+        ApplicationOperation.SHUTDOWN,
+    ]
     assert all(frame.endswith(b"\n") for frame in output.frames)
+
+
+@pytest.mark.asyncio
+async def test_thread_search_routes_through_initialized_stdio_host() -> None:
+    output = Output()
+    facade = Facade()
+    requests = (
+        _initialize_request(0)
+        + _request(1, "thread.search", {"query": "provider retry", "limit": 50})
+        + _request(2, "shutdown", {})
+    )
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(requests),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = [json.loads(frame) for frame in output.frames]
+    assert frames[1] == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "ok": True,
+            "value": {"threads": [], "has_more": False},
+        },
+    }
+    assert facade.bootstrap.operations == [
+        ApplicationOperation.INITIALIZE,
+        ApplicationOperation.SEARCH_THREADS,
+        ApplicationOperation.SHUTDOWN,
+    ]
 
 
 @pytest.mark.asyncio
@@ -901,6 +1110,198 @@ async def test_business_request_before_initialize_is_explicitly_rejected(
     }
     assert facade.business_calls == []
     assert facade.initialize_calls == 0
+    assert facade.bootstrap.operations == [
+        ApplicationOperation(method),
+        ApplicationOperation.SHUTDOWN,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_skill_management_methods_are_available_only_before_initialize() -> None:
+    facade = Facade()
+    output = Output()
+    private_source = "C:\\private\\review.zip"
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(
+            _request(1, "skill.list", {})
+            + _request(
+                2,
+                "skill.install",
+                {"source_path": private_source, "replace": True},
+            )
+            + _request(3, "skill.remove", {"name": "review"})
+            + _request(4, "shutdown", {})
+        ),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["result"]["value"] == {
+        "skills": [{"name": "review", "description": "Review code"}]
+    }
+    assert frames[2]["result"]["value"] == {
+        "name": "review",
+        "status": "replaced",
+    }
+    assert frames[3]["result"]["value"] == {
+        "name": "review",
+        "status": "removed",
+    }
+    encoded = b"".join(output.frames).decode("utf-8")
+    assert private_source not in encoded
+    assert "restart_required" not in encoded
+    assert {call[0] for call in facade.skill_calls} == {"list", "install", "remove"}
+
+    initialized_facade = Facade()
+    initialized_output = Output()
+    await serve_stdio(
+        initialized_facade,
+        reader=Chunks(
+            _initialize_request(10)
+            + _request(11, "skill.list", {})
+            + _request(12, "shutdown", {})
+        ),
+        writer=JsonLineWriter(initialized_output),
+    )
+    initialized_frames = {
+        frame["id"]: frame for frame in map(json.loads, initialized_output.frames)
+    }
+    assert initialized_frames[11]["error"] == {
+        "code": -32002,
+        "message": "Skill package management is only available before initialization",
+        "data": {"diagnostic_code": "skill_management_requires_uninitialized"},
+    }
+    assert initialized_facade.skill_calls == []
+
+
+@pytest.mark.asyncio
+async def test_parsed_unknown_method_uses_application_bootstrap_admission() -> None:
+    facade = Facade()
+    output = Output()
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(_request(1, "unknown", {}) + _request(2, "shutdown", {})),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["error"] == {
+        "code": -32002,
+        "message": "Server not initialized",
+        "data": {"diagnostic_code": "server_not_initialized"},
+    }
+    assert facade.bootstrap.operations == [None, ApplicationOperation.SHUTDOWN]
+
+
+@pytest.mark.asyncio
+async def test_malformed_initialize_does_not_advance_application_bootstrap() -> None:
+    facade = Facade()
+    output = Output()
+    requests = (
+        _request(
+            1,
+            "initialize",
+            {
+                "protocol_version": 4,
+                "client_name": "awesome",
+            },
+        )
+        + _request(2, "application.getState", {})
+        + _initialize_request(3)
+        + _request(4, "application.getState", {})
+        + _request(5, "shutdown", {})
+    )
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(requests),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["error"]["code"] == -32602
+    assert frames[2]["error"] == {
+        "code": -32002,
+        "message": "Server not initialized",
+        "data": {"diagnostic_code": "server_not_initialized"},
+    }
+    assert frames[3]["result"]["value"]["status"] == "ready"
+    assert frames[4]["result"]["ok"] is True
+    assert facade.bootstrap.operations == [
+        ApplicationOperation.INITIALIZE,
+        ApplicationOperation.GET_STATE,
+        ApplicationOperation.INITIALIZE,
+        ApplicationOperation.GET_STATE,
+        ApplicationOperation.SHUTDOWN,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_initialize_response_payload_cannot_override_application_admission() -> (
+    None
+):
+    facade = ReadyPayloadWithoutAdmissionFacade()
+    output = Output()
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(
+            _initialize_request(1)
+            + _request(2, "application.getState", {})
+            + _request(3, "shutdown", {})
+        ),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["result"]["value"]["status"] == "ready"
+    assert frames[2]["error"] == {
+        "code": -32002,
+        "message": "Server not initialized",
+        "data": {"diagnostic_code": "server_not_initialized"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_initialize_notification_advances_application_owned_admission() -> None:
+    facade = Facade()
+    output = Output()
+    initialize_notification = (
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocol_version": 4,
+                    "client_name": "awesome",
+                    "client_version": PRODUCT_VERSION,
+                },
+            }
+        ).encode()
+        + b"\n"
+    )
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(
+            initialize_notification
+            + _request(1, "application.getState", {})
+            + _request(2, "shutdown", {})
+        ),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert set(frames) == {1, 2}
+    assert frames[1]["result"]["ok"] is True
+    assert facade.bootstrap.operations == [
+        ApplicationOperation.INITIALIZE,
+        ApplicationOperation.GET_STATE,
+        ApplicationOperation.SHUTDOWN,
+    ]
 
 
 @pytest.mark.asyncio
@@ -912,7 +1313,7 @@ async def test_incompatible_initialize_does_not_open_business_request_gate() -> 
             1,
             "initialize",
             {
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -961,7 +1362,7 @@ async def test_blocked_initialize_rejects_pipeline_and_duplicate_initialize() ->
         1,
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -986,7 +1387,7 @@ async def test_blocked_initialize_rejects_pipeline_and_duplicate_initialize() ->
             5,
             "initialize",
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -1031,7 +1432,7 @@ async def test_trust_bootstrap_only_opens_business_gate_after_trust_resolution()
             1,
             "initialize",
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -1097,7 +1498,7 @@ async def test_initialize_is_repeatable_after_ready() -> None:
     facade = HandshakeTrackingFacade()
     output = Output()
     initialize_params = {
-        "protocol_version": 3,
+        "protocol_version": 4,
         "client_name": "awesome",
         "client_version": PRODUCT_VERSION,
     }
@@ -1207,7 +1608,7 @@ async def test_background_request_failure_stops_while_stdin_remains_open() -> No
         (
             "initialize",
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -1300,7 +1701,7 @@ async def test_background_control_lane_is_bounded(
                 1,
                 "initialize",
                 {
-                    "protocol_version": 3,
+                    "protocol_version": 4,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },

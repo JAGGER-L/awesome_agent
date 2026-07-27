@@ -1,3 +1,7 @@
+import asyncio
+from collections.abc import Awaitable
+
+from awesome_agent.core.cancellation import finish_cancellation_safe
 from awesome_agent.core.changes import ChangeJournal, ChangeLifecycle
 from awesome_agent.core.changes.errors import ChangeLifecycleError
 from awesome_agent.core.changes.ports import ChangeSetStore
@@ -21,8 +25,9 @@ class ChangeScope:
         self._session_id = session_id
         self._workspace = workspace
         self._identifiers: dict[str, str] = {}
+        self._lock = asyncio.Lock()
 
-    def change_set_for_tool(
+    async def change_set_for_tool(
         self,
         *,
         tool_name: str,
@@ -32,13 +37,19 @@ class ChangeScope:
         registered = self._registry.resolve(tool_name)
         if registered is None or registered.spec.read_only:
             return None
-        return self.acquire(owner, turn_id=turn_id)
+        return await self.acquire(owner, turn_id=turn_id)
 
-    def acquire(self, owner: str, *, turn_id: str | None) -> str:
-        current = self._identifiers.get(owner)
-        if current is not None:
-            return current
-        change_set = self._journal.begin(
+    async def acquire(self, owner: str, *, turn_id: str | None) -> str:
+        async with self._lock:
+            current = self._identifiers.get(owner)
+            if current is not None:
+                return current
+            return await _finish_cancellation_safe(
+                self._begin_and_publish(owner, turn_id=turn_id)
+            )
+
+    async def _begin_and_publish(self, owner: str, *, turn_id: str | None) -> str:
+        change_set = await self._journal.begin(
             session_id=self._session_id,
             turn_id=turn_id,
             workspace=self._workspace,
@@ -46,22 +57,71 @@ class ChangeScope:
         self._identifiers[owner] = change_set.id
         return change_set.id
 
-    def seal(self, owner: str) -> None:
-        identifier = self._identifiers.get(owner)
-        if identifier is None:
-            return
-        change_set = self._store.get(identifier)
+    async def seal(self, owner: str) -> None:
+        async with self._lock:
+            identifier = self._identifiers.get(owner)
+            if identifier is None:
+                return
+            await _finish_cancellation_safe(
+                self._seal_and_unpublish(owner, identifier=identifier)
+            )
+
+    async def _seal_and_unpublish(self, owner: str, *, identifier: str) -> None:
+        change_set = await self._store.get(identifier)
         if change_set is not None and change_set.lifecycle is ChangeLifecycle.OPEN:
-            self._journal.reconcile_pending(change_set_id=identifier)
-            reconciled = self._store.get(identifier)
+            await self._journal.reconcile_pending(change_set_id=identifier)
+            reconciled = await self._store.get(identifier)
             if reconciled is not None and reconciled.lifecycle is ChangeLifecycle.OPEN:
-                self._journal.seal(identifier)
+                await self._journal.seal(identifier)
         self._identifiers.pop(owner, None)
 
-    def reconcile(self) -> None:
-        if self._identifiers:
-            raise ChangeLifecycleError(
-                "Startup reconciliation cannot run with active ChangeSets."
+    async def finalize_failed(self, owner: str) -> None:
+        async with self._lock:
+            identifier = self._identifiers.get(owner)
+            if identifier is None:
+                return
+            await _finish_cancellation_safe(
+                self._finalize_failed_and_unpublish(owner, identifier=identifier)
             )
-        self._journal.reconcile_pending()
-        self._journal.seal_orphaned_open()
+
+    async def _finalize_failed_and_unpublish(
+        self,
+        owner: str,
+        *,
+        identifier: str,
+    ) -> None:
+        try:
+            change_set = await self._store.get(identifier)
+            if change_set is None or change_set.lifecycle is not ChangeLifecycle.OPEN:
+                return
+            await self._journal.reconcile_pending(change_set_id=identifier)
+            reconciled = await self._store.get(identifier)
+            if reconciled is None or reconciled.lifecycle is not ChangeLifecycle.OPEN:
+                return
+            if reconciled.files or reconciled.execute:
+                await self._journal.seal(identifier)
+                return
+            deleted = await self._store.delete_empty_open(identifier)
+            if deleted:
+                return
+            retained = await self._store.get(identifier)
+            if retained is not None and retained.lifecycle is ChangeLifecycle.OPEN:
+                await self._journal.seal(identifier)
+        finally:
+            self._identifiers.pop(owner, None)
+
+    async def reconcile(self) -> None:
+        async with self._lock:
+            if self._identifiers:
+                raise ChangeLifecycleError(
+                    "Startup reconciliation cannot run with active ChangeSets."
+                )
+            await self._journal.reconcile_pending()
+            await self._journal.seal_orphaned_open()
+
+
+async def _finish_cancellation_safe[T](operation: Awaitable[T]) -> T:
+    result, cancellation = await finish_cancellation_safe(operation)
+    if cancellation is not None:
+        raise cancellation
+    return result

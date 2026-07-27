@@ -82,6 +82,29 @@ Changing modes clears temporary capability grants and advances the permission
 generation. Selecting another Thread also resets the permission session to
 Request approval.
 
+## Headless Authority
+
+`awesome run "<prompt>"` uses these same controls; non-interactive execution is
+not a separate permission path. It creates a new Thread unless
+`--thread <id>` selects an existing one. `--trust-workspace` accepts trust for
+the canonical launch Workspace through the normal startup interaction. Without
+that explicit flag, required trust remains unresolved and the command exits
+with code 3.
+
+`--permission-mode request_approval|accept_edits|full_access` requests the
+normal mode for the selected Thread and current process. Supplying
+`full_access` is the explicit headless confirmation of the same warning, not a
+way around the warning's invariants: authority remains Thread/session scoped,
+and path checks, limits, extension approvals, and hard denials still apply. If
+a later tool call needs an approval that cannot be resolved non-interactively,
+the runner requests cancellation, writes no partial answer to stdout, and
+exits with code 3.
+
+`--allow-network` authorizes this process to resolve only the active headless
+Turn's exact `network.read` prompt as `allow_once`. It does not make disabled
+Web available, cannot create a Thread grant or resolve another interaction,
+and cannot bypass hard denial.
+
 ## Approval Semantics
 
 A write approval can offer:
@@ -94,6 +117,12 @@ A write approval can offer:
 The temporary write grant never includes delete or shell execution. Delete,
 shell, MCP, and unknown capabilities only offer a one-call decision. Escape
 denies the current approval.
+
+`network.read` is different from local Full access: its first call asks in
+every permission mode. The choices are **No** (default), **Allow once**, and
+**Allow for this Thread**. A Thread network grant is cleared when the selected
+Thread changes, the runtime is rebuilt, the permission mode changes,
+`/web revoke` or `/web off` runs, or Awesome exits.
 
 Each tool approval is bound to its Thread, Turn, Operation, and interaction
 identity. A response is accepted at most once and only while those facts are

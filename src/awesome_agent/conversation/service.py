@@ -8,7 +8,15 @@ from uuid import uuid4
 from pydantic import JsonValue
 
 from awesome_agent.config.models import TurnConfig
+from awesome_agent.conversation.materialization import (
+    RetryPreparation,
+    ThreadMaterializationPlan,
+    build_thread_materialization,
+    materialization_source_fingerprint,
+    terminal_materialization_target,
+)
 from awesome_agent.conversation.models import (
+    AssistantEntryMetadata,
     Thread,
     ThreadEntry,
     ThreadEntryKind,
@@ -24,6 +32,7 @@ from awesome_agent.conversation.models import (
 from awesome_agent.conversation.repository import (
     ConversationConflict,
     ConversationStore,
+    ThreadNotFound,
     TurnNotFound,
     require_turn_transition,
 )
@@ -32,6 +41,7 @@ from awesome_agent.conversation.titles import (
     normalize_title,
     visible_graphemes,
 )
+from awesome_agent.core.citations import Citation
 
 
 class ConversationService:
@@ -46,7 +56,7 @@ class ConversationService:
         self._id_factory = id_factory or _new_identifier
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    def create_thread(
+    async def create_thread(
         self,
         workspace_key: str,
         title: str | None = None,
@@ -57,7 +67,7 @@ class ConversationService:
         if not normalized_title:
             raise ValueError("Thread title cannot be empty.")
         now = self._clock()
-        return self._store.create_thread(
+        return await self._store.create_thread(
             Thread(
                 id=self._id_factory("thread"),
                 workspace_key=workspace_key,
@@ -73,10 +83,10 @@ class ConversationService:
             )
         )
 
-    def list_threads(self, workspace_key: str) -> tuple[Thread, ...]:
-        return tuple(self._store.list_threads(workspace_key))
+    async def list_threads(self, workspace_key: str) -> tuple[Thread, ...]:
+        return tuple(await self._store.list_threads(workspace_key))
 
-    def match_thread_prefix(
+    async def match_thread_prefix(
         self,
         workspace_key: str,
         *,
@@ -84,78 +94,172 @@ class ConversationService:
         limit: int = 200,
     ) -> tuple[Thread, ...]:
         return tuple(
-            self._store.match_threads(
+            await self._store.match_threads(
                 workspace_key,
                 prefix=prefix,
                 limit=limit,
             )
         )
 
-    def list_thread_page(
+    async def list_thread_page(
         self,
         workspace_key: str,
         *,
         cursor: tuple[datetime, str] | None,
         limit: int,
     ) -> ThreadListPage:
-        return self._store.list_threads_page(
+        return await self._store.list_threads_page(
             workspace_key,
             cursor=cursor,
             limit=limit,
         )
 
-    def set_skill_mode(self, thread_id: str, skill_mode: str) -> Thread:
+    async def search_thread_page(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        normalized = query.strip()
+        if not 1 <= len(normalized) <= 200:
+            raise ValueError("Thread search query must be 1 to 200 characters.")
+        if not 1 <= limit <= 50:
+            raise ValueError("Thread search limit must be 1 to 50.")
+        return await self._store.search_threads_page(
+            workspace_key,
+            query=normalized,
+            cursor=cursor,
+            limit=limit,
+        )
+
+    async def thread_matches_search(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        thread_id: str,
+    ) -> bool:
+        normalized = query.strip()
+        if not 1 <= len(normalized) <= 200:
+            raise ValueError("Thread search query must be 1 to 200 characters.")
+        return await self._store.thread_matches_search(
+            workspace_key,
+            query=normalized,
+            thread_id=thread_id,
+        )
+
+    async def fork_thread(
+        self,
+        workspace_key: str,
+        source_thread_id: str,
+        source_turn_id: str | None = None,
+    ) -> ThreadView:
+        source, target = await self._materialization_source(
+            workspace_key,
+            source_thread_id,
+            source_turn_id,
+        )
+        view, preparation = build_thread_materialization(
+            source,
+            target,
+            kind="fork",
+            id_factory=self._id_factory,
+            now=self._clock(),
+        )
+        assert preparation is None
+        plan = ThreadMaterializationPlan(
+            kind="fork",
+            source_workspace_key=workspace_key,
+            source_thread_id=source.thread.id,
+            source_turn_id=target.id,
+            source_fingerprint=materialization_source_fingerprint(source),
+            view=view,
+        )
+        return await self._store.materialize_fork(plan)
+
+    async def prepare_retry(
+        self,
+        workspace_key: str,
+        source_thread_id: str,
+        source_turn_id: str | None = None,
+    ) -> RetryPreparation:
+        source, target = await self._materialization_source(
+            workspace_key,
+            source_thread_id,
+            source_turn_id,
+        )
+        view, preparation = build_thread_materialization(
+            source,
+            target,
+            kind="retry",
+            id_factory=self._id_factory,
+            now=self._clock(),
+        )
+        assert preparation is not None
+        plan = ThreadMaterializationPlan(
+            kind="retry",
+            source_workspace_key=workspace_key,
+            source_thread_id=source.thread.id,
+            source_turn_id=target.id,
+            source_fingerprint=materialization_source_fingerprint(source),
+            view=view,
+        )
+        return await self._store.materialize_retry(plan, preparation)
+
+    async def set_skill_mode(self, thread_id: str, skill_mode: str) -> Thread:
         if re.fullmatch(r"(?:auto|off|[a-z][a-z0-9-]{0,63})", skill_mode) is None:
             raise ValueError("Skill mode is invalid.")
-        return self._store.set_thread_skill_mode(
+        return await self._store.set_thread_skill_mode(
             thread_id,
             skill_mode,
             updated_at=self._clock(),
         )
 
-    def rename_thread(self, thread_id: str, title: str) -> Thread:
+    async def rename_thread(self, thread_id: str, title: str) -> Thread:
         normalized = normalize_title(title)
         if not normalized:
             raise ValueError("Title required · /rename <title>")
         if len(visible_graphemes(normalized)) > 100:
             raise ValueError("Thread title must be 100 characters or fewer.")
-        return self._store.rename_thread(
+        return await self._store.rename_thread(
             thread_id,
             normalized,
             updated_at=self._clock(),
         )
 
-    def set_model(self, thread_id: str, model: str | None) -> Thread:
-        return self._store.set_thread_model(
+    async def set_model(self, thread_id: str, model: str | None) -> Thread:
+        return await self._store.set_thread_model(
             thread_id,
             model,
             updated_at=self._clock(),
         )
 
-    def set_thinking(self, thread_id: str, enabled: bool) -> Thread:
-        return self._store.set_thread_thinking(
+    async def set_thinking(self, thread_id: str, enabled: bool) -> Thread:
+        return await self._store.set_thread_thinking(
             thread_id,
             enabled,
             updated_at=self._clock(),
         )
 
-    def read_thread(self, thread_id: str) -> ThreadView:
-        return self._store.read_thread(thread_id)
+    async def read_thread(self, thread_id: str) -> ThreadView:
+        return await self._store.read_thread(thread_id)
 
-    def read_thread_page(
+    async def read_thread_page(
         self,
         thread_id: str,
         *,
         before_sequence: int | None,
         limit: int,
     ) -> ThreadPage:
-        return self._store.read_thread_page(
+        return await self._store.read_thread_page(
             thread_id,
             before_sequence=before_sequence,
             limit=limit,
         )
 
-    def begin_turn(
+    async def begin_turn(
         self,
         thread_id: str,
         user_content: str,
@@ -165,7 +269,7 @@ class ConversationService:
     ) -> Turn:
         if not user_content.strip():
             raise ValueError("User message cannot be empty.")
-        view = self._store.read_thread(thread_id)
+        view = await self._store.read_thread(thread_id)
         now = self._clock()
         entry = ThreadEntry(
             id=self._id_factory("entry"),
@@ -197,28 +301,31 @@ class ConversationService:
             and not view.entries
             else None
         )
-        return self._store.begin_turn(
+        return await self._store.begin_turn(
             entry,
             turn,
             automatic_title=suggested_title,
             updated_at=now,
         )
 
-    def complete_turn(
+    async def complete_turn(
         self,
         turn_id: str,
         assistant_content: str,
         usage: UsageSummary,
         termination_reason: str,
         context_manifest: tuple[dict[str, JsonValue], ...] = (),
+        citations: tuple[Citation, ...] = (),
     ) -> Turn:
-        view, current = self._turn_view(turn_id)
+        view, current = await self._turn_view(turn_id)
         recorded_manifest = context_manifest or current.context_manifest
         if current.status is TurnStatus.COMPLETED:
             entry = _entry_by_id(view, current.assistant_entry_id)
             if (
                 entry is not None
                 and entry.content == assistant_content
+                and entry.metadata
+                == AssistantEntryMetadata(citations=citations).model_dump(mode="json")
                 and current.usage == usage
                 and current.termination_reason == termination_reason
                 and current.context_manifest == recorded_manifest
@@ -233,6 +340,9 @@ class ConversationService:
             sequence=_next_sequence(view),
             kind=ThreadEntryKind.ASSISTANT_MESSAGE,
             content=assistant_content,
+            metadata=AssistantEntryMetadata(citations=citations).model_dump(
+                mode="json"
+            ),
             created_at=now,
         )
         completed = current.model_copy(
@@ -247,14 +357,14 @@ class ConversationService:
             }
         )
         completed = Turn.model_validate(completed.model_dump())
-        return self._store.complete_turn(assistant, completed)
+        return await self._store.complete_turn(assistant, completed)
 
-    def store_context_manifest(
+    async def store_context_manifest(
         self,
         turn_id: str,
         context_manifest: tuple[dict[str, JsonValue], ...],
     ) -> Turn:
-        _, current = self._turn_view(turn_id)
+        _, current = await self._turn_view(turn_id)
         if current.status is not TurnStatus.IN_PROGRESS:
             raise ConversationConflict(
                 "Only an in-progress Turn can record a context snapshot."
@@ -267,19 +377,19 @@ class ConversationService:
                 "updated_at": self._clock(),
             }
         )
-        return self._store.update_in_progress_turn(
+        return await self._store.update_in_progress_turn(
             updated,
             expected_context_manifest=current.context_manifest,
         )
 
-    def compare_and_swap_context_manifest(
+    async def compare_and_swap_context_manifest(
         self,
         turn_id: str,
         context_manifest: tuple[dict[str, JsonValue], ...],
         *,
         expected_context_manifest: tuple[dict[str, JsonValue], ...],
     ) -> Turn:
-        _, current = self._turn_view(turn_id)
+        _, current = await self._turn_view(turn_id)
         if current.status is not TurnStatus.IN_PROGRESS:
             raise ConversationConflict(
                 "Only an in-progress Turn can reconcile a context snapshot."
@@ -298,12 +408,12 @@ class ConversationService:
                 }
             ).model_dump()
         )
-        return self._store.update_in_progress_turn(
+        return await self._store.update_in_progress_turn(
             updated,
             expected_context_manifest=expected_context_manifest,
         )
 
-    def fail_turn(
+    async def fail_turn(
         self,
         turn_id: str,
         error_code: str,
@@ -314,7 +424,7 @@ class ConversationService:
         if not error_code.strip():
             raise ValueError("error_code cannot be empty.")
         observed_usage = usage or UsageSummary()
-        _, current = self._turn_view(turn_id)
+        _, current = await self._turn_view(turn_id)
         recorded_manifest = context_manifest or current.context_manifest
         if current.status is TurnStatus.FAILED:
             if (
@@ -337,9 +447,9 @@ class ConversationService:
             }
         )
         failed = Turn.model_validate(failed.model_dump())
-        return self._store.update_terminal_turn(failed)
+        return await self._store.update_terminal_turn(failed)
 
-    def cancel_turn(
+    async def cancel_turn(
         self,
         turn_id: str,
         *,
@@ -347,7 +457,7 @@ class ConversationService:
         context_manifest: tuple[dict[str, JsonValue], ...] = (),
     ) -> Turn:
         observed_usage = usage or UsageSummary()
-        _, current = self._turn_view(turn_id)
+        _, current = await self._turn_view(turn_id)
         recorded_manifest = context_manifest or current.context_manifest
         if current.status is TurnStatus.CANCELLED:
             if (
@@ -369,19 +479,19 @@ class ConversationService:
             }
         )
         cancelled = Turn.model_validate(cancelled.model_dump())
-        return self._store.update_terminal_turn(cancelled)
+        return await self._store.update_terminal_turn(cancelled)
 
-    def thread_usage(self, thread_id: str) -> UsageSummary:
+    async def thread_usage(self, thread_id: str) -> UsageSummary:
         total = UsageSummary()
-        for turn in self._store.read_thread(thread_id).turns:
+        for turn in (await self._store.read_thread(thread_id)).turns:
             total += turn.usage
         return total
 
-    def latest_context_manifest(
+    async def latest_context_manifest(
         self,
         thread_id: str,
     ) -> tuple[dict[str, JsonValue], ...]:
-        turns = self._store.read_thread(thread_id).turns
+        turns = (await self._store.read_thread(thread_id)).turns
         return next(
             (
                 turn.context_manifest
@@ -391,13 +501,13 @@ class ConversationService:
             (),
         )
 
-    def append_direct_command(
+    async def append_direct_command(
         self,
         thread_id: str,
         content: str,
         metadata: dict[str, JsonValue],
     ) -> ThreadEntry:
-        view = self._store.read_thread(thread_id)
+        view = await self._store.read_thread(thread_id)
         entry = ThreadEntry(
             id=self._id_factory("entry"),
             thread_id=thread_id,
@@ -407,26 +517,42 @@ class ConversationService:
             metadata=metadata,
             created_at=self._clock(),
         )
-        return self._store.append_direct_command(entry)
+        return await self._store.append_direct_command(entry)
 
-    def store_summary(
+    async def store_summary(
         self,
         summary: ThreadSummary,
         *,
         expected: ThreadSummary | None,
     ) -> ThreadSummary:
-        return self._store.compare_and_swap_summary(summary, expected=expected)
+        return await self._store.compare_and_swap_summary(summary, expected=expected)
 
-    def _turn_view(self, turn_id: str) -> tuple[ThreadView, Turn]:
-        thread_id = self._thread_id_for_turn(turn_id)
-        view = self._store.read_thread(thread_id)
+    async def _turn_view(self, turn_id: str) -> tuple[ThreadView, Turn]:
+        thread_id = await self._thread_id_for_turn(turn_id)
+        view = await self._store.read_thread(thread_id)
         current = next((turn for turn in view.turns if turn.id == turn_id), None)
         if current is None:
             raise TurnNotFound(turn_id)
         return view, current
 
-    def _thread_id_for_turn(self, turn_id: str) -> str:
-        thread_id = self._store.thread_id_for_turn(turn_id)
+    async def _materialization_source(
+        self,
+        workspace_key: str,
+        source_thread_id: str,
+        source_turn_id: str | None,
+    ) -> tuple[ThreadView, Turn]:
+        _require_identifier(workspace_key, label="Workspace")
+        _require_identifier(source_thread_id, label="source Thread")
+        if source_turn_id is not None:
+            _require_identifier(source_turn_id, label="source Turn")
+        source = await self._store.read_thread(source_thread_id)
+        if source.thread.workspace_key != workspace_key:
+            raise ThreadNotFound(source_thread_id)
+        target = terminal_materialization_target(source, source_turn_id)
+        return source, target
+
+    async def _thread_id_for_turn(self, turn_id: str) -> str:
+        thread_id = await self._store.thread_id_for_turn(turn_id)
         if thread_id is None:
             raise TurnNotFound(turn_id)
         return thread_id
@@ -444,3 +570,8 @@ def _entry_by_id(view: ThreadView, entry_id: str | None) -> ThreadEntry | None:
 
 def _new_identifier(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
+
+
+def _require_identifier(value: str, *, label: str) -> None:
+    if not 1 <= len(value) <= 128:
+        raise ValueError(f"{label} identity must be 1 to 128 characters.")

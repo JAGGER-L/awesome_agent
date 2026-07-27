@@ -1,59 +1,93 @@
 # 工具与变更
 
 工具是模型意图对工作区或 host 产生作用的唯一通路。因此，Awesome 在调用 built-in 或
-MCP handler 之前，统一处理注册、参数校验、hard-deny 检查、权限决策、审批、超时、取消、
-审计和终态事件。
+MCP handler 之前，统一处理注册、严格参数校验、工具自有 hard admission、capability 决策、
+审批、期限、取消、审计和终态事件。
 
 Change Journal 与工具相邻，但职责独立。它记录并恢复通过受管 built-in 产生的文件
 mutation；它无法让任意 shell 或 MCP 副作用变得可逆。
 
 ## 工具契约
 
-一个 `RegisteredTool` 组合四项内部事实：
+一个 `RegisteredTool` 组合八项内部事实：
 
 - 提供商可见的 `ToolSpec`，其中包含名称、描述、JSON schema、capability、read-only
   标志和展示 metadata；
 - 一个严格的 Pydantic input model；
 - 一个 async handler；
-- 一个可选的动态总超时解析器。
+- 一个从已校验参数派生有界 operation fact 的类型化描述函数；
+- 一个对已校验参数和执行 context 应用不可关闭、工具特定检查的 hard-admission 函数；
+- 一个显式 replay-safety 分类；
+- 一个可选的动态总超时解析器；
+- 一个可选的 handler cancellation grace。
 
-超时解析器有意不属于模型可见 schema。它让 `execute` 可以用
-`timeout_seconds + 10` 秒覆盖请求期限和有界清理，也让 MCP 可以使用 40 秒外层封装，
-而不向模型泄露 executor 内部机制。
+描述、admission、replay、deadline 与 cancellation 事实有意不属于模型可见 schema。
+描述函数从显式选择的 operation target 提供有界展示与审批事实；它不会接收未经校验的
+原始参数映射。Hard admission 拥有路径或命令安全等事实，任何权限模式或临时 grant 都不能
+覆盖它。Description 恰好在 hard admission 后运行
+一次：它进行的任何有界 metadata probe 都位于已准入操作内，并且仍发生在审批、handler 与
+外部作用之前。Replay safety 为恢复提供显式答案，使其不必识别工具名。Timeout resolver
+让 `execute` 可以用 `timeout_seconds + 10` 秒作为总期限；cancellation grace 则对 handler
+清理设限，而不向模型泄露 executor 内部机制。
 
 Built-in 基线如下：
 
-| 工具 | Capability | 受管文件变更 |
-| --- | --- | --- |
-| `ls`、`read_file`、`glob`、`grep` | `workspace.read` | 无 |
-| `write_file`、`edit_file` | `workspace.write` | 记入 journal |
-| `delete` | `workspace.delete` | 记入 journal |
-| `execute` | `shell.execute` | 仅 observation |
+| 工具 | Capability | 受管文件变更 | 重放安全性 |
+| --- | --- | --- | --- |
+| `ls`、`read_file`、`glob`、`grep` | `workspace.read` | 无 | replayable |
+| `write_file`、`edit_file` | `workspace.write` | 记入 journal | non-replayable |
+| `delete` | `workspace.delete` | 记入 journal | non-replayable |
+| `execute` | `shell.execute` | 仅 observation | non-replayable |
+| `web_search`、`web_fetch`（启用且配置有效时） | `network.read` | 无；外部 | non-replayable |
 
 Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式替换，名称形如
 `mcp.<server>.<tool>`。
+
+## Core 与 Agent 内部的引用传递
+
+`core/citations.py` 定义最小、提供商中立且不可变的 `Citation` 值：`id`、`title` 与
+`url`。严格契约会拒绝未知字段；ID 必须是有界的 `S1` 至 `S999999` 形状；非空单行 title
+最多 500 个字符；绝对 HTTPS URL 最多 8,000 个字符，且不得包含空白、控制字符或用户
+信息。`ToolOutput.citations` 和 `ToolResult.citations` 都是默认空 tuple。Handler 成功返回
+后，Executor 会严格重建每条 citation 与 output，再把 citations 原样复制到规范化 result。
+对文本 `content` 设限或截断不会丢弃这些 citations。
+
+`web_search` 与 `web_fetch` 会在一个 Turn 内分配稳定、按 URL 去重的 `S1...Sn` identity。
+Fetch hard admission 只接受一个公共 HTTPS URL，拒绝配置的 blocked hostname 及其子域，
+随后把目标连接委托给 Tavily，而不是由 Core 打开。Agent 序列化完整 result，并派生有序的
+`AgentState.citations` 快照，使两者都能经过 checkpoint recovery。
+Finalization 校验模型使用的 `[[S1]]` marker：未知 ID 会产生 warning 且不生成链接；使用 Web
+但没有有效引用时，会附加有界且确定性的 Sources 区域并记录 warning。Conversation 将同一
+来源随 assistant entry 持久化，Protocol v4 再把它们传给 TUI、headless JSON v2 与后续导出。
 
 ## Executor 流水线
 
 ```text
 ToolRequest
   -> resolve registry item
-  -> validate Pydantic arguments
-  -> validate built-in path syntax
-  -> compute non-disableable hard deny
-  -> PermissionPolicy: allow | ask | deny
+  -> strict-validate with its registered input model
+  -> run its registered hard admission
+  -> derive its typed description exactly once
+  -> PermissionPolicy for its registered capability: allow | ask | deny
   -> resolve bound approval, when asked
-  -> resolve total timeout
+  -> resolve total deadline
   -> invoke handler under deadline
   -> normalize result or expected failure
-  -> write one ToolActivity
+  -> write one ToolActivity and audit summary
   -> emit one terminal tool event
   -> return one bounded ToolResult
 ```
 
-`tool.started` 会在解析前发出，因此未知工具仍是可观察的尝试调用。参数错误、policy
-denial、timeout 和预期 handler failure 会成为有界 `ToolResult` error。意外 handler
-exception 属于不变量失败，会终止 Turn，而不会伪装成模型可修正的错误。
+每次尝试调用都恰好发出一条 `tool.started`，包括未知工具、无效参数和 hard-admission
+失败。若失败发生在类型化描述产生之前，事件只使用注册项的静态展示信息，绝不从不可信值
+派生 target；已准入调用则在 capability policy 或 handler 执行前发出类型化、有界的展示。
+参数错误、policy denial、timeout 和预期 handler failure 会成为有界 `ToolResult` error。
+意外 handler exception 属于不变量失败，会终止 Turn，而不会伪装成模型可修正的错误。
+
+这是唯一的执行顺序。Executor 统一调用注册项拥有的行为，不按具体工具名分支。Hard
+admission 与 capability policy 回答不同问题：admission 判断这一项经过校验的具体操作是否
+在任何情况下都可接受；policy 判断注册的 capability 在当前 permission session 中应允许、
+拒绝还是请求审批。
 
 取消会通过有界清理尝试终结唯一一条 cancelled activity/event，然后重新抛出调用方的
 原始取消。忽略取消的 handler task 只有在其宽限期限结束后才会被 detach，其结果仍会被
@@ -62,15 +96,28 @@ exception 属于不变量失败，会终止 Turn，而不会伪装成模型可�
 工具内容进入 Agent state 或 transcript 前会受到边界约束。审计 summary 只保留参数名，
 不保留原始参数值。
 
+## 重放安全性
+
+Replay safety 是注册 metadata，而不是由恢复流程推断的属性。只有受管本地语义能够证明
+重复调用安全的 built-in 才可标记为 replayable；读取工具满足这一条件。文件修改工具不
+满足：崩溃后再次 edit、overwrite 或 delete 可能作用于新的文件系统状态，即使 Change
+Journal 已经记录首次作用。因此它们属于 non-replayable，MCP、Web、shell 与其它外部或
+未分类作用同样如此。Dispatch 后崩溃会默认 Abort，不会重复该操作。恢复会在当前 Runtime
+Registry 中查找同名工具，并消费该注册项的 metadata。Replayable 工作可以继续；
+non-replayable、metadata 缺失或未知时会 fail closed，进入恢复 interaction，绝不自动重试。
+用户可以显式选择 Retry，而不是默认的 Abort。因此，同名工具的契约变更必须按 checkpoint
+compatibility 变更管理。Executor 与恢复流程都不维护另一份特殊工具名列表。
+
 ## 权限决策
 
-权限是纯 capability 决策。Hard denial 始终优先：
+权限是纯 capability 决策，只在注册的 hard admission 成功后求值。Hard rejection 始终
+优先，表中任何一行都不能把它转为允许：
 
-| 模式 | 读取 | 创建/修改 | 删除 | Shell | MCP/未知扩展 |
-| --- | --- | --- | --- | --- | --- |
-| Request approval | 允许 | 询问 | 询问 | 询问 | 询问 |
-| Accept edits | 允许 | 允许 | 询问 | 询问 | 询问 |
-| Full access | 允许 | 允许 | 允许 | 允许 | 询问 |
+| 模式 | 读取 | 创建/修改 | 删除 | Shell | 网络读取 | MCP/未知扩展 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Request approval | 允许 | 询问 | 询问 | 询问 | 询问 | 询问 |
+| Accept edits | 允许 | 允许 | 询问 | 询问 | 询问 | 询问 |
+| Full access | 允许 | 允许 | 允许 | 允许 | 询问 | 询问 |
 
 该表适用于使用选中 Thread permission session 的 Agent 工具调用。直接 `! command` 输入
 是用户对该确切命令的显式授权：Application 为其建立独立 Full-access permission
@@ -79,8 +126,9 @@ command circuit breaker（词法检查和 spawn 前检查）、Process Runner、
 与脱敏边界。
 
 Allow-once 结果只作用于当前 Tool call。“Allow all edits during this session”只 grant
-`workspace.write`；它不能 grant delete、shell 或扩展 capability。切换 mode 或 Thread
-会清除临时 grant。
+`workspace.write`；它不能 grant delete、shell 或扩展 capability。网络审批提供默认 deny、
+allow once 和 allow for the active Thread。选择其他 Thread、重建 runtime、更改 permission
+mode、运行 `/web revoke` 或 `/web off`，以及 shutdown 时，Thread grant 都会被撤销。
 
 Tool Executor 根据经过校验的操作事实创建审批文本。TUI 渲染该类型化请求并返回决策；
 它绝不会从提示词文本推断 capability，也不执行操作。
@@ -120,11 +168,11 @@ POSIX 最终 symlink 节点本身可以在不跟随目标的情况下删除；�
 
 ## 命令 circuit breaker
 
-Agent `execute` 与直接 `!` 输入都会调用同一个纯命令 policy。Executor 的审批前检查接收
-命令、显式 shell dialect、workspace，以及在规范工作区根下拼接出的请求词法 working
-directory。随后 handler 解析并校验该目录的身份；spawn 前检查使用已校验的 resolved
-directory 再次调用同一 policy。共享 evaluator 可以防止规则漂移，而第二阶段具有已打开
-路径证据支撑。
+Agent `execute` 与直接 `!` 输入都会调用同一个纯命令 policy。`execute` 注册项的 hard-
+admission 检查接收命令、显式 shell dialect 与 workspace。它先把请求 working directory
+解析为 pinned workspace 内已存在的 no-follow 目录，再在描述或审批前基于 resolved path
+评估命令。Handler 在 spawn 前重复身份解析与同一 policy。共享 evaluator 可以防止规则
+漂移；第二次检查使用新鲜的 opened-path 证据，封闭 admission 与进程创建之间的变化。
 
 对 CMD、POSIX shell 和 PowerShell 的有界检查会展开已知 wrapper、复合命令、pipeline
 和换行。它会规范化 executable path、大小写与 executable suffix；在目录切换间保守
@@ -237,7 +285,7 @@ load and validate blobs
 
 ## 源代码与测试索引
 
-- 契约与 registry：`core/tools/contracts.py`、`registry.py`
+- 契约与 registry：`core/citations.py`、`core/tools/contracts.py`、`registry.py`
 - Policy 与权限：`core/tools/policy.py`、`permissions.py`、`command_policy.py`
 - Executor：`core/tools/executor.py`
 - Built-ins：`core/tools/builtins/`

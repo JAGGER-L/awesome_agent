@@ -1,10 +1,17 @@
-from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
+from awesome_agent.core.citations import Citation
+from awesome_agent.core.tools.context import (
+    ToolExecutionContext,
+    ToolHandler,
+    ToolResourceGrant,
+)
 from awesome_agent.core.tools.contracts import (
     ToolActivityDraft,
     ToolActivityWriter,
+    ToolArguments,
     ToolError,
     ToolErrorCode,
     ToolExecutionOrigin,
+    ToolInvocationDescription,
     ToolOutput,
     ToolPresentation,
     ToolRequest,
@@ -30,9 +37,14 @@ from awesome_agent.core.tools.permissions import (
     ToolCapability,
 )
 from awesome_agent.core.tools.policy import SafeWorkspacePath, resolve_workspace_path
-from awesome_agent.core.tools.registry import RegisteredTool, ToolRegistry
+from awesome_agent.core.tools.registry import (
+    RegisteredTool,
+    ToolRegistry,
+    ToolReplaySafety,
+)
 
 __all__ = [
+    "Citation",
     "DuplicateToolName",
     "ExpectedToolFailure",
     "PermissionMode",
@@ -47,6 +59,7 @@ __all__ = [
     "ToolActivityWriter",
     "ToolApprovalDecision",
     "ToolApprovalRequest",
+    "ToolArguments",
     "ToolCapability",
     "ToolError",
     "ToolErrorCode",
@@ -55,10 +68,13 @@ __all__ = [
     "ToolExecutor",
     "ToolHandler",
     "ToolInvariantError",
+    "ToolInvocationDescription",
     "ToolOutput",
     "ToolPresentation",
     "ToolRegistry",
+    "ToolReplaySafety",
     "ToolRequest",
+    "ToolResourceGrant",
     "ToolResult",
     "ToolSpec",
     "ToolStatus",

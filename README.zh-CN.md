@@ -21,14 +21,26 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 - 理解项目结构并解释代码之间的关系；
 - 实现功能、调试问题、重构代码和运行测试；
 - 通过 `/diff`、`/undo`、`/redo` 检查和撤销受控文件修改；
+- 搜索当前 Workspace 的会话历史，并恢复匹配结果；
+- 在终态 Turn 处分叉会话，或在新的分支 Thread 中重试该 Turn；
+- 通过 Change Journal 将当前 Thread 确定性导出为 Markdown 或 JSON；
 - 继续最近的 Thread，或通过 ID 恢复指定 Thread；
+- 以确定性的文本或 JSON 输出非交互运行一个 Agent Turn；
 - 在 Request approval、Accept edits 和 Thread 范围的 Full access 之间切换；
 - 使用 Skills、MCP 工具、本地 Memory 和 Mem0 Cloud 扩展能力；
+- 无需打开交互式聊天即可列出、安装、替换和移除经过校验的本地 User Skill 包；
+- 通过可选且带引用的 Tavily 集成搜索和提取公共 Web 内容；
 - 使用 DeepSeek 和 Kimi 模型。
 
 Awesome 最开始提供 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、
 `glob`、`grep` 和 `execute`。扩展可以继续增加工具，Awesome 不限制为八个工具。
 Local memory 与 Mem0 Cloud 相互独立，二者默认关闭。
+
+Web 工具同样默认关闭。设置 `TAVILY_API_KEY`，通过 `/web on` 启用，并批准每个 Thread
+第一次 `network.read` 请求。Search query 与 Fetch URL 会依据 Tavily 的
+[隐私政策](https://www.tavily.com/privacy)和[平台条款](https://www.tavily.com/terms)
+发送给 Tavily；Awesome 会分配稳定的 `S1...` 来源，并将其带入最终回答。使用 `/web off`
+可关闭集成，使用 `/web revoke` 可清除当前 Thread grant。
 
 ## 安装
 
@@ -74,13 +86,34 @@ approval 模式；可通过 `/permissions` 查看或切换当前 Thread 的权�
 awesome --continue
 awesome --resume
 awesome --resume <thread_id>
+awesome run "Analyze the test failure" --trust-workspace
+awesome skills list
+awesome skills install ./review-api
+awesome skills remove review-api --yes
 awesome --version
 awesome --help
 ```
 
-如果启动时发现未完成的 Turn，Awesome 会先询问再继续。已验证的本地 checkpoint
-默认提供 Retry；如果 shell 或 MCP 调用结果不确定，则默认提供 Abort，并且绝不会
-自动重放该外部操作。
+`awesome run "<prompt>"` 是供脚本使用的非交互入口。它默认创建新 Thread，只把最终
+回答写入 stdout（`--format text` 或 `--format json`），诊断写入 stderr。使用
+`--thread <id>` 可指定现有 Thread。信任、权限检查、取消以及同一套私有 Core/Application
+生命周期仍然生效；存在未解决 interaction 时会退出，不会打印部分回答。完整选项和退出码
+见 [CLI 参考](docs/reference/cli.zh-CN.md)。
+
+`awesome skills` 是不进入聊天界面的独立 User Skills 包管理入口。可以从本地包目录或 ZIP 安装；
+添加 `--replace` 可替换已有包，无人值守移除则使用 `remove --yes`。未提供 `--yes` 时，
+只有交互式终端会执行确认。官方包命令是一次性的，并会关闭其私有 Core。已经初始化的
+Awesome Session 会保留不可变 Skill catalog，因此选择或加载变更后的包之前应重启该 Session。
+完整包格式和安全契约见 [Skills](docs/extensions/skills.zh-CN.md)。
+
+如果启动时发现未完成的 Turn，Awesome 会先询问再继续。只有待处理工具可安全重复时，
+已验证的本地 checkpoint 才默认提供 Retry；如果文件修改、shell、MCP 或 Web 调用结果
+不确定，则默认提供 Abort，并且绝不会自动重放该操作。
+
+`/fork [turn_id]` 会把截至某个终态 Turn 的会话历史物化到新 Thread；
+`/retry [turn_id]` 会物化该 Turn 之前的前缀，再使用原 Turn 冻结的模型、Thinking、
+Skill 与预算重新执行其请求。两者都会创建独立记录，而不是共享历史 DAG；不会复制
+checkpoint、Tool activity 或 ChangeSet。retry 也不会重放旧工具调用或撤销既有副作用。
 
 ## 第一个任务
 
@@ -122,3 +155,8 @@ awesome --help
 修改操作会拒绝有歧义或 hard-link 别名；有界的进程树清理会减少遗留子进程，
 但不会隔离宿主机执行。进程环境变量和
 `<AWESOME_HOME>/.env` 仍是高级配置方式；不要把凭据写入项目文件。
+可选 Web Search 会把 query 发送给 Tavily。`web_fetch` 会把一个公共 HTTPS URL 发送给
+Tavily，由 Tavily 云服务远程获取并提取页面；Awesome Core 本身不连接目标网站。两个工具都
+不会继承环境中的代理变量，也不会在结构化诊断中记录 query、URL 或结果正文；只有明确需要
+代理时才使用 `AWESOME_WEB_PROXY_URL`。Web Fetch 不是浏览器，不支持 Cookie、登录、
+JavaScript、PDF、二进制、本地 Fetch、缓存或 backend fallback。

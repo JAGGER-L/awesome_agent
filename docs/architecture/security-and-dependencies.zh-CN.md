@@ -11,8 +11,8 @@ circuit breaker 会降低特定风险；它们都不会把 host 执行变成隔�
 Awesome 的设计目标是抵御以下情况，或在其中安全失败：
 
 - 在信任建立前意外激活项目控制的指令；
-- 针对固定身份的工作区根、文件系统工具、`AGENTS.md` 和 Workspace Skills 发起替换、
-  alias、链接与 reparse 攻击；
+- 针对固定身份的工作区根、文件系统工具、`.awesome/config.yaml`、`AGENTS.md` 和
+  Workspace Skills 发起替换、alias、链接与 reparse 攻击；
 - 常见的结构化文件系统路径逃逸和敏感文件请求；
 - 已知的灾难性 shell 命令及 wrapper；
 - 过期审批跨越 Thread、Turn、Operation 或 permission mode；
@@ -30,8 +30,7 @@ Awesome 的设计目标是抵御以下情况，或在其中安全失败：
 - 已成功获批的 host 进程进行数据外传；
 - 操作系统、终端、提供商、MCP server 或依赖分发渠道被攻破；
 - 回滚每一个外部 shell、MCP、网络或服务副作用；
-- SQLite、blob 目录与工作区文件之间的断电原子性；
-- 当前受信工作区 `.awesome/config.yaml` reader 中恶意的大小/链接/替换行为。
+- SQLite、blob 目录与工作区文件之间的断电原子性。
 
 如果所需威胁模型包含不受信代码执行，请使用外部 OS/container sandbox，不要把 Awesome
 的 Full access mode 当作等价方案。
@@ -71,11 +70,10 @@ Awesome 实现前三层，目前不提供第四层。把这些层区分开，可
 持久信任以规范工作区路径为 key。Physical identity 与 path/entity lease 是活动会话
 guard，不属于持久化 trust record。两种绑定都不会把权限授予之后通过链接到达的任意内容。
 
-Trust gate 能防止用户同意前的访问，但不会让所有后续 reader 具有相同的加固水平。当前
-`.awesome/config.yaml` loader 使用普通 `is_file()` 加无界文本读取，因此可能跟随 link/
-reparse point、观察检查与读取间的替换，或消费超大 YAML 文档。与 `AGENTS.md` 和
-Workspace Skills 不同，它没有 no-follow open 或 open 后身份校验。应把受信工作区配置
-视为特权输入，并把这一点记录为运行时加固缺口。
+建立信任后，`.awesome/config.yaml` 使用与 Workspace instructions 和 Skills 相同的 Core
+no-follow reader 边界。它只接受一个不超过 1 MiB 的普通 UTF-8 文件，拒绝 NUL、link/
+reparse point、hard link 和非普通节点，并固定、重新检查已打开目录与文件的身份。替换或
+超限文档会使配置激活失败，而不是重定向或截断由项目控制的输入。
 
 ## 工作区指令
 
@@ -90,6 +88,11 @@ Welcome、status line 和 `/doctor` 中，但不会让其他原本有效的配�
 
 三种 permission mode 按[工具与变更](tools-and-changes.zh-CN.md)中的规则管理已知
 built-in capability。即使在 Full access 中，MCP 和未知 capability 也始终逐次询问。
+
+`network.read` 同样会在每种 mode 下首次使用时 ASK。其审批只适用于一次或当前 Thread；
+选择其他 Thread、重建 runtime、更改 permission mode、运行 `/web revoke` 或 `/web off`，
+以及 shutdown 都会清除 Thread grant。Headless `--allow-network` 只能把当前活动 Turn 的
+精确 prompt 解析为 allow-once，不能绕过硬拒绝。
 
 审批会绑定到发起请求的 authority：
 
@@ -156,6 +159,25 @@ stdout/stderr drain 都有边界。
 进程所有权解决孤儿清理问题。进程运行时，它不限制文件系统、网络、设备、credential
 store 或 child-process 访问。有意 daemonize 的 POSIX 进程可以离开受管 group。
 
+## Web 网络边界
+
+Web 由用户启用且默认关闭。只有有效 `TAVILY_API_KEY` 与 `web.enabled: true` 才会发布
+`web_search` 与 `web_fetch`；Workspace config 不能启用它或选择 credential。提供商中立
+handler 使用一个
+可复用 Tavily adapter 和显式 `httpx.AsyncClient`，设置 `trust_env=False`、禁用 redirect、
+限制 response，且不进行不透明 retry。环境 proxy 变量会被忽略，只接受经过校验的
+`AWESOME_WEB_PROXY_URL` 或其已选择的 Awesome secret。
+
+Awesome 只连接 Tavily 固定的 `https://api.tavily.com/search` 与
+`https://api.tavily.com/extract` endpoint。Search 发送 query 与 exclusion list；Fetch 发送
+一个经过严格校验的公共 HTTPS URL。由 Tavily 云服务连接该目标并返回 basic Markdown，
+Awesome Core 绝不连接目标。Fetch 不提供浏览器、Cookie、登录、JavaScript、PDF、二进制、
+本地 Fetch、缓存或 backend fallback 界面。启用和首次审批会披露
+[Tavily 隐私政策](https://www.tavily.com/privacy)与
+[平台条款](https://www.tavily.com/terms)。诊断 allowlist 绝不包含 query、URL、response 或
+credential 正文。严格 HTTPS citation 仍是不受信 display data；只有 ID 匹配当前 Turn
+经过校验的 source catalog 时才会成为链接。
+
 ## 扩展与上下文边界
 
 工作区指令、Skills、Memory、MCP description/result、显式文件和 provider text 都是给
@@ -186,6 +208,19 @@ Secret 值在配置边界以 secret-aware type 表示，并从受支持的 event
 数据，提示词也可以要求模型泄露有意提供给它的内容。请避免把 secret 放入工作区或作为
 工具参数传递。
 
+### Application 诊断日志边界
+
+Application invocation log 从封闭的字段 allowlist 构造，而不是先序列化任意 request 或
+result 再尝试脱敏。每条 record 只包含 `version`、`timestamp`、`session_id`、
+`correlation_id`、`operation`、`outcome`、`duration_ms`，以及可选的 `error_code` 与有界
+`usage`。Prompt 文本、模型或 Tool 正文、query 文本、URL、文件系统 path、secret、
+exception 文本和任意 payload 在构造时即被排除。
+
+进程/会话级 writer 是非阻塞、fail-open 的。其有界 queue 和 5 个文件、每个 5 MiB 的轮转
+限制资源使用；诊断 sink 不可用或已满也不能改变被观测的 Application 结果。这些 record 是
+运行元数据，不是产品历史，也不能替代 Turn lifecycle 或 audit record。即使 schema 已排除
+受支持的内容字段，分享前仍应把这些文件视为本地数据并进行检查。
+
 ## 依赖方向
 
 包依赖编码了 authority，但实际 import 契约不是单一的垂直 DAG。Storage 实现多个下层
@@ -200,6 +235,7 @@ import permission。
 | 外部框架 | 允许的所有者 |
 | --- | --- |
 | `jsonschema` | Extensions/MCP |
+| `httpx` | Web/Tavily adapter |
 | `mcp` SDK | Extensions |
 | `openai` SDK | 具体 Providers |
 | `sqlite3` | Storage |
@@ -215,6 +251,7 @@ Awesome 保持一组精简且显式的生产依赖：
 | 依赖 | 所属用途 |
 | --- | --- |
 | `pydantic` | 跨边界类型化模型与校验；严格程度由具体契约决定 |
+| `httpx` | 唯一有界 async Tavily Web client，并显式拥有 proxy 配置 |
 | `langgraph`、`langgraph-checkpoint-sqlite` | 唯一 Agent graph 及其 checkpoint saver |
 | `openai` | 适配器背后的 DeepSeek/Kimi 兼容 provider client |
 | `mcp` | Extensions 背后的 stdio MCP client |
@@ -269,7 +306,8 @@ secret scanning 和 push protection 是仓库设置，并非源代码本身可�
 - 命令 policy/process：`core/tools/command_policy.py`、
   `core/tools/process.py`、`core/process_lifetime.py`
 - 权限/interaction：`core/tools/permissions.py`、`application/interactions.py`
-- 脱敏：`safety/redaction.py`
+- 脱敏与 invocation diagnostics：`safety/redaction.py`、
+  `application/diagnostics.py`、`application/middleware.py`
 - 依赖测试：`tests/structural/test_dependency_architecture.py`、
   `tests/structural/test_product_architecture.py`
 - 安全敏感测试：`tests/unit/core/`、`tests/unit/extensions/`、

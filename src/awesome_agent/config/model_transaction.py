@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from awesome_agent.config.models import SUPPORTED_MODEL_IDS
+from awesome_agent.modeling import MODEL_CATALOG
 
 _MAX_JOURNAL_BYTES = 4 * 1024
 
@@ -28,6 +28,12 @@ class ProviderModelTransactionRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     version: Literal[1] = 1
+    transaction_id: str = Field(
+        default="legacy",
+        min_length=6,
+        max_length=32,
+        pattern=r"^(?:legacy|[0-9a-f]{32})$",
+    )
     phase: ProviderModelTransactionPhase
     thread_id: str = Field(min_length=1, max_length=128)
     previous_default_model: str | None = None
@@ -43,8 +49,13 @@ class ProviderModelTransactionRecord(BaseModel):
     )
     @classmethod
     def validate_model(cls, value: str | None) -> str | None:
-        if value is not None and value not in SUPPORTED_MODEL_IDS:
-            raise ValueError("Journal model must be a curated Provider/model id.")
+        if value is not None:
+            try:
+                MODEL_CATALOG.profile(value)
+            except ValueError as error:
+                raise ValueError(
+                    "Journal model must be a curated Provider/model id."
+                ) from error
         return value
 
     @model_validator(mode="after")

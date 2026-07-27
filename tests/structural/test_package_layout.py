@@ -19,8 +19,15 @@ EXPECTED_PACKAGES = {
     "providers",
     "safety",
     "storage",
+    "web",
 }
-EXPECTED_MODULES = {"__init__.py", "paths.py", "version.py", "py.typed"}
+EXPECTED_MODULES = {
+    "__init__.py",
+    "contract_versions.py",
+    "paths.py",
+    "py.typed",
+    "version.py",
+}
 
 
 def test_package_is_imported_from_src_layout() -> None:

@@ -1,3 +1,8 @@
+from awesome_agent.application.bootstrap import (
+    ApplicationBootstrap,
+    BootstrapPhase,
+    BootstrapRejection,
+)
 from awesome_agent.application.contracts import (
     ApplicationResult,
     ApplicationState,
@@ -9,11 +14,18 @@ from awesome_agent.application.contracts import (
     ProductError,
     ProductErrorCode,
     ShutdownResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     StatusSnapshot,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
     thread_display_id,
 )
@@ -22,10 +34,13 @@ from awesome_agent.application.facade import ApplicationFacade, LocalApplication
 from awesome_agent.application.interactions import InteractionDecision
 
 __all__ = [
+    "ApplicationBootstrap",
     "ApplicationFacade",
     "ApplicationFailure",
     "ApplicationResult",
     "ApplicationState",
+    "BootstrapPhase",
+    "BootstrapRejection",
     "CancelResult",
     "InitializeResult",
     "InitializeStatus",
@@ -36,11 +51,18 @@ __all__ = [
     "ProductError",
     "ProductErrorCode",
     "ShutdownResult",
+    "SkillInstallRequest",
+    "SkillInstallResult",
+    "SkillListResult",
+    "SkillPackageSummary",
+    "SkillRemoveRequest",
+    "SkillRemoveResult",
     "StatusSnapshot",
     "ThreadListQuery",
     "ThreadListResult",
     "ThreadReadQuery",
     "ThreadReadResult",
+    "ThreadSearchQuery",
     "WorkspacePresentation",
     "thread_display_id",
 ]

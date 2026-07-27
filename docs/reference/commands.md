@@ -1,6 +1,6 @@
 # Slash Command reference
 
-Awesome has one closed command catalog. Twenty-one commands are owned by the
+Awesome has one closed command catalog. Twenty-six commands are owned by the
 Python Application and four are owned by Ink. A Slash Command is product
 control input: it is displayed in the terminal transcript but is not stored as
 a model conversation message.
@@ -12,6 +12,9 @@ a model conversation message.
 | `/new` | no arguments | Create and select a new Thread; reset Thread-scoped permission state. |
 | `/rename <title>` | one or more title tokens | Persist a manual title for the selected Thread. |
 | `/resume [thread_id]` | zero or one ID/prefix | Open a picker or select one workspace Thread. |
+| `/fork [turn_id]` | zero or one Turn ID | Materialize and select an independent Thread through one terminal Turn. |
+| `/retry [turn_id]` | zero or one Turn ID | Materialize a fork before one terminal Turn and freshly execute its request. |
+| `/search <query> [thread_id]` | one query token (quote multiple words), then optional exact result ID | Search this Workspace, open a picker, or resume the selected matching Thread. |
 | `/context` | no arguments | Show the latest active context categories, realized token count, and budget. |
 | `/compact` | no arguments | Build and persist a new conversation summary now. |
 | `/auth [deepseek\|kimi\|mem0]` | zero or one service in normal use | Select and manage Environment or Awesome API-key sources through pickers. |
@@ -20,11 +23,13 @@ a model conversation message.
 | `/permissions [request_approval\|accept_edits\|full_access]` | zero or one mode | Inspect or change the session permission mode; Full access requires a separate confirmation. |
 | `/workspace` | no arguments | Show the active workspace display path. |
 | `/diff [change_set_id]` | zero or one ID | Render the latest or selected ChangeSet diff. |
+| `/export <workspace-relative-path> [markdown\|json]` | one path and optional format; default `markdown` | Deterministically export the current Thread through a safe, journaled workspace write. |
 | `/undo [change_set_id]` | zero or one ID | Restore the before-state of an applied reversible ChangeSet. |
 | `/redo [change_set_id]` | zero or one ID | Restore the after-state of an undone ChangeSet. |
 | `/tools` | no arguments | List the effective catalog and approval requirement under the current mode. |
 | `/skills [auto\|off\|name]` | zero or one mode/name | Inspect or set the current Thread's Skill mode. |
 | `/mcp [status [id]\|enable <id>\|disable <id>\|restart <id>]` | as shown | Inspect or manage MCP servers. |
+| `/web [on\|off\|status\|revoke]` | zero or one action | Inspect or atomically enable/disable Tavily Web tools, or clear the active Thread's network grant. |
 | `/memory [local ...\|mem0 ...]` | see below | Inspect, enable, search, or mutate Memory. |
 | `/status` | no arguments | Show the selected Thread and runtime status snapshot. |
 | `/usage` | no arguments | Show cumulative observed usage for the selected Thread. |
@@ -40,6 +45,47 @@ first accepted natural-language message supplies an automatic title of at most
 lowercase hexadecimal digits. Ambiguous prefixes open a picker; cross-workspace
 Threads are never selected.
 
+`/fork` and `/retry` accept at most one exact Turn ID from the selected Thread.
+When omitted, the latest terminal Turn by transcript order is selected. An
+in-progress target is rejected. `/fork` physically copies the durable prefix
+through the target; `/retry` copies only the prefix before the target, appends
+the target user request with fresh entry/client identities, and starts a fresh
+Turn. That Turn freezes the original target's Provider, model, Thinking, Skill,
+and complete budget snapshot even if the source Thread settings later change.
+Every copied Thread, entry, and Turn receives a new identity, and the new
+Thread records only its immediate source Thread/Turn lineage; no shared DAG is
+constructed. Summary, checkpoint, ToolActivity, and ChangeSet records are not
+copied. Retry executes through the ordinary Turn path, without replaying old
+tool calls and without automatically undoing their prior side effects.
+
+`/search` accepts one query argument. Quote a multi-word query, for example
+`/search "provider retry"`; after selection the TUI appends the chosen exact
+Thread ID to that original query. Search is isolated to the active Workspace
+and matches ASCII-case-insensitive literal substrings in Thread titles and all
+durable transcript entry content, including user, assistant, and direct-command
+entries. It does not search ToolActivity, summaries, checkpoints, or metadata,
+and does not provide FTS, tokenization, snippets, relevance ranking, or full
+Unicode case folding. Results use `updated_at DESC, id DESC` order. The picker
+shows at most the 50 most recently updated matches; when more exist, its prompt
+asks the user to refine the query. Each search and selected-result revalidation
+has a 5,000,000 SQLite VM-op scan budget and returns `result_too_large` when the
+budget is exhausted. Protocol clients can instead continue matching pages with
+the keyset cursor returned by `thread.search`.
+
+`/export` accepts a Workspace-relative destination and optional `markdown` or
+`json` format; Markdown is the default. The same Thread produces deterministic
+bytes up to a 5 MiB output limit. Rendering runs away from the event loop.
+Citations stay attached to their assistant entry: cited Markdown entries render
+their own Sources section, and JSON assistant entries always expose a
+`citations` list. Exports contain public conversation data only:
+they never expose the internal workspace key or private entry metadata. The
+destination passes the normal workspace identity and safe-write checks, and its
+normalized path must be 1–1,000 characters before mutation begins. A created or
+updated file records a ChangeSet and can be reverted with `/undo`; an unchanged
+write records no ChangeSet. A failed attempt with no reconciled file evidence
+does not publish an empty ChangeSet; if bytes landed, recovery retains their
+actual evidence.
+
 `/auth` never accepts a key as a command argument. The picker may generate
 internal continuation tokens for source selection, replacement, and deletion;
 use the masked interaction rather than scripting those tokens. Saving a
@@ -53,6 +99,16 @@ Memory is enabled or called.
 `/model` with a selected Provider first ensures that Provider has an available
 selected credential, then offers only the curated models in the
 [configuration reference](configuration.md).
+
+The `Changes` row in `/status` is the unique path count from the newest sealed
+Agent ChangeSet associated with the selected Thread. It excludes direct shell
+operations and is zero when that ChangeSet has been undone; it is not a Git
+working-tree dirty count. `/doctor` reports `Unverified` when runtime readiness
+cannot be established instead of assuming that configuration, Application
+SQLite, or checkpoint services are healthy. Application SQLite runs its bounded
+read-only `quick_check` through the process-owned connection, while checkpoint
+readiness is checked through the checkpoint saver. Neither check repairs or
+rewrites state.
 
 ## Memory subcommands
 
@@ -87,6 +143,22 @@ See [Memory](../extensions/memory.md).
 User servers are enabled only by user YAML; `enable` and `disable` return
 `user_config_required` for them. See [MCP](../extensions/mcp.md).
 
+## Web subcommands
+
+| Syntax | Result |
+| --- | --- |
+| `/web`, `/web status` | Show enabled/runtime availability, Tavily credential and explicit proxy presence, active Thread authorization, request budget, diagnostic code, and disclosure. |
+| `/web on` | Require `TAVILY_API_KEY`, validate the explicit proxy, atomically persist `web.enabled: true`, and rebuild the runtime before reporting success. |
+| `/web off` | Atomically persist `web.enabled: false`, rebuild without `web_search` or `web_fetch`, and clear every Thread network grant. |
+| `/web revoke` | Clear the selected Thread's `network.read` grant without disabling Web. |
+
+Enabling Web discloses that Search queries and requested Fetch URLs are sent to
+Tavily under its
+[Privacy Policy](https://www.tavily.com/privacy) and
+[Platform Terms](https://www.tavily.com/terms). A failed apply rolls the user
+configuration back; if safe recovery cannot be proven, later Web mutations are
+fenced with `web_configuration_recovery_required`.
+
 ## Ink-local commands
 
 | Command | Syntax | Effect |
@@ -113,6 +185,8 @@ active operation, only these Application snapshots are allowed:
 /mcp
 /mcp status
 /mcp status <id>
+/web
+/web status
 /status
 /usage
 /config
@@ -142,4 +216,4 @@ Application commands return exactly one `CommandOutcome` branch:
 Command input and result remain separate terminal blocks. Picker cancellation,
 invalid arguments, and Core errors therefore preserve the exact submitted
 command. The full wire schemas are covered by
-[Protocol v3](protocol.md).
+[Protocol v4](protocol.md).

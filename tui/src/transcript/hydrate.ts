@@ -59,6 +59,7 @@ export function hydrateThreadPage(page: ThreadPage): TranscriptProjection {
         key: `entry:${entry.id}`,
         kind: "assistant",
         text: entry.content,
+        citations: entry.metadata.citations,
       });
     } else {
       blocks.push({

@@ -15,11 +15,14 @@ from awesome_agent.agent.context import (
     AgentContextBuilder,
     AgentEventProjector,
     AgentRuntimeContext,
-    CloudPostAnswerMemory,
-    DisabledPostAnswerMemory,
-    MemoryFinalizationResult,
-    PostAnswerMemory,
     PreparedAgentContext,
+)
+from awesome_agent.agent.finalization import (
+    DisabledPostAnswerFinalizer,
+    PostAnswerDiagnostic,
+    PostAnswerFinalizationRequest,
+    PostAnswerFinalizationResult,
+    PostAnswerFinalizer,
 )
 from awesome_agent.agent.graph import compile_agent_graph
 from awesome_agent.agent.state import (
@@ -35,10 +38,11 @@ __all__ = [
     "AgentRuntimeContext",
     "AgentState",
     "BudgetDecision",
-    "CloudPostAnswerMemory",
-    "DisabledPostAnswerMemory",
-    "MemoryFinalizationResult",
-    "PostAnswerMemory",
+    "DisabledPostAnswerFinalizer",
+    "PostAnswerDiagnostic",
+    "PostAnswerFinalizationRequest",
+    "PostAnswerFinalizationResult",
+    "PostAnswerFinalizer",
     "PreparedAgentContext",
     "TurnBudget",
     "add_active_segment",

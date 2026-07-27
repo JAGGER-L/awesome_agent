@@ -9,9 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from awesome_agent.application.bootstrap import BootstrapRejection
 from awesome_agent.application.command_results import CommandOutcome
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     ApplicationState,
     CancelResult,
@@ -25,14 +27,23 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
     ShutdownResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
 )
+from awesome_agent.application.middleware import ApplicationOperation
 from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
+from awesome_agent.modeling import MODEL_CATALOG
 from awesome_agent.protocol.jsonrpc import (
     JsonRpcDispatcher,
     event_notification,
@@ -41,7 +52,7 @@ from awesome_agent.protocol.jsonrpc import (
 from awesome_agent.version import PRODUCT_VERSION
 
 INITIALIZE_PARAMS = {
-    "protocol_version": 3,
+    "protocol_version": PROTOCOL_VERSION,
     "client_name": "awesome",
     "client_version": PRODUCT_VERSION,
 }
@@ -51,12 +62,19 @@ class Facade:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
 
+    def bootstrap_rejection(
+        self,
+        operation: ApplicationOperation | None,
+    ) -> BootstrapRejection | None:
+        del operation
+        return None
+
     async def initialize(self) -> ApplicationResult[InitializeResult]:
         self.calls.append(("initialize", None))
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=3,
+                protocol_version=PROTOCOL_VERSION,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -74,15 +92,51 @@ class Facade:
                     display_path="C:\\workspace", branch="feature/auth"
                 ),
                 workspace_trusted=True,
+                model_catalog=MODEL_CATALOG,
                 configuration_valid=True,
                 secret_status=SecretStatus(),
             )
+        )
+
+    async def list_skills(self) -> ApplicationResult[SkillListResult]:
+        self.calls.append(("skill.list", None))
+        return ApplicationResult.success(
+            SkillListResult(
+                skills=(SkillPackageSummary(name="review", description="Review code"),)
+            )
+        )
+
+    async def install_skill(
+        self,
+        request: SkillInstallRequest,
+    ) -> ApplicationResult[SkillInstallResult]:
+        self.calls.append(("skill.install", request))
+        return ApplicationResult.success(
+            SkillInstallResult(
+                name="review",
+                status="replaced" if request.replace else "installed",
+            )
+        )
+
+    async def remove_skill(
+        self,
+        request: SkillRemoveRequest,
+    ) -> ApplicationResult[SkillRemoveResult]:
+        self.calls.append(("skill.remove", request))
+        return ApplicationResult.success(
+            SkillRemoveResult(name=request.name, status="removed")
         )
 
     async def list_threads(
         self, query: ThreadListQuery
     ) -> ApplicationResult[ThreadListResult]:
         self.calls.append(("list", query))
+        return ApplicationResult.success(ThreadListResult())
+
+    async def search_threads(
+        self, query: ThreadSearchQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        self.calls.append(("search", query))
         return ApplicationResult.success(ThreadListResult())
 
     async def read_thread(
@@ -161,11 +215,15 @@ class Facade:
         return ApplicationResult.success(ShutdownResult())
 
 
-def test_dispatcher_exposes_exact_protocol_v3_method_table() -> None:
+def test_dispatcher_exposes_exact_protocol_v4_method_table() -> None:
     assert set(JsonRpcDispatcher(Facade()).methods) == {
         "initialize",
+        "skill.list",
+        "skill.install",
+        "skill.remove",
         "application.getState",
         "thread.list",
+        "thread.search",
         "thread.read",
         "turn.submit",
         "direct.execute",
@@ -182,8 +240,16 @@ def test_dispatcher_exposes_exact_protocol_v3_method_table() -> None:
     ("method", "params", "call"),
     [
         ("initialize", INITIALIZE_PARAMS, "initialize"),
+        ("skill.list", {}, "skill.list"),
+        (
+            "skill.install",
+            {"source_path": "C:\\packages\\review.zip", "replace": True},
+            "skill.install",
+        ),
+        ("skill.remove", {"name": "review"}, "skill.remove"),
         ("application.getState", {}, "state"),
         ("thread.list", {}, "list"),
+        ("thread.search", {"query": "  provider retry  "}, "search"),
         (
             "turn.submit",
             {
@@ -244,6 +310,101 @@ async def test_closed_method_table_dispatches_typed_params(
     assert "result" in response
     assert response["result"]["ok"] is (method != "command.execute")
     assert facade.calls[0][0] == call
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("skill.list", {"extra": True}),
+        ("skill.install", {}),
+        ("skill.install", {"source_path": "review", "replace": 1}),
+        ("skill.install", {"source_path": " review "}),
+        ("skill.install", {"source_path": "review\0hidden"}),
+        ("skill.install", {"source_path": "review", "extra": True}),
+        ("skill.remove", {"name": "Review"}),
+        ("skill.remove", {"name": "../review"}),
+        ("skill.remove", {"name": "review", "extra": True}),
+    ],
+)
+async def test_skill_management_params_are_strict_and_closed(
+    method: str,
+    params: dict[str, object],
+) -> None:
+    facade = Facade()
+
+    response = await JsonRpcDispatcher(facade).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "skill_invalid",
+            "method": method,
+            "params": params,
+        }
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32602
+    assert facade.calls == []
+
+
+@pytest.mark.asyncio
+async def test_skill_list_catalog_size_failure_uses_stable_product_error() -> None:
+    class OversizedCatalogFacade(Facade):
+        async def list_skills(self) -> ApplicationResult[SkillListResult]:
+            return ApplicationResult.failure(
+                ProductError(
+                    code=ProductErrorCode.RESULT_TOO_LARGE,
+                    message="The installed Skill catalog exceeds the supported limit.",
+                    data={"diagnostic_code": "package_too_large"},
+                )
+            )
+
+    response = await JsonRpcDispatcher(OversizedCatalogFacade()).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "skill_catalog_too_large",
+            "method": "skill.list",
+            "params": {},
+        }
+    )
+
+    assert response is not None
+    assert response["result"] == {
+        "ok": False,
+        "error": {
+            "code": "result_too_large",
+            "message": "The installed Skill catalog exceeds the supported limit.",
+            "retryable": False,
+            "data": {"diagnostic_code": "package_too_large"},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_direct_execute_transport_matches_the_execute_tool_limit() -> None:
+    accepted_facade = Facade()
+    accepted = await JsonRpcDispatcher(accepted_facade).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "accepted",
+            "method": "direct.execute",
+            "params": {"thread_id": "thread_1", "command": "x" * 8_000},
+        }
+    )
+    rejected_facade = Facade()
+    rejected = await JsonRpcDispatcher(rejected_facade).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "rejected",
+            "method": "direct.execute",
+            "params": {"thread_id": "thread_1", "command": "x" * 8_001},
+        }
+    )
+
+    assert accepted is not None and accepted["result"]["ok"] is True
+    assert accepted_facade.calls[0][0] == "direct"
+    assert rejected is not None and rejected["error"]["code"] == -32602
+    assert rejected_facade.calls == []
 
 
 @pytest.mark.asyncio
@@ -357,7 +518,7 @@ async def test_interaction_decision_contract_accepts_recovery_and_rejects_unknow
     ("params", "error_code"),
     [
         (
-            {**INITIALIZE_PARAMS, "protocol_version": 2},
+            {**INITIALIZE_PARAMS, "protocol_version": 3},
             "protocol_version_incompatible",
         ),
         (
@@ -396,9 +557,9 @@ async def test_initialize_rejects_incompatible_identity_before_facade_work(
     "params",
     [
         {},
-        {"protocol_version": 3, "client_name": "awesome"},
+        {"protocol_version": PROTOCOL_VERSION, "client_name": "awesome"},
         {**INITIALIZE_PARAMS, "extra": True},
-        {**INITIALIZE_PARAMS, "protocol_version": "3"},
+        {**INITIALIZE_PARAMS, "protocol_version": "4"},
     ],
 )
 async def test_initialize_rejects_malformed_identity_as_invalid_params(
@@ -500,18 +661,46 @@ async def test_thread_query_params_are_typed_and_bounded_before_facade_work() ->
             "params": {"limit": 201},
         }
     )
-    invalid_read = await dispatcher.dispatch(
+    searched = await dispatcher.dispatch(
         {
             "jsonrpc": "2.0",
             "id": 3,
+            "method": "thread.search",
+            "params": {"query": "  provider retry  ", "cursor": "opaque", "limit": 50},
+        }
+    )
+    invalid_search = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "thread.search",
+            "params": {"query": "provider", "limit": 51},
+        }
+    )
+    invalid_read = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 5,
             "method": "thread.read",
             "params": {"thread_id": "thread_1", "before_sequence": 0, "limit": 501},
         }
     )
 
     assert listed is not None and listed["result"]["ok"] is True
-    assert facade.calls == [("list", ThreadListQuery(cursor="opaque", limit=200))]
+    assert searched is not None and searched["result"]["ok"] is True
+    assert facade.calls == [
+        ("list", ThreadListQuery(cursor="opaque", limit=200)),
+        (
+            "search",
+            ThreadSearchQuery(
+                query="provider retry",
+                cursor="opaque",
+                limit=50,
+            ),
+        ),
+    ]
     assert invalid_list is not None and invalid_list["error"]["code"] == -32602
+    assert invalid_search is not None and invalid_search["error"]["code"] == -32602
     assert invalid_read is not None and invalid_read["error"]["code"] == -32602
 
 
@@ -523,6 +712,11 @@ async def test_thread_query_params_are_typed_and_bounded_before_facade_work() ->
         ("thread.list", {"limit": True}),
         ("thread.list", {"cursor": None}),
         ("thread.list", {"limit": None}),
+        ("thread.search", {"query": "   "}),
+        ("thread.search", {"query": "x" * 201}),
+        ("thread.search", {"query": "x", "cursor": None}),
+        ("thread.search", {"query": "x", "limit": None}),
+        ("thread.search", {"query": "x", "limit": True}),
         (
             "thread.read",
             {"thread_id": "thread_1", "before_sequence": "10"},
@@ -599,7 +793,7 @@ async def test_wire_integral_json_numbers_match_javascript_semantics() -> None:
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": {**INITIALIZE_PARAMS, "protocol_version": 3.0},
+            "params": {**INITIALIZE_PARAMS, "protocol_version": 4.0},
         }
     )
     listed = await dispatcher.dispatch(

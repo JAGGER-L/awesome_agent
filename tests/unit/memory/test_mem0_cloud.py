@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import threading
 from collections.abc import Callable
 
 import pytest
@@ -9,6 +10,7 @@ from awesome_agent.memory.mem0_cloud import (
     Mem0CloudAdapter,
     Mem0CloudError,
     create_mem0_client,
+    managed_mem0_client,
 )
 from awesome_agent.memory.models import (
     CloudDeleteStatus,
@@ -79,6 +81,134 @@ class FakeClient:
     async def delete(self, memory_id: str) -> object:
         self.delete_calls.append(memory_id)
         return self.delete_result
+
+
+class ManagedFakeClient(FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.exit_calls = 0
+
+    async def __aenter__(self) -> "ManagedFakeClient":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc_value: object,
+        traceback: object,
+    ) -> None:
+        del exc_type, exc_value, traceback
+        self.exit_calls += 1
+
+
+@pytest.mark.asyncio
+async def test_managed_client_constructs_off_loop_and_closes_owned_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import awesome_agent.memory.mem0_cloud as mem0_module
+
+    started = threading.Event()
+    release = threading.Event()
+    client = ManagedFakeClient()
+
+    def construct(_: str | None) -> ManagedFakeClient:
+        started.set()
+        assert release.wait(timeout=1)
+        return client
+
+    monkeypatch.setattr(mem0_module, "create_mem0_client", construct)
+
+    async def use_client() -> None:
+        async with managed_mem0_client("secret") as managed:
+            assert managed is client
+
+    using = asyncio.create_task(use_client())
+    while not started.is_set():
+        await asyncio.sleep(0)
+    heartbeat = asyncio.create_task(asyncio.sleep(0.01))
+    await asyncio.wait_for(heartbeat, timeout=0.1)
+    assert using.done() is False
+    release.set()
+    await asyncio.wait_for(using, timeout=1)
+
+    assert client.exit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_managed_construction_closes_completed_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import awesome_agent.memory.mem0_cloud as mem0_module
+
+    started = threading.Event()
+    release = threading.Event()
+    client = ManagedFakeClient()
+
+    def construct(_: str | None) -> ManagedFakeClient:
+        started.set()
+        assert release.wait(timeout=1)
+        return client
+
+    monkeypatch.setattr(mem0_module, "create_mem0_client", construct)
+
+    async def use_client() -> None:
+        async with managed_mem0_client("secret"):
+            raise AssertionError("cancelled construction must not publish the client")
+
+    using = asyncio.create_task(use_client())
+    while not started.is_set():
+        await asyncio.sleep(0)
+    using.cancel("stop-mem0-construction")
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await using
+    assert cancelled.value.args == ("stop-mem0-construction",)
+    assert client.exit_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_late_managed_construction_closes_eventual_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import awesome_agent.memory.mem0_cloud as mem0_module
+
+    started = threading.Event()
+    release = threading.Event()
+    client = ManagedFakeClient()
+
+    def construct(_: str | None) -> ManagedFakeClient:
+        started.set()
+        assert release.wait(timeout=1)
+        return client
+
+    monkeypatch.setattr(mem0_module, "create_mem0_client", construct)
+    monkeypatch.setattr(
+        mem0_module,
+        "_MEM0_CONSTRUCTION_CLEANUP_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    async def use_client() -> None:
+        async with managed_mem0_client("secret"):
+            raise AssertionError("late construction must not publish the client")
+
+    using = asyncio.create_task(use_client())
+    while not started.is_set():
+        await asyncio.sleep(0)
+    using.cancel("stop-mem0-construction")
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await using
+    assert cancelled.value.args == ("stop-mem0-construction",)
+
+    release.set()
+    deadline = asyncio.get_running_loop().time() + 1.0
+    while client.exit_calls == 0:
+        assert asyncio.get_running_loop().time() < deadline
+        await asyncio.sleep(0)
+
+    assert client.exit_calls == 1
 
 
 @pytest.mark.asyncio

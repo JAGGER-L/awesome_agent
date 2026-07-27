@@ -18,6 +18,13 @@ from awesome_agent.agent.budgets import (
     model_call_decision,
 )
 from awesome_agent.agent.context import AgentRuntimeContext
+from awesome_agent.agent.finalization import (
+    PostAnswerDiagnostic,
+    PostAnswerFinalizationRequest,
+    PostAnswerFinalizationResult,
+    collect_tool_citations,
+    validate_answer_citations,
+)
 from awesome_agent.agent.state import AgentState
 from awesome_agent.core.tools import (
     ToolError,
@@ -66,7 +73,7 @@ async def prepare_context(
     updated["compression_reason"] = (
         "automatic" if prepared.compression_recommended else None
     )
-    context.context_snapshot_recorder(prepared.manifest)
+    await context.context_snapshot_recorder(prepared.manifest)
     await context.event_projector.project_context(
         source_count=len(prepared.manifest),
         estimated_tokens=prepared.estimated_input_tokens,
@@ -127,7 +134,7 @@ async def compress_context(
         updated["context_manifest"] = list(prepared.manifest)
         updated["context_estimated_tokens"] = prepared.estimated_input_tokens
         updated["context_effective_limit"] = prepared.effective_input_limit
-        context.context_snapshot_recorder(prepared.manifest)
+        await context.context_snapshot_recorder(prepared.manifest)
         await context.event_projector.project_context(
             source_count=len(prepared.manifest),
             estimated_tokens=prepared.estimated_input_tokens,
@@ -346,15 +353,20 @@ async def execute_one_tool(
                 tool_name=tool_name,
                 arguments=cast(dict[str, JsonValue], arguments),
             )
-            result = await context.executor.execute(
-                request,
-                context=context.tool_context_factory(updated, request),
+            tool_context = await context.tool_context_factory(updated, request)
+            result = await context.executor.execute(request, context=tool_context)
+            updated["web_requests"] = tool_context.capability_quotas.used(
+                "network.read"
             )
             ended = context.monotonic()
             updated = add_active_segment(updated, started_at=started, ended_at=ended)
     updated["tool_results"].append(
         cast(dict[str, JsonValue], result.model_dump(mode="json"))
     )
+    updated["citations"] = [
+        cast(dict[str, JsonValue], citation.model_dump(mode="json"))
+        for citation in collect_tool_citations(updated["tool_results"])
+    ]
     observation = ToolResultMessage(
         call_id=result.call_id,
         content=result.content,
@@ -375,50 +387,92 @@ async def finalize(
     context = _context(runtime)
     updated = _copy(state)
     if updated["final_answer"] and not _failed_termination(updated):
-        remaining_calls = context.budget.model_calls - updated["model_calls"]
+        citations = collect_tool_citations(updated["tool_results"])
+        updated["citations"] = [
+            cast(dict[str, JsonValue], citation.model_dump(mode="json"))
+            for citation in citations
+        ]
+        active_budget_exhausted = (
+            updated["active_execution_seconds"]
+            >= context.budget.active_execution_seconds
+        )
+        remaining_calls = (
+            0
+            if active_budget_exhausted
+            else context.budget.model_calls - updated["model_calls"]
+        )
         remaining_retries = (
             context.budget.provider_retries - updated["provider_retries"]
         )
-        if remaining_calls >= 1:
-            try:
-                result = await context.post_answer_memory.finalize(
-                    user_text=context.current_user_text,
-                    final_answer=updated["final_answer"],
-                    selected_model=SelectedModel(
-                        provider=cast(ProviderId, updated["provider"]),
-                        model=updated["model"],
+        request = PostAnswerFinalizationRequest(
+            user_text=context.current_user_text,
+            final_answer=updated["final_answer"],
+            citations=citations,
+            selected_model=SelectedModel(
+                provider=cast(ProviderId, updated["provider"]),
+                model=updated["model"],
+            ),
+            remaining_model_calls=max(0, remaining_calls),
+            remaining_provider_retries=max(0, remaining_retries),
+            workspace_key=updated["workspace_key"],
+        )
+        try:
+            raw_result = await context.post_answer_finalizer.finalize(request)
+            if type(raw_result) is not PostAnswerFinalizationResult:
+                raise TypeError("Finalizer returned an invalid result contract.")
+            if type(raw_result.usage) is not ModelUsage:
+                raise TypeError("Finalizer returned an invalid usage contract.")
+            if type(raw_result.diagnostics) is not tuple or any(
+                type(diagnostic) is not PostAnswerDiagnostic
+                for diagnostic in raw_result.diagnostics
+            ):
+                raise TypeError("Finalizer returned an invalid diagnostic contract.")
+            result = PostAnswerFinalizationResult.model_validate(
+                {
+                    "final_answer": raw_result.final_answer,
+                    "usage": _usage_payload(raw_result.usage),
+                    "model_calls": raw_result.model_calls,
+                    "diagnostics": tuple(
+                        _diagnostic_payload(diagnostic)
+                        for diagnostic in raw_result.diagnostics
                     ),
-                    remaining_model_calls=remaining_calls,
-                    remaining_provider_retries=max(0, remaining_retries),
-                    workspace_key=updated["workspace_key"],
+                },
+                strict=True,
+            )
+            _validate_finalizer_budget(result, request)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await context.event_projector.project_warning(
+                code="answer_finalization_failed",
+                message="Optional answer finalization failed.",
+            )
+        else:
+            updated["final_answer"] = result.final_answer
+            if result.model_calls:
+                updated = charge_model_attempt(
+                    updated,
+                    provider_retries=result.usage.provider_retries,
                 )
-            except asyncio.CancelledError:
+                updated["usage"] = _merge_usage(updated["usage"], result.usage)
+            for diagnostic in result.diagnostics:
                 await context.event_projector.project_warning(
-                    code="memory_finalization_cancelled",
-                    message="Optional memory finalization was cancelled.",
+                    code=diagnostic.code,
+                    message=diagnostic.message,
                 )
-            except Exception:
-                await context.event_projector.project_warning(
-                    code="memory_finalization_failed",
-                    message="Optional memory finalization failed.",
-                )
-            else:
-                if result.model_calls:
-                    updated = charge_model_attempt(
-                        updated,
-                        provider_retries=result.usage.provider_retries,
-                    )
-                    updated["usage"] = _merge_usage(updated["usage"], result.usage)
-                for diagnostic in result.diagnostics:
-                    await context.event_projector.project_warning(
-                        code=diagnostic.code,
-                        message="Optional memory operation did not complete.",
-                    )
-                if result.enabled:
-                    await context.event_projector.project_memory_status(
-                        enabled=True,
-                        status=result.status,
-                    )
+        answer = updated["final_answer"]
+        if answer is None:
+            raise RuntimeError("Answer finalization removed the final answer.")
+        validated_answer, citation_diagnostics = validate_answer_citations(
+            answer,
+            citations,
+        )
+        updated["final_answer"] = validated_answer
+        for diagnostic in citation_diagnostics:
+            await context.event_projector.project_warning(
+                code=diagnostic.code,
+                message=diagnostic.message,
+            )
     if updated["termination_reason"] is None:
         updated["termination_reason"] = "completed"
     return updated
@@ -427,6 +481,17 @@ async def finalize(
 def _failed_termination(state: AgentState) -> bool:
     reason = state["termination_reason"] or ""
     return reason.startswith("model_") or reason == "context_unrecoverable"
+
+
+def _validate_finalizer_budget(
+    result: PostAnswerFinalizationResult,
+    request: PostAnswerFinalizationRequest,
+) -> None:
+    retries = result.usage.provider_retries
+    if retries > request.remaining_provider_retries:
+        raise ValueError("Finalizer exceeded the provider retry budget.")
+    if result.model_calls + retries > request.remaining_model_calls:
+        raise ValueError("Finalizer exceeded the model call budget.")
 
 
 def route_after_model(state: AgentState) -> str:
@@ -498,3 +563,21 @@ def _merge_usage(current: dict[str, int], usage: ModelUsage) -> dict[str, int]:
     for key, value in usage.model_dump(mode="json").items():
         result[key] = result.get(key, 0) + cast(int, value)
     return result
+
+
+def _usage_payload(usage: ModelUsage) -> dict[str, int]:
+    return {
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "reasoning_tokens": usage.reasoning_tokens,
+        "cache_read_tokens": usage.cache_read_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
+        "provider_retries": usage.provider_retries,
+    }
+
+
+def _diagnostic_payload(diagnostic: PostAnswerDiagnostic) -> dict[str, str]:
+    return {
+        "code": diagnostic.code,
+        "message": diagnostic.message,
+    }

@@ -17,15 +17,21 @@ Awesome currently provides:
 - DeepSeek and Kimi through provider-neutral model contracts;
 - trusted Workspace startup, root `AGENTS.md` instructions, Threads, Turns,
   cancellation, checkpoints, and recovery;
+- materialized Thread fork and retry with explicit immediate-parent lineage,
+  independent copied history, and no old-tool replay or implicit undo;
 - workspace file tools and bounded local command execution through one Registry,
   Policy, and Executor path;
 - three permission modes, single-use approval, a Thread-bound temporary
   `workspace.write` grant, and a non-disableable command circuit breaker;
 - visible ChangeSets with diff, undo, redo, and conservative crash recovery;
 - independently optional local Memory and Mem0 Cloud;
-- bundled, user, and trusted Workspace Skills;
+- bundled, user, and trusted Workspace Skills, plus safe local directory/ZIP
+  listing, installation, replacement, and removal for User packages;
 - configured MCP stdio servers with validated, generation-bound catalogs;
-- a versioned Protocol v3 boundary between Python Core and the Ink TUI;
+- opt-in structured Tavily Web Search and Fetch through the same Registry,
+  Policy, and Executor, with per-Turn budgets, Thread-scoped network consent,
+  and durable citations;
+- a versioned Protocol v4 boundary between Python Core and the Ink TUI;
 - a searchable GitHub Pages documentation site generated from this directory.
 
 The [architecture overview](../ARCHITECTURE.md) defines the current component
@@ -36,20 +42,9 @@ boundaries. The rest of this page discusses possible additions.
 These are implemented behaviors or contract gaps in the current release, not
 future features and not guarantees that the limitation is desirable:
 
-- The trusted-workspace `.awesome/config.yaml` reader is trust-gated but not
-  size-bounded, no-follow, or identity-pinned like `AGENTS.md` and Workspace
-  Skills. See [configuration](reference/configuration.md#workspace-configuration).
-- Most built-in and Skill-support tool argument models ignore unknown fields
-  and coerce compatible scalars; configuration and Skill frontmatter also have
-  documented coercion/grammar mismatches. See the
-  [tool contract](reference/built-in-tools.md#common-request-and-result-contract),
-  [configuration](reference/configuration.md), and
-  [Skills](extensions/skills.md#create-a-skill).
-- Skill modes `auto` and `off` currently have the same observable behavior; no
-  automatic selector exists. See [Skill selection](extensions/skills.md#select-and-load-skills).
-- `direct.execute` accepts a 30,000-character transport field before delegating
-  to an 8,000-character tool field. See the
-  [method table](reference/protocol.md#method-catalog).
+- Skill frontmatter still normalizes several scalar values with `str()`, and
+  configured disabled names permit `_` while discoverable Skill names do not.
+  See [Skills](extensions/skills.md#create-a-skill).
 - `/auth mem0` stores locally valid input without remotely verifying the Mem0
   credential; failure appears on the first cloud operation. See
   [Memory configuration](extensions/memory.md#configuration).
@@ -59,18 +54,6 @@ reference/architecture updates. Removing a bullet from this list without that
 evidence would turn documentation into an unsupported promise.
 
 ## Near-term product directions
-
-### One-command Skills installation
-
-**User need:** finding and installing a Skill should not require manually
-constructing package directories.
-
-**Invariant:** installation must preserve manifest validation, source
-precedence, Workspace trust, bounded reads, and the existing tool-policy path.
-Discovery convenience must not turn a Skill into executable authority.
-
-**Open decisions:** registry ownership, package authenticity, update behavior,
-version pinning, removal, and offline installation.
 
 ### Multi-Agent delegation
 
@@ -99,15 +82,21 @@ capability negotiation, context limits, and credential validation.
 
 ### Search tools
 
-**User need:** coding work often requires current web or documentation facts
-that are not present in the Workspace.
+**Current baseline:** opt-in Tavily Web Search and Fetch already use the common
+tool, permission, budget, recovery, and citation contracts described in the
+reference documentation. Fetch is deliberately limited to Tavily-cloud basic
+Markdown extraction for one public HTTPS URL.
 
-**Invariant:** Web Search and Web Fetch would enter the same Registry, Policy,
-Executor, result, event, timeout, and approval path as every other tool. Remote
-content remains untrusted context.
+**User need beyond the baseline:** search quality and source selection may need
+to evolve as real coding and documentation workflows expose concrete gaps.
 
-**Open decisions:** provider choice, network allowlists, citation preservation,
-privacy, caching, output limits, and uncertain-result handling.
+**Invariant:** future search improvements must preserve provider-neutral tool
+results, explicit network consent, bounded untrusted content, and end-to-end
+citations instead of creating another execution path.
+
+**Open decisions:** changes require measured gaps in the current basic search;
+Awesome will not add speculative backends or transparent retries merely to
+broaden the abstraction.
 
 ## Later directions
 

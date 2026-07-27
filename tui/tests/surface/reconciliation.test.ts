@@ -16,6 +16,7 @@ function page(title: string, id = "thread_1"): MethodValue["thread.read"] {
         current_model: "deepseek/deepseek-v4-flash",
         thinking_enabled: true,
         skill_mode: "auto",
+        lineage: null,
         created_at: now,
         updated_at: now,
       },

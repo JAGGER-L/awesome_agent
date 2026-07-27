@@ -58,6 +58,8 @@ Use:
 /new
 /resume
 /resume <thread_id>
+/fork [turn_id]
+/retry [turn_id]
 /rename Dependency graph review
 ```
 
@@ -70,6 +72,22 @@ selected Thread.
 The first accepted natural-language request gives a new Thread an automatic,
 bounded title. `/rename` makes the title user-selected. Titles organize
 conversation history; they do not affect Workspace identity or model context.
+
+### Materialized Thread branches
+
+Fork and retry create independent Thread records from a terminal Turn in the
+selected Thread. `/fork` includes the target Turn; `/retry` includes the prefix
+before it, then creates a fresh user entry and in-progress Turn for the same
+request. Omitting the ID selects the latest terminal Turn. An in-progress Turn
+cannot be a materialization target.
+
+This is a physical prefix copy with new Thread, entry, Turn, checkpoint-key,
+and client-message identities. The destination stores immediate-parent
+lineage—`fork` or `retry`, source Thread ID, and source Turn ID—but does not
+share a history DAG with its source. Summary, checkpoint, Tool activity, and
+ChangeSet records are not copied. A retry freezes the target Turn's Provider,
+model, Thinking, Skill, and budgets into its fresh Turn. It executes normally;
+old tool calls are not replayed and their prior side effects are not undone.
 
 ## Turn: the Durable Request Boundary
 
@@ -155,6 +173,8 @@ that uncertainty rather than replaying automatically.
 | Continue the same problem with its history | Same Thread, new Turn |
 | Start an unrelated task in the same project | `/new` |
 | Return to earlier work | `/resume` |
+| Explore from a completed point without changing its history | `/fork [turn_id]` |
+| Run a terminal request again with its original settings | `/retry [turn_id]` |
 | Run a command you already chose | `! command` |
 | Inspect current state from the current TUI | Wait or cancel, then use a snapshot command |
 | Change permissions or configuration | Wait for the Operation/interaction to finish |

@@ -27,8 +27,17 @@ home, not the operating-system home.
 ├── .provider-credential-transaction.env
 ├── .state.lock
 ├── .config.yaml.lock
+├── .skills.lock
+├── .skills-transaction.json
 ├── config.yaml
 ├── ui.json
+├── logs/
+│   ├── .application.jsonl.lock
+│   ├── application.jsonl
+│   ├── application.jsonl.1
+│   ├── application.jsonl.2
+│   ├── application.jsonl.3
+│   └── application.jsonl.4
 ├── skills/
 ├── memory/
 │   ├── .USER.md.lock
@@ -39,6 +48,7 @@ home, not the operating-system home.
 │       └── MEMORY.md
 ├── state/
 │   ├── application.db
+│   ├── application.db.pre-migration.bak
 │   ├── checkpoints.db
 │   ├── provider-model-transaction.json
 │   └── change-journal/
@@ -52,22 +62,42 @@ home, not the operating-system home.
 Directories and files are created lazily. Their absence is often the normal
 default, not corruption.
 
+## Application invocation logs
+
+`<HOME>/logs/application.jsonl` is the current process/session-owned structured
+diagnostic log. It is outside `WorkspaceRuntime`, Application database state,
+and Thread history. Awesome retains at most the current file plus
+`application.jsonl.1` through `.4`; each file is capped at 5 MiB.
+`<HOME>/logs/.application.jsonl.lock` coordinates writers and is not one of
+those five data files.
+
+Every JSON line uses closed record version `1`: `version`, `timestamp`,
+`session_id`, `correlation_id`, `operation`, `outcome`, `duration_ms`, and
+optional `error_code` and bounded `usage`. Prompts, model or Tool bodies,
+queries, URLs, paths, secrets, and arbitrary request/result payloads are never
+logged. Writing is nonblocking and fail-open, so missing records can indicate a
+full queue or local logging failure and do not change the Application result.
+An invocation outcome describes the facade request only; it is not the later
+terminal outcome of asynchronously admitted Agent work.
+
 ## User-owned files
 
 ### `<HOME>/config.yaml`
 
-Strict user configuration schema version `1`: Provider defaults, credential
-source selection, budgets, Memory switches, disabled Skills, and user MCP
-declarations. It contains no secret values. See
+Strict user configuration schema version `2`: Provider defaults, credential
+source selection, budgets, Web settings, Memory switches, disabled Skills, and
+user MCP declarations. Version `1` remains readable and is atomically upgraded
+by the first supported write. The document contains no secret values. See
 [configuration](configuration.md).
 
 ### `<HOME>/.env`
 
 The Awesome-managed credential store for `DEEPSEEK_API_KEY`,
-`MOONSHOT_API_KEY`, and `MEM0_API_KEY`. `/auth` writes through a same-directory
-temporary file, flushes it, and atomically replaces the destination. On POSIX,
-Awesome creates the directory for owner-only access and the file with owner
-read/write mode.
+`MOONSHOT_API_KEY`, `MEM0_API_KEY`, and optionally
+`AWESOME_WEB_PROXY_URL`. `/auth` manages only the first three entries; supported
+writers use a same-directory temporary file, flush it, and atomically replace
+the destination. On POSIX, Awesome creates the directory for owner-only access
+and the file with owner read/write mode.
 
 This is not a general dotenv contract. Arbitrary entries are not treated as
 configuration, and values are not automatically forwarded to MCP servers.
@@ -92,9 +122,31 @@ not own this document.
 ### `<HOME>/skills/`
 
 User Skill packages, normally `<HOME>/skills/<name>/SKILL.md` plus optional
-resources. User Skills are local trusted input and retain existing link
-behavior; the stricter no-reparse package rule applies to Workspace Skills.
-See [Skills](../extensions/skills.md).
+resources. Bundled and User Skills use the same pinned package and `SKILL.md`
+identity requirement; Workspace Skills additionally pin the complete trusted
+workspace chain. Resource traversal for every source rejects escape, links,
+junctions, and other reparse components.
+
+`awesome skills install` validates a complete local directory or ZIP before it
+publishes a User package. Local source traversal and cleanup of installed or
+quarantined packages reject crossing a filesystem or mount boundary, including
+POSIX mount and bind boundaries; Windows volume-mount traversal is covered by
+the existing reparse-point rejection.
+
+`<HOME>/.skills.lock` serializes list and mutation operations across processes.
+`<HOME>/.skills-transaction.json` records an in-progress install, replacement,
+or removal. A fresh install publishes its validated stage to an absent target
+with one same-directory no-replace atomic rename. Replace is not one atomic
+replacement: it records `prepared`, renames target to quarantine, records
+`quarantined`, renames stage to target, and records `published` before cleanup.
+Remove records the same phases around target-to-quarantine and deletes the
+quarantine only after publication. Recovery rolls back replace/remove before
+publication and rolls forward quarantine cleanup after publication.
+
+Private `.skill-stage-*` and `.skill-quarantine-*` directories may exist under
+`skills/` while such a transaction is running or awaiting recovery. Do not edit
+or delete those artifacts while Awesome may be active. See
+[Skills](../extensions/skills.md).
 
 ### Local Memory files
 
@@ -108,14 +160,15 @@ hash. See [Memory](../extensions/memory.md).
 
 Core serializes read-modify-write transactions for `config.yaml`, `.env`,
 `USER.md`, and each Workspace `MEMORY.md` across threads and processes. It uses
-a persistent one-byte sibling named `.<resource>.lock`; an already-hidden
-resource such as `.env` uses `.env.lock`, not a second leading dot. Waiting for
-these locks is bounded and runs outside the event-loop thread, so another
-process cannot freeze foreground cancellation or status rendering. A cancelled
-mutation finishes its already-started filesystem transaction within a bounded
-cleanup window before cancellation is reported; a worker that misses that
-window cannot later publish an in-memory state commit. Its filesystem outcome
-must be treated as uncertain until a later process reloads the durable files.
+a persistent one-byte sibling named
+`.<resource>.lock`; an already-hidden resource such as `.env` uses `.env.lock`,
+not a second leading dot. Waiting for these locks is bounded and runs outside
+the event-loop thread, so another process cannot freeze foreground cancellation
+or status rendering. A cancelled mutation finishes its already-started
+filesystem transaction within a bounded cleanup window before cancellation is
+reported; a worker that misses that window cannot later publish an in-memory
+state commit. Its filesystem outcome must be treated as uncertain until a later
+process reloads the durable files.
 
 A lock wait that reaches its deadline is reported as retryable
 `operation_busy` for commands and credential RPCs, or retryable `timeout` for a
@@ -126,11 +179,27 @@ tool returns a non-retryable `state_unavailable` `ToolOutput`. These errors are
 fixed and sanitized; they never expose the sidecar path or the operating-system
 exception.
 
-These sidecars are coordination artifacts, not configuration or Memory
-content. Do not edit or delete them while an Awesome process may be running.
-Their absence before the first mutation is normal; Core creates them lazily and
-rejects a sidecar that is a link, reparse point, non-regular file, or whose
-opened identity does not match its path.
+Skill package operations use their separate `.skills.lock`; lock waiting is
+bounded and runs off the event-loop thread. Source size, entry count, and file
+reads are also bounded. Once the owned package worker starts, however,
+cancellation-safe convergence has no wall-clock cleanup deadline: if the caller
+is cancelled, Core continues awaiting that worker until the transaction reaches
+a recoverable terminal state, then re-raises the original cancellation. It does
+not detach a worker whose later filesystem outcome would be unknown.
+
+For Skill package RPCs, an unavailable or contended `.skills.lock` is a
+retryable `operation_busy`; a package transaction that cannot complete safely
+—including installed or quarantined cleanup that detects a boundary crossing—
+is retryable `state_unavailable`. Source validation, source boundary-crossing,
+size, existing-name, and missing-name failures are non-retryable
+`invalid_arguments` with bounded diagnostic codes.
+
+These lock files and package transaction markers are coordination artifacts,
+not configuration, Memory, or Skill package content. Do not edit or delete them
+while an Awesome process may be running. Their absence before the first
+mutation is normal; Core creates them lazily and rejects a sidecar that is a
+link, reparse point, non-regular file, or whose opened identity does not match
+its path.
 
 ## Workspace-owned files
 
@@ -161,24 +230,31 @@ discovery-time snapshot: safe resource replacements completed before a lazy
 read can be observed, while pinned package/`SKILL.md` replacement and unsafe
 resource traversal fail closed.
 
-`.awesome/config.yaml` is schema-validated after trust, but its current file
-read is not identity-pinned or size-bounded and may follow a link/reparse point.
-That is a known security-hardening gap, not the same guarantee as `AGENTS.md` or
-Workspace Skill loading. Treat a trusted workspace configuration as privileged
-input and see the [configuration reference](configuration.md#workspace-configuration).
+`.awesome/config.yaml` is schema-validated after trust and read through a
+bounded, no-follow, identity-pinned plain-file boundary. It accepts at most
+1 MiB of strict UTF-8 without NUL, and rejects links/reparse points, hard links,
+non-regular nodes, and identity changes during the read. Any violation fails
+configuration activation without following or truncating the input. See the
+[configuration reference](configuration.md#workspace-configuration).
 
 ## Application database
 
 `<HOME>/state/application.db` is the authoritative embedded Application SQLite
-database. Current `PRAGMA user_version` is **7**. Connections enable foreign
-keys, a five-second busy timeout, WAL journal mode, and normal synchronous mode.
+database. Current `PRAGMA user_version` is **8**. One process-level bounded FIFO
+worker owns its long-lived connection. The connection enables foreign keys, a
+five-second busy timeout, WAL journal mode, and normal synchronous mode.
+Application-facing repositories expose async methods: reads use deferred
+transactions and writes use `BEGIN IMMEDIATE`. A cancelled read may stop
+waiting; admitted durable writes and lifecycle operations wait for a known
+COMMIT, ROLLBACK, or close result before re-raising the first cancellation.
+SQLite connections, cursors, and rows never cross the worker boundary.
 
 Its logical ownership is:
 
 | Records | Purpose |
 | --- | --- |
 | `trusted_workspaces` | Accepted workspace key, canonical path, and trust time |
-| `threads` | Workspace association, title/source, selected model, Thinking and Skill mode |
+| `threads` | Workspace association, title/source, selected model, Thinking and Skill mode, and optional immediate-parent fork/retry lineage |
 | `thread_entries` | Durable user messages, assistant messages, and direct commands in sequence |
 | `turns` | Turn lifecycle, immutable execution choices/budgets, usage, context manifest, and checkpoint key |
 | `thread_summaries` | Bounded conversation summary and covered sequence/count |
@@ -192,6 +268,16 @@ commands are durable transcript entries but have no Turn ID. Tool activities
 have a unique `(operation_id, call_id)` boundary so completion cannot be
 silently duplicated.
 
+Conversation search reads Thread titles and `thread_entries.content` inside the
+active Workspace. It includes durable user, assistant, and direct-command
+entries but excludes ToolActivity, summaries, checkpoints, and metadata. The
+first implementation is a literal `LOWER`/substring SQLite query, not an FTS
+index. Pages are stable in `updated_at DESC, id DESC` order, and cursor scope is
+hash-bound to the Workspace and normalized query without publishing the
+workspace key inside the cursor. Each page query and exact-result revalidation
+has a 5,000,000 SQLite VM-op budget; exhaustion is surfaced as
+`result_too_large`.
+
 Do not edit this database manually. Row invariants, foreign keys, the Checkpoint
 store, and Change Journal blobs form one recovery contract even though they use
 separate files.
@@ -202,9 +288,11 @@ separate files.
 the default model in `config.yaml` and the selected model on a Thread in
 `application.db`. Those resources cannot participate in one database
 transaction. A model change therefore writes a durable `prepared` record with
-the previous and target model identities, replaces and reloads configuration,
-updates the Thread, verifies both resources, changes the record to `committed`,
-and only then removes it.
+one unique transaction identity plus the previous and target model identities,
+replaces and reloads configuration, updates the Thread, verifies both resources,
+changes the record to `committed`, and only then removes it. A failed callback
+keeps its `prepared` evidence until SQLite has confirmed rollback and a fresh
+transaction has re-verified both previous endpoints.
 
 Startup rolls a `prepared` record back to its previous values and rolls a
 `committed` record forward to its target values. Reconciliation is idempotent
@@ -269,6 +357,18 @@ digest before returning content. Metadata and pending intent live in
 `application.db`; neither half is independently sufficient for complete undo
 history.
 
+`/export` writes a deterministic public Thread projection to a
+Workspace-relative Markdown or JSON file. Cited Markdown assistant entries keep
+their own Sources section, while JSON assistant entries always carry a
+`citations` list; workspace keys and internal entry metadata are excluded.
+Output is capped at 5 MiB and rendering runs away from the event loop. The write
+uses the shared identity-bound filesystem primitive; its normalized path must be
+1–1,000 characters before mutation. Created and updated files produce Change
+Journal evidence and support `/undo`; byte-identical exports are reported as
+unchanged and produce no ChangeSet. A failed attempt with no reconciled evidence
+publishes no empty ChangeSet, while recovery retains evidence for bytes that did
+land.
+
 Each ChangeSet is bounded to 1,000 nodes and 50 MiB. Shell execution is recorded
 as an irreversible observation rather than a fictional filesystem snapshot.
 See the [changes guide](../user-guide/changes.md).
@@ -289,21 +389,31 @@ is released. A competing process receives `operation_busy` rather than running
 recovery or mutations concurrently. These lock directories are coordination
 artifacts, not user configuration; do not delete them while Awesome is running.
 
-## Schema compatibility and reset
+## Schema compatibility, migration, and reset
 
 Awesome performs a read-only preflight before normal database access:
 
 | Observed state | Behavior |
 | --- | --- |
-| No database, or empty SQLite with version 0 | Initialize schema 7 under an exclusive lease, then downgrade to shared ownership. |
-| Schema 7 | Open normally. |
-| Schema 1–6 | Ask the user to reset local state; no automatic migration. |
-| Schema greater than 7 | Refuse with `state_created_by_newer_version`. |
+| No database, or empty SQLite with version 0 | Initialize schema 8 under an exclusive lease, then downgrade to shared ownership. |
+| Schema 8 | Open normally. |
+| Schema 7 | Back up the database, then migrate it to schema 8 under an exclusive lease. |
+| Schema 1–6 | Migration is unavailable; ask the user to reset local state or exit. |
+| Schema greater than 8 | Refuse with `state_created_by_newer_version`. |
 | Non-empty version 0, invalid SQLite, or unknown format | Refuse as unknown/unavailable state. |
 
-The project deliberately has no in-place database migration layer in this
-release. Reset is explicit because silently interpreting old recovery data can
-be more dangerous than losing local conversation history.
+The production migration registry has floor 7 and current 8. Its 7→8 step adds
+the nullable Thread lineage field without rewriting existing conversation data.
+Future supported upgrades must extend the adjacent linear chain. Startup first
+performs a shared-lease preflight, acquires the exclusive state lease, rechecks
+the schema, and creates `<HOME>/state/application.db.pre-migration.bak` with
+SQLite's Backup API before applying the whole chain in one transaction. It
+downgrades to shared ownership before initializing repositories.
+
+The backup is independently reopened and checked before migration. A failed
+step rolls back every schema and data change and leaves the backup available for
+manual recovery. Startup never automatically restores that backup or resets
+state. Newer, unknown, corrupt, unreadable, and locked states fail closed.
 
 After confirmation, reset validates that the exact `<HOME>/state` boundary is
 not a symlink, renames it to a same-parent staging directory, initializes a new
@@ -340,3 +450,7 @@ Journal blobs and is not a supported consistent backup. For the same reason,
 restore the whole stopped-state snapshot as a unit and use a product version
 that accepts its Application schema. If only preferences or Skills are needed,
 copy those user-owned files separately and deliberately exclude `.env`.
+
+`application.db.pre-migration.bak` is a WAL-aware safety snapshot for manual
+migration recovery, not a complete Awesome backup: it does not include the
+checkpoint database, Change Journal blobs, configuration, or credentials.

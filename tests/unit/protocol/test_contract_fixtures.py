@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from awesome_agent.application.bootstrap import BootstrapRejection
 from awesome_agent.application.command_results import (
     COMMAND_OUTCOME_ADAPTER,
     CommandOutcome,
@@ -20,6 +21,7 @@ from awesome_agent.application.commands import (
     CommandName,
 )
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     ApplicationState,
     CancelResult,
@@ -30,17 +32,24 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
     ShutdownResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
 )
+from awesome_agent.application.middleware import ApplicationOperation
 from awesome_agent.core.events import EventEnvelope, EventType
 from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).parents[3]
-FIXTURES = ROOT / "protocol" / "fixtures" / "v3"
+FIXTURES = ROOT / "protocol" / "fixtures" / f"v{PROTOCOL_VERSION}"
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -54,14 +63,18 @@ def test_manifest_freezes_complete_protocol_inventory_and_hashes() -> None:
 
     assert manifest["fixture_version"] == 1
     assert manifest["product_version"] == PRODUCT_VERSION
-    assert manifest["protocol_version"] == 3
+    assert manifest["protocol_version"] == PROTOCOL_VERSION
     assert {"command-results.valid.json", "command-results.invalid.json"} <= set(
         manifest["files"]
     )
     assert set(manifest["methods"]) == {
         "initialize",
+        "skill.list",
+        "skill.install",
+        "skill.remove",
         "application.getState",
         "thread.list",
+        "thread.search",
         "thread.read",
         "turn.submit",
         "direct.execute",
@@ -96,6 +109,13 @@ def test_fixture_generator_is_byte_deterministic() -> None:
 
 
 class _FixtureFacade:
+    def bootstrap_rejection(
+        self,
+        operation: ApplicationOperation | None,
+    ) -> BootstrapRejection | None:
+        del operation
+        return None
+
     def __init__(self, result: dict[str, object]) -> None:
         self._result = ApplicationResult[dict[str, object]].model_validate(result)
 
@@ -105,8 +125,31 @@ class _FixtureFacade:
     async def get_state(self) -> ApplicationResult[ApplicationState]:
         return ApplicationResult[ApplicationState].model_validate(self._result)
 
+    async def list_skills(self) -> ApplicationResult[SkillListResult]:
+        return ApplicationResult[SkillListResult].model_validate(self._result)
+
+    async def install_skill(
+        self,
+        request: SkillInstallRequest,
+    ) -> ApplicationResult[SkillInstallResult]:
+        del request
+        return ApplicationResult[SkillInstallResult].model_validate(self._result)
+
+    async def remove_skill(
+        self,
+        request: SkillRemoveRequest,
+    ) -> ApplicationResult[SkillRemoveResult]:
+        del request
+        return ApplicationResult[SkillRemoveResult].model_validate(self._result)
+
     async def list_threads(
         self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        del query
+        return ApplicationResult[ThreadListResult].model_validate(self._result)
+
+    async def search_threads(
+        self, query: ThreadSearchQuery
     ) -> ApplicationResult[ThreadListResult]:
         del query
         return ApplicationResult[ThreadListResult].model_validate(self._result)
@@ -218,6 +261,30 @@ def test_provider_credential_fixtures_freeze_source_omission_contract() -> None:
         assert "source" not in value
 
 
+def test_skill_management_fixtures_expose_only_bounded_public_results() -> None:
+    cases = {
+        case["name"]: case
+        for case in _cases("methods.valid.json")
+        if str(case["method"]).startswith("skill.")
+    }
+
+    assert set(cases) == {
+        "skill.list",
+        "skill.install.installed",
+        "skill.install.replaced",
+        "skill.remove",
+    }
+    installed = cases["skill.install.installed"]["result"]["value"]
+    replaced = cases["skill.install.replaced"]["result"]["value"]
+    removed = cases["skill.remove"]["result"]["value"]
+    assert installed == {"name": "review", "status": "installed"}
+    assert replaced == {"name": "review", "status": "replaced"}
+    assert removed == {"name": "review", "status": "removed"}
+    encoded = json.dumps((installed, replaced, removed))
+    assert "source_path" not in encoded
+    assert "restart_required" not in encoded
+
+
 def test_thread_read_fixture_contains_discriminated_change_deltas() -> None:
     case = next(
         item for item in _cases("methods.valid.json") if item["name"] == "thread.read"
@@ -230,6 +297,20 @@ def test_thread_read_fixture_contains_discriminated_change_deltas() -> None:
         "directory",
         "symlink",
     ]
+    assistant = next(
+        entry for entry in result.view.entries if entry.kind == "assistant_message"
+    )
+    assert assistant.metadata == {
+        "citations": [
+            {
+                "id": "S1",
+                "title": "Fixture source",
+                "url": "https://example.com/source",
+            }
+        ]
+    }
+    assert result.view.turns[0].budgets.web_requests == 8
+    assert result.view.turns[0].usage.web_requests == 1
 
 
 @pytest.mark.asyncio
@@ -307,15 +388,18 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
     } == {
         "notice",
         "thread_transition",
+        "thread_retry",
         "thread_renamed",
         "context",
         "compact",
         "model",
         "thinking",
         "workspace",
+        "thread_export",
         "diff",
         "change",
         "tools",
+        "web_status",
         "skills",
         "mcp",
         "memory_status",
@@ -330,6 +414,16 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
     }
     for case in valid:
         COMMAND_OUTCOME_ADAPTER.validate_python(case["outcome"])
-    for case in _cases("command-results.invalid.json"):
+    invalid = _cases("command-results.invalid.json")
+    assert {
+        "thread_retry_operation_client_message_mismatch",
+        "thread_retry_operation_user_entry_missing",
+        "thread_retry_operation_turn_terminal",
+        "thread_retry_operation_turn_not_last",
+        "thread_retry_operation_multiple_in_progress",
+        "web_status_empty_diagnostic_code",
+        "web_status_invalid_diagnostic_code",
+    }.issubset({case["name"] for case in invalid})
+    for case in invalid:
         with pytest.raises(ValidationError):
             COMMAND_OUTCOME_ADAPTER.validate_python(case["outcome"])

@@ -21,6 +21,7 @@ from awesome_agent.conversation import (
     UsageSummary,
     require_turn_transition,
 )
+from awesome_agent.core.citations import Citation
 
 
 def _now() -> datetime:
@@ -142,6 +143,52 @@ def test_direct_thread_entry_is_bounded_to_30000_characters() -> None:
             kind=ThreadEntryKind.DIRECT_COMMAND,
             content="x" * 30_001,
             created_at=_now(),
+        )
+
+
+def test_assistant_metadata_normalizes_legacy_empty_and_enforces_citations() -> None:
+    entry = ThreadEntry(
+        id="entry_1",
+        thread_id="thread_1",
+        sequence=1,
+        kind=ThreadEntryKind.ASSISTANT_MESSAGE,
+        content="answer",
+        metadata={},
+        created_at=_now(),
+    )
+
+    assert entry.metadata == {"citations": []}
+
+    cited = ThreadEntry.model_validate(
+        {
+            **entry.model_dump(mode="python"),
+            "metadata": {
+                "citations": [
+                    Citation(
+                        id="S1",
+                        title="Source",
+                        url="https://example.com/source",
+                    ).model_dump(mode="json")
+                ]
+            },
+        }
+    )
+    assert cited.metadata == {
+        "citations": [
+            {
+                "id": "S1",
+                "title": "Source",
+                "url": "https://example.com/source",
+            }
+        ]
+    }
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        ThreadEntry.model_validate(
+            {
+                **entry.model_dump(mode="python"),
+                "metadata": {"citations": [], "unknown": True},
+            }
         )
 
 

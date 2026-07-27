@@ -34,7 +34,11 @@ Awesome 读取以下来源：
 
 接受信任前不会读取 Workspace 配置。它不能选择 Provider、定义凭据或启用 Memory。其预算值只能收紧用户值；有效值取两者中的较小者。
 
-当前，信任是该特定文件唯一的文件系统准入边界：与 `AGENTS.md` 和 Workspace Skills 不同，`.awesome/config.yaml` reader 尚未使用带大小限制、不跟随链接的 open，也没有在 open 后检查身份。不要为它使用 link/reparse point，并应将受信仓库视为能够提供大型或被替换的 YAML 文件。参见[参考手册中的限制](../reference/configuration.zh-CN.md#workspace-配置)。
+建立信任后，`.awesome/config.yaml` 会通过与其它 Workspace 控制输入相同的有界 no-follow
+边界读取。Reader 只接受一个不超过 1 MiB 的普通 UTF-8 文件，拒绝 NUL、link/reparse
+point、hard link 和非普通节点，并固定、重新检查目录与文件身份。不安全、被替换、超限或
+无效的 YAML 会使配置激活失败，而不会被跟随、截断或部分接受。参见
+[配置参考](../reference/configuration.zh-CN.md#workspace-配置)。
 
 ## 如何解析一个 Turn
 
@@ -65,7 +69,7 @@ Thinking 和 Skill 是通过 `/thinking` 与 `/skills` 更改的持久 Thread �
 最小用户文件可以设置模型和预算：
 
 ```yaml
-version: 1
+version: 2
 providers:
   default_model: deepseek/deepseek-v4-flash
   kimi_region: cn
@@ -76,6 +80,11 @@ budgets:
   compressions: 2
   active_execution_seconds: 1800
   total_context_tokens: 262144
+  web_requests: 8
+web:
+  enabled: false
+  provider: tavily
+  blocked_domains: []
 ```
 
 curated model ID 包括：
@@ -86,6 +95,14 @@ curated model ID 包括：
 - `kimi/kimi-k2.5`。
 
 Kimi region 为 `cn` 或 `global`。在 [Kimi 中国区控制台](https://platform.kimi.com/console/api-keys)创建的密钥使用 `cn`；在 [Kimi 全球区控制台](https://platform.kimi.ai/console/api-keys)创建的密钥使用 `global`。DeepSeek 密钥来自 [DeepSeek API Key 页面](https://platform.deepseek.com/api_keys)。账户、密钥可用性、计费和网络访问仍是 Provider 侧前提。请求会把组装后的模型上下文发送给所选 Provider，因此请查看其当前条款、隐私政策和组织数据控制。Provider adapter、凭据变量和完整文档示例维护在[配置参考](../reference/configuration.zh-CN.md)中。
+
+Web 能力与 model Provider 相互独立。它默认关闭，Tavily credential 始终来自
+`TAVILY_API_KEY`；async HTTP client 使用 `trust_env=False`，所以会忽略环境 proxy 变量。
+只有需要显式代理时才设置 `AWESOME_WEB_PROXY_URL`（或其已选择的 Awesome secret），并使用
+`/web on|off|status|revoke` 管理；不要尝试通过 Workspace config 启用。Search query 与请求的
+Fetch URL 会依据 Tavily 的[隐私政策](https://www.tavily.com/privacy)与
+[平台条款](https://www.tavily.com/terms)发送给 Tavily。Fetch extraction 由 Tavily 云服务执行；
+Awesome Core 不连接请求的目标。
 
 Memory、Skill 与 MCP 示例分别见聚焦指南：[Memory](../extensions/memory.zh-CN.md)、[Skills](../extensions/skills.zh-CN.md) 和 [MCP](../extensions/mcp.zh-CN.md)。
 
@@ -98,6 +115,7 @@ version: 1
 budgets:
   model_calls: 24
   active_execution_seconds: 900
+  web_requests: 4
 skills:
   disabled: []
 mcp_servers: []
@@ -109,13 +127,14 @@ mcp_servers: []
 
 ## 默认值与硬性护栏
 
-概括来说，默认总上下文预算为 262,144 Tokens，每个 Turn 包含 32 次模型调用、64 次工具调用、2 次 Provider 重试、2 次压缩和 1,800 秒活动执行时间。配置仍受以下上限约束：
+概括来说，默认总上下文预算为 262,144 Tokens，每个 Turn 包含 32 次模型调用、64 次工具调用、2 次 Provider 重试、2 次压缩、8 次 Web 请求和 1,800 秒活动执行时间。配置仍受以下上限约束：
 
 - 模型调用：256；
 - 工具调用：512；
 - 活动执行：21,600 秒；
 - Provider 重试：6；
 - 压缩：10。
+- Web 请求：8。
 
 所选模型的真实上下文窗口可能会降低配置的上下文总量。Core 还会先预留输出容量和安全余量，再推导有效输入预算。请用 `/context` 和 `/usage` 检查结果，不要假定 YAML 数字全部可用于输入。
 
@@ -160,7 +179,7 @@ state 或询问 Workspace trust 之前解决中断操作。不要编辑或删除
 
 ## 验证与重新加载行为
 
-两份 YAML 文档都必须是带 `version: 1` 的 mapping。未知 key、重复 key、格式错误的 YAML、无效名称、不受支持的模型和超范围预算都会产生错误。Core 不会推断重命名字段。
+User YAML 必须是带 `version: 2` 的 mapping；Workspace YAML 仍是 `version: 1`。User version 1 会在内存中兼容读取，第一次受支持的写操作会将其原子升级。未知 key、重复 key、格式错误的 YAML、无效名称、不受支持的模型和超范围预算都会产生错误。Core 不会推断重命名字段。
 
 手动编辑文件或进程环境后，会在下一次 Core 启动时加载。`/model`、`/auth`、`/memory`、`/thinking` 和 `/skills` 等 TUI 流程会持久化其支持的变更，并刷新相关实时状态，无需手动编辑文件。当前正在执行的 Turn 保留其冻结配置。
 

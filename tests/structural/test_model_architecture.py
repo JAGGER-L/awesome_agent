@@ -3,6 +3,9 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from awesome_agent.config import CREDENTIAL_CATALOG
+from awesome_agent.modeling import MODEL_CATALOG
+
 MODELING_MODULES = {
     "__init__.py",
     "catalog.py",
@@ -26,6 +29,7 @@ SDK_PROVIDER_FILES = {
     "credential_validation.py",
     "deepseek.py",
     "errors.py",
+    "factory.py",
     "kimi.py",
 }
 
@@ -64,6 +68,44 @@ def test_modeling_contracts_are_provider_neutral() -> None:
     }
 
     assert {path: imports for path, imports in violations.items() if imports} == {}
+
+
+def test_model_catalog_is_the_single_source_of_curated_provider_facts() -> None:
+    source_root = Path("src/awesome_agent")
+    duplicate_fact_names = {
+        "SUPPORTED_MODEL_IDS",
+        "_EXPECTED_MODELS",
+        "_CURATED_MODELS",
+        "_PROVIDER_DEFAULTS",
+    }
+    occurrences = {
+        token: sorted(
+            path.as_posix()
+            for path in source_root.rglob("*.py")
+            if token in path.read_text(encoding="utf-8")
+        )
+        for token in duplicate_fact_names
+    }
+
+    assert occurrences == {token: [] for token in duplicate_fact_names}
+    assert MODEL_CATALOG.provider_ids() == ("deepseek", "kimi")
+    assert all(
+        descriptor.credential_id in CREDENTIAL_CATALOG
+        for descriptor in MODEL_CATALOG.providers
+    )
+
+
+def test_runtime_resource_owner_depends_only_on_provider_neutral_contracts() -> None:
+    imports = _imports(Path("src/awesome_agent/application/runtime_resources.py"))
+
+    assert {
+        imported
+        for imported in imports
+        if imported == "openai"
+        or imported.startswith("openai.")
+        or imported == "awesome_agent.providers"
+        or imported.startswith("awesome_agent.providers.")
+    } == set()
 
 
 def test_provider_sdk_is_confined_to_concrete_adapters() -> None:

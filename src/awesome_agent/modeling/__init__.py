@@ -1,8 +1,11 @@
 from awesome_agent.modeling.catalog import (
+    MODEL_CATALOG,
+    KimiRegion,
     ModelCatalog,
     ModelCatalogError,
     ModelIdentitySnapshot,
     ModelProfile,
+    ProviderDescriptor,
     SelectedModel,
 )
 from awesome_agent.modeling.errors import (
@@ -22,6 +25,7 @@ from awesome_agent.modeling.errors import (
 from awesome_agent.modeling.gateway import (
     AsyncSleeper,
     GatewayEvent,
+    GatewayFactory,
     ModelGateway,
     ProviderRetrying,
     RetryPolicy,
@@ -60,6 +64,7 @@ from awesome_agent.modeling.turns import (
 )
 
 __all__ = [
+    "MODEL_CATALOG",
     "AssistantMessage",
     "AsyncSleeper",
     "AuthenticationModelError",
@@ -67,7 +72,9 @@ __all__ = [
     "ContextLengthModelError",
     "ContinuationState",
     "GatewayEvent",
+    "GatewayFactory",
     "InvalidRequestModelError",
+    "KimiRegion",
     "ModelCatalog",
     "ModelCatalogError",
     "ModelErrorCode",
@@ -82,6 +89,7 @@ __all__ = [
     "ModelStreamEvent",
     "ModelTurn",
     "ModelUsage",
+    "ProviderDescriptor",
     "ProviderId",
     "ProviderProtocolError",
     "ProviderRetrying",

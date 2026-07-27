@@ -10,7 +10,7 @@ from awesome_agent.application.commands import (
     CommandOwner,
 )
 from awesome_agent.application.foreground import ForegroundArbiter, ForegroundBusy
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
 )
@@ -32,6 +32,8 @@ _OBSERVATION_COMMANDS = frozenset(
         CommandName.CONFIG,
     }
 )
+
+_OPERATION_START_COMMANDS = frozenset({CommandName.RETRY})
 
 
 class InvalidCommandInventory(ValueError):
@@ -108,6 +110,21 @@ class CommandDispatcher:
             )
         if observation:
             return await handler(intent)
+        if intent.name in _OPERATION_START_COMMANDS:
+            if self._mutation_guard is not None:
+                await self._mutation_guard()
+            if (
+                foreground.closing
+                or foreground.exclusive_active
+                or foreground.operation_active
+            ):
+                return _operation_busy()
+            if self._has_pending_interaction():
+                return error(
+                    "interaction_busy",
+                    "Resolve the pending interaction before changing state.",
+                )
+            return await handler(intent)
         try:
             lease = foreground.acquire_exclusive()
         except ForegroundBusy:
@@ -126,11 +143,15 @@ class CommandDispatcher:
 def _is_observation(intent: CommandIntent) -> bool:
     if intent.name in _OBSERVATION_COMMANDS:
         return True
-    if intent.name is not CommandName.MCP:
-        return False
-    return not intent.arguments or (
-        intent.arguments[0] == "status" and len(intent.arguments) <= 2
-    )
+    if intent.name is CommandName.SEARCH:
+        return len(intent.arguments) == 1
+    if intent.name is CommandName.MCP:
+        return not intent.arguments or (
+            intent.arguments[0] == "status" and len(intent.arguments) <= 2
+        )
+    if intent.name is CommandName.WEB:
+        return not intent.arguments or intent.arguments == ("status",)
+    return False
 
 
 def _operation_busy() -> CommandOutcome:

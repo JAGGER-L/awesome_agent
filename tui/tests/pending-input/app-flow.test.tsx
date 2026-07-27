@@ -6,6 +6,7 @@ import type { CommandController } from "../../src/commands/controller.js";
 import type { EventEnvelope } from "../../src/protocol/index.js";
 import { initialSurfaceState } from "../../src/state/reducer.js";
 import { createSurfaceStore } from "../../src/state/store.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 async function eventually(assertion: () => void): Promise<void> {
   let last: unknown;
@@ -489,6 +490,7 @@ function terminalEvent(
 function applicationState(threadId: string) {
   return {
     current_thread_id: threadId,
+    model_catalog: freshModelCatalog(),
     permission_mode: "request_approval",
     provider_credentials: {},
   } as never;

@@ -1,7 +1,9 @@
 # Awesome 架构
 
-Awesome 是一个终端 AI coding assistant。一个 `awesome` launcher 会启动 Ink 界面和私有
-Python 进程；所有产品行为都保留在 Python Core 中，TUI 只提交意图并渲染类型化事件。
+Awesome 是一个终端 AI coding assistant。一个 `awesome` launcher 会启动私有 Python
+进程，并在 Ink 界面、单次 headless Turn 与一个本地 User Skill 包命令之间选择；所有 runtime
+与 package 规则都保留在 Python Core 中，TypeScript 只解析公共意图并投影类型化
+结果。
 
 本文档是权威技术概览。[`docs/architecture/`](docs/architecture/README.zh-CN.md) 下的专题
 文档会解释各个边界，但不会重新定义系统。
@@ -12,8 +14,8 @@ Python 进程；所有产品行为都保留在 Python Core 中，TUI 只提交�
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                          入口与展示                                       │
 │                                                                           │
-│  awesome launcher                     Ink + React TUI                     │
-│  CLI 参数                              输入 / 渲染 / 键盘 / UX             │
+│  awesome launcher                  Ink TUI / Headless run / Skills CLI   │
+│  CLI 参数                           输入 / UX / 结果投影                    │
 └───────────────────────────────────┬───────────────────────────────────────┘
                                     │
                                     │ stdio 上的 JSON-RPC 2.0 / NDJSON
@@ -71,13 +73,15 @@ awesome_agent/
 │   │   └── process_lifetime.py # Core 进程树所有权
 │   ├── extensions/
 │   │   ├── mcp/        # MCP stdio client 与 tool adapter
-│   │   └── skills/     # Skill 发现、加载与工具暴露
+│   │   └── skills/     # Skill 发现、加载、包管理与工具暴露
 │   ├── memory/         # USER.md、MEMORY.md、Mem0 Cloud、memory tool
 │   ├── modeling/       # 提供商中立消息与 model gateway
 │   ├── protocol/       # JSON-RPC 类型与私有 stdio Host
 │   ├── providers/      # DeepSeek 与 Kimi adapter
 │   ├── safety/         # 脱敏 helper
 │   ├── storage/        # 嵌入式 SQLite 与 checkpoint adapter
+│   ├── web/            # Core 提供商中立 Web port 的 Tavily HTTP adapter
+│   ├── contract_versions.py # 生成的无依赖 contract identifier
 │   ├── paths.py        # AWESOME_HOME 路径所有权
 │   └── version.py      # 产品版本 reader
 ├── tui/                # Ink + React 展示 package
@@ -86,6 +90,7 @@ awesome_agent/
 ├── tests/              # unit、integration、E2E、packaging、structural
 ├── install.sh
 ├── install.ps1
+├── contract-versions.json # 手工维护的公共 contract-version 目录
 ├── pyproject.toml
 └── VERSION
 ```
@@ -161,9 +166,15 @@ Turn 当作崩溃恢复。
 改变含义的截断。该诊断不会使配置无效。
 
 Application state preflight 是只读的，运行在建立信任、访问 checkpoint 或可写存储之前。
-当前格式是 Schema 7。产品版本与 schema 版本相互独立：schema identity 只随持久化语义
-变化，并单调递增。旧状态只能通过类型化启动 interaction 重置；更新、未知、损坏、不可读
-或锁定的状态绝不会被静默删除。
+当前格式是 Schema 8。产品版本与 schema 版本相互独立：schema identity 只随持久化语义
+变化，并单调递增。Migration catalog 的 floor 是 7、current 是 8，且有一个增加可空 Thread
+lineage 的生产 `7 -> 8` step。因此 Schema 1–6 只提供类型化 reset-or-exit interaction；
+更新、未知、损坏、不可读或锁定的状态绝不会被静默删除。
+
+已注册的 migration 只会在 shared-lease preflight、取得 exclusive lease 并再次检查
+兼容性之后执行。Storage 会校验并原子发布能感知 WAL 的 SQLite backup，在一个 transaction
+中执行完整的相邻迁移链，降级 lease，然后才初始化 Application repository。失败会回滚
+transaction 并保留 backup 供手动恢复；启动绝不会自动 reset 或 restore。
 
 ### 对话 Turn
 
@@ -204,14 +215,42 @@ turn.submit -> ApplicationFacade.submit_turn
 
 ```text
 Model ToolCall
-    -> ToolRegistry lookup
-    -> schema validation
-    -> workspace and command policy
-    -> ToolExecutor timeout/cancellation/event envelope
-    -> built-in or MCP adapter
-    -> normalized ToolResult
-    -> bounded activity summary + Agent observation
+    -> bind ToolRegistry snapshot + resolve registration
+    -> strict registered-input validation
+    -> registered hard admission
+    -> typed description exactly once
+    -> capability policy + bound approval
+    -> registered deadline + handler under cancellation envelope
+    -> normalized ToolResult + event + bounded audit/Agent observation
 ```
+
+注册项拥有类型化 description、hard admission、replay safety 与 deadline resolution。
+Description 只在 hard admission 后运行，使被拒绝的路径类输入不能触发 description-time
+probe。Executor 对所有工具统一应用这一条顺序，不按具体工具名分支；capability grant
+不能覆盖 hard admission。
+
+Core 中提供商中立的 `Citation(id, title, url)` 值会沿成功工具数据从
+`ToolOutput.citations` 进入 `ToolResult.citations`；文本设限不会移除这个 tuple。Agent
+把完整 result 序列化到 `AgentState.tool_results`，并派生有序的 `AgentState.citations`
+快照，因此两者都能经过 checkpoint recovery。Conversation record、Protocol v4、TUI 与
+headless output 会携带同一来源，不提供 compatibility adapter。
+
+可选 Web 能力由两个普通 registered tool 组成，不是第二套执行框架。只有 user config 设置
+`web.enabled: true` 且能解析 `TAVILY_API_KEY` 时，它们才会出现。提供商中立的 `web_search`
+handler 向 `POST https://api.tavily.com/search` 发送有界 basic Search，最多返回十条结果。
+`web_fetch` 接受一个公共 HTTPS URL，通过 `POST https://api.tavily.com/extract` 请求 basic
+Markdown extraction，并把模型可见正文限制为 24,000 个字符。由 Tavily 云服务连接目标；
+Awesome Core 绝不打开到该 URL 的连接。共享的显式 `httpx.AsyncClient` 使用
+`trust_env=False`，不跟随 redirect，也不进行不透明 retry；只有配置后才使用
+`AWESOME_WEB_PROXY_URL`。凭据、频率/用量限制、timeout、连接、provider availability 与
+malformed response 都映射成稳定且脱敏的 failure。两个注册项都是 `non_replayable`。
+
+`network.read` 在每种 permission mode 下首次使用都会 ASK，并提供 deny、allow once 或当前
+Thread allow。选择其他 Thread、重建 runtime、更改 permission mode、运行 `/web revoke` 或
+`/web off`，以及 shutdown 都会清除 Thread grant。每个 Turn 冻结最多八次的
+`web_requests` budget；先完成审批，再消耗 quota 并开始 HTTP。Search query 与 Fetch URL
+会依据 Tavily 公布的隐私政策与平台条款离开本机，而结构化诊断不会记录 query、URL、
+response 或 secret 正文。
 
 改变文件的 built-in 会通过 Change Journal 和共享的 identity-bound filesystem primitive
 写入。词法包含只负责准入：实际 mutation 会固定 workspace 与 parent directory chain，
@@ -246,7 +285,7 @@ Runner、journal、脱敏、timeout、cancellation 与 terminal-event 路径。C
 
 ```text
 Ink command controller
-    -> Protocol v3 command.execute
+    -> Protocol v4 command.execute
     -> LocalApplication facade
     -> complete CommandDispatcher
     -> one focused command service
@@ -260,9 +299,17 @@ Immutable dispatcher 负责每个 Core 命令。Ink-owned command 仍是本地�
 command result。斜杠命令是确定性的产品操作，绝不会提交隐藏的 model prompt；只有自然
 语言输入会启动 Agent Turn。
 
-`LocalApplication` 是唯一面向界面的 Application host。Python 生成 Protocol v3
+`LocalApplication` 是唯一面向界面的 Application host。Python 生成 Protocol v4
 discriminated outcome，TypeScript 对其进行严格校验并穷尽展示。Command progress 是
 pending Surface lifecycle state，不是第二种持久化 operation model。
+
+会话发现通过同一个由 Application 管理的边界提供两个入口。Protocol `thread.search` 使用
+keyset 分页返回 Workspace 隔离的 substring match。`/search <query>` 最多展示最近更新的
+50 条匹配；存在更多结果时会要求用户缩小 query，并通过既有 transition payload 恢复选中的
+Thread。两条路径共享 5,000,000 SQLite VM-op scan budget，并稳定返回
+`result_too_large`。`/export` 同样是确定性的 Application command：它把不超过 5 MiB 的
+公开 transcript 投影到规范化后长度为 1–1,000 字符的 Workspace 相对 Markdown 或 JSON
+路径，在 event loop 外完成渲染，再通过 Change Journal 报告安全写入。
 
 ### Resume 与恢复
 
@@ -273,8 +320,12 @@ pending Surface lifecycle state，不是第二种持久化 operation model。
 - 已完成 graph state 会被终结为产品记录；
 - 有效未完成 checkpoint 可以恢复；
 - checkpoint 缺失或损坏时，Turn 以稳定错误码失败；
-- 不确定 shell 或 MCP 副作用要求显式 retry/abort interaction，安全默认是 Abort；
+- non-replayable 工具或缺失/未知 replay metadata 要求显式 retry/abort interaction，安全
+  默认是 Abort；
 - 终态产品 Turn 残留的 checkpoint 会被删除。
+
+恢复会在当前 Runtime Registry 中解析同名工具并使用该注册项的 replay metadata。它不从
+具体工具名推断 replay safety；未知 metadata 会 fail closed，绝不自动重试。
 
 对于未完成 Turn，最新且经过严格校验的 checkpoint 是恢复事实来源。只有当 Application
 SQLite 投影为空或其不可变 source anchor 共享 lineage，且旧投影仍匹配显式
@@ -287,18 +338,65 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
 ### Application Host
 
 - **职责：** 工作区初始化、配置解析、Thread/Turn 生命周期、命令、前台 operation
-  串行化、interaction、取消、事件投影、恢复和组装。
+  串行化、interaction、取消、事件投影、恢复、组装，以及初始化前的本地 User Skill 包 use case。
 - **不负责：** 模型推理、图路由、工具实现或 UI 渲染。
 - **主要文件：** `application/facade.py`、`application/composition.py`、
-  `application/turns.py`、`application/operations.py`。
+  `application/bootstrap.py`、`application/turns.py`、
+  `application/operations.py`、`application/skill_management.py`。
 - **依赖：** Agent Core、当前 adapter、Conversation、Storage、Core、Context、Extensions
   和 Memory。
+
+`LocalApplication` 持有唯一的 `ApplicationBootstrap`，Application 是
+`BootstrapPhase` 的唯一所有者。类型化 initialize 与 interaction 结果会推进或恢复该 phase；
+序列化的 protocol response 绝不是生命周期事实来源。stdio Host 只向 Application 查询某项
+operation 是否准入，并把拒绝转换成既有的 Protocol v4 握手错误；它既不维护并行 phase
+machine，也不解析 response payload 来推断 readiness。这次内部所有权迁移不会改变
+Protocol v4 的 request、result 或 error 形状。
+
+私有 `skill.list`、`skill.install` 与 `skill.remove` operation 只在该 phase 恰好为
+`UNINITIALIZED` 时准入。一个由 Application 持有的 pre-initialize transition 使三者彼此
+互斥，也与 `initialize` 互斥；完成后 phase 不变，也不会构建 Workspace Runtime。私有 client
+随后可以初始化同一个 Core，并发现变更后的 User package tree。官方 `awesome skills` CLI 是
+一次性的，会在取得结果后关闭 Core。两条路径都不会热更新已经初始化的 Session 所持有的
+不可变 Skill catalog。
+
+受信激活完成后，backend 会发布一个 frozen、slotted 的 `WorkspaceRuntime`。它是请求可见
+的快照，统一包含已解析配置以及组装后的 Conversation、Turn、command、tool、model
+catalog、context、extension、memory、MCP、Change Journal 和 `RuntimeResources`。每个请求
+只绑定一次该对象；被 await 的 callback 和由 foreground 持有的子 task 始终沿同一 service
+graph 执行。替换时会先完全使用局部变量构建 candidate，完成校验和前台 Operation 所有权
+检查后，再通过一次指针赋值发布。随后新请求绑定新 runtime；已准入的 reader 继续使用旧
+资源 generation，完成后才关闭它。每个 generation 的 `AsyncExitStack` 持有可复用的
+provider client、内部创建的 Mem0 client 和 MCP，并按 MCP、Mem0、provider client 的逆序
+恰好关闭一次。注入的 gateway 和 Mem0 client 只借用，绝不注册关闭。启动 recovery 通知
+发生在发布之后，失败也不会回滚已 ready 的 runtime。Candidate 构建失败或取消只关闭候选
+资源，不影响此前发布的 runtime。Provider 与
+credential mutation 复用同一条完整 candidate 发布路径，但不重复 startup recovery，并保留
+已选择的 Thread。Runtime 的 `model_catalog` 是 frozen、提供商中立的 `MODEL_CATALOG`；
+credential 存在性、已配置默认项、活动选择与 region 仍是动态的
+Application/configuration state。Protocol v4
+通过 `model_catalog`、`provider_credentials` 和 `model_identity` 分别发布这些事实。
+前台所有权、interaction、permission session、recovery delivery、checkpoint saver、进程级
+Application SQLite worker、state lease 和其他进程生命周期资源
+仍由另一套 Application `AsyncExitStack` 持有，而不是 workspace snapshot 字段。一个有界
+FIFO worker thread 持有长期 Application database connection；面向 Application 的
+repository 只暴露 async method，SQLite 所有的值不会跨越该边界。
+
+Application invocation diagnostics 同样属于进程/会话，不在 `WorkspaceRuntime` 内。有界、
+非阻塞 writer 将结构化 JSON line 追加到 `<AWESOME_HOME>/logs/application.jsonl`；每个文件
+上限为 5 MiB，并轮转保留 `application.jsonl.1` 至 `.4`。它会 fail open，因此诊断 I/O 不会
+改变 Application 结果。Record 只从显式 allowlist 构造：`version`、`timestamp`、
+`session_id`、`correlation_id`、`operation`、`outcome`、`duration_ms`，以及可选的
+`error_code` 与 `usage`。它绝不包含 prompt、模型或工具正文、query、URL、path、secret 或
+任意 request/result payload。记录的 outcome 只属于被观测的 Application invocation；成功
+启动后台 Agent 工作的请求，并不表示其异步 Turn 后来成功完成。
 
 共享 foreground arbiter 向 Agent Turn、直接命令、改变状态的命令、credential mutation、
 非 Tool interaction resolution 或 shutdown 授予唯一原子 lease。准入发生在 Turn 持久化
 之前。活动 Operation 期间，显式例外是只读 snapshot command；pending interaction 会
 阻止新 Operation 与 mutation，而匹配的 Tool approval 会继续其所属 Operation。Shutdown
-会关闭准入、取消活动工作，并等待 lease 完成清理，再关闭进程或数据库。
+会关闭准入、取消仍可取消的活动工作、等待 durable commit 和 lease 清理，回收 runtime
+resource，再关闭 checkpoint saver 和 Application SQLite worker，最后释放 state lease。
 
 ### Agent Core 与 LangGraph
 
@@ -306,8 +404,17 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
   计数、预算和终结。
 - **不负责：** 产品 Thread record、具体存储装配或界面状态。
 - **主要文件：** `agent/state.py`、`agent/graph.py`、`agent/nodes.py`、
-  `agent/budgets.py`。
-- **依赖：** 提供商中立 Modeling、Core tool 和注入的 Memory service。
+  `agent/budgets.py`、`agent/finalization.py`。
+- **依赖：** 提供商中立 Modeling、Core tool 与注入的 Agent-owned port。
+
+`PostAnswerFinalizer` 是 Agent 可见的唯一回答终结端口。它的严格 request 携带已经生成的
+回答、剩余模型/retry 预算、所选模型、工作区标识，以及从 `tool_results` 按顺序收集的
+citations；ID 与值均相同的重复项会折叠，同一 ID 对应冲突值则是不变量失败。超过 128 条
+唯一 citation 也会在 finalizer 运行前失败。有效 result 可以用 strip 后非空的值
+替换回答，并报告最多一次主要模型调用、对应的有界 usage 与通用 diagnostics。Active-time
+耗尽会提供零剩余模型调用，但不会跳过无需模型的 finalizer。Agent 会先重新校验 result 和
+预算，再原子应用回答与计费。失败会发出 warning，并保留现有回答与 usage；取消会保留
+此前 checkpoint 中的回答，不投影另一条 Agent warning，并立即重新抛出原始取消。
 
 ### 上下文管理
 
@@ -325,10 +432,20 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
 ### Model Gateway
 
 - **职责：** 提供商中立 message、tool、streaming event、error、usage、模型选择、retry
-  报告和受支持 adapter 调用。
+  报告、唯一的受支持模型 catalog 和受支持 adapter 调用。
 - **不负责：** 工具、图状态或产品生命周期。
-- **主要文件：** `modeling/gateway.py`、`modeling/provider.py`、
-  `modeling/turns.py`、`providers/deepseek.py`、`providers/kimi.py`。
+- **主要文件：** `modeling/catalog.py`、`modeling/gateway.py`、
+  `modeling/provider.py`、`modeling/turns.py`、`providers/factory.py`、
+  `providers/deepseek.py`、`providers/kimi.py`。
+
+静态目录为 `MODEL_CATALOG -> ProviderDescriptor -> ModelProfile`。它当前描述 DeepSeek 和
+Kimi、四个模型、各自 capability 与 262,144-token context limit、Provider 内默认项、Kimi
+的 `cn`/`global` region（默认 `cn`），以及各 Provider 的 `credential_id`。
+Application/configuration 仍负责 credential 存在性以及运行时默认 model、活动 model 和 region
+选择。Catalog 不实例化 client：具体 factory、adapter 与官方 endpoint 仍位于 `providers/`。
+Tavily selection 和 catalog concern 留在独立的 Web/configuration 边界，绝不进入
+`ModelCatalog`。这里没有通用 provider registry、DI container，也没有虚构的第三个
+model Provider。
 
 ### 工具系统
 
@@ -347,13 +464,25 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
   checkpoint 访问与 SQLite transaction。
 - **不负责：** graph node transition 或 TUI transcript state。
 - **主要文件：** `conversation/models.py`、`conversation/service.py`、
-  `storage/database.py`、`storage/compatibility.py`、`storage/state_lease.py`、
-  `storage/state_recovery.py`、`storage/conversations.py`、
+  `storage/application_sqlite.py`、`storage/database.py`、
+  `storage/compatibility.py`、`storage/state_lease.py`、
+  `storage/state_recovery.py`、`storage/conversations.py` 和
   `storage/checkpoints.py`。
 
 可重置边界恰好是 `<AWESOME_HOME>/state`。Storage 在 exclusive lease 下执行原子替换；
 Application 负责确认和继续启动；Protocol 传输类型化事实；Ink 只展示和路由决策。配置、
 凭据、Skills、Memory、UI 偏好和工作区文件都位于该边界之外，会在确认 reset 后保留。
+
+Thread search 是按 `updated_at DESC, id DESC` 排序的 Application SQLite read。其不透明
+cursor 用 hash 绑定当前 Workspace 与规范化 query；cursor 不会携带明文 workspace key。
+首版使用字面 substring match，而不是 FTS 或 relevance ranking。
+
+Schema 8 为每个 Thread 增加可空的直接父级 lineage。`/fork` 会物化复制至一个终态 Turn
+（含该 Turn）的 transcript 前缀；`/retry` 会物化复制该终态 Turn 之前的前缀，并以它的
+user input 创建新 Turn，同时冻结该 Turn 的 model、Thinking、Skill 与 budget 配置。两者
+都在一个 Application SQLite transaction 中创建独立的 Thread、Entry 与 Turn identity。
+它们不会建立共享历史 DAG，也不会复制 summary、ToolActivity、checkpoint 或 ChangeSet；
+Retry 既不重放旧工具，也不撤销其效果。
 
 这里的原子替换描述文件系统 namespace transition，不表示撤销在 Awesome lease protocol
 之外打开的任意 handle。打开的数据库 handle 会在 Windows 上阻止 rename。POSIX 允许
@@ -387,15 +516,29 @@ identity 的旧记录与被中断的 pending mutation 无法区分，恢复会�
 
 ### Skills 与 MCP
 
-- **职责：** 发现受信 bundled/user/workspace Skills、加载有界指令、连接配置的 MCP
-  stdio server，并将 MCP tool 适配到共享 registry。
+- **职责：** 发现 bundled/user/受信 workspace Skills，校验并管理本地 User 包，分配并验证
+  不可变 Session identity，加载有界指令、连接配置的 MCP stdio server，并将扩展 tool 适配到
+  共享 registry。
 - **不负责：** 权限或替代执行路径。
 - **主要文件：** `extensions/skills/discovery.py`、
-  `extensions/skills/loader.py`、`extensions/mcp/manager.py`、
+  `extensions/skills/loader.py`、`extensions/skills/manifest.py`、
+  `extensions/skills/package_manager.py`、`extensions/mcp/manager.py`、
   `extensions/mcp/adapter.py`。
 
-Workspace Skill path 与已打开 identity 会在不跟随 link 或 reparse point 的情况下重新
-校验；一个无效 package 仍是隔离诊断。MCP 会在 page、tool-count、byte 与 deadline 边界
+每个有效 Skill 都会冻结版本化 package/`SKILL.md` identity。Turn manifest 与 checkpoint
+保留由 `auto` 或具名模式选中的 identity；`off` 不保留任何 identity。模型可见的 Skill 工具
+按该冻结模式过滤，`context.read` 硬准入会在 policy 之前验证操作与 identity，并在返回内容前
+再次验证。Workspace Skill path 还会在不跟随 link 或 reparse point 的情况下重新校验完整的
+受信任 anchor 链。一个无效 package 仍是隔离诊断，Runtime 重建或 package 漂移不能扩大
+恢复中 Turn 的 Skill scope。
+
+本地包管理只接受经过校验的目录或 ZIP source，并跨进程序列化操作。全新安装通过一次同目录
+no-replace 原子 rename，把 staged package 发布到不存在的 target。Replace 与 remove 是由
+marker 驱动的可恢复事务，不是一次原子替换：它们会 quarantine 旧 target，在发布前回滚，
+并在发布后向前完成清理。调用方取消时会继续等待 owned worker，直到事务收敛，不设置
+wall-clock 清理 deadline，随后重新抛出取消。
+
+MCP 会在 page、tool-count、byte 与 deadline 边界
 下消费完整分页 catalog，编译所有 JSON Schema 和完整 namespaced tool name，再构建全部
 generation-bound Registry entry。Manager 持有 server lock 时同步替换完整 Registry
 namespace，并且不经过新的 `await` 就发布相匹配的 client、catalog、generation 与
@@ -417,9 +560,11 @@ client、使候选 generation 失效、移除该 server namespace，并发布脱
   distilled write。
 - **不负责：** policy、trust、raw transcript upload 或 provider routing。
 - **主要文件：** `memory/local_file.py`、`memory/service.py`、
-  `memory/mem0_cloud.py`、`memory/distiller.py`。
+  `memory/mem0_cloud.py`、`memory/distiller.py`、`memory/finalization.py`。
 
 两层 memory 均独立启用且默认关闭。Mem0 Cloud 是当前唯一受支持的外部 memory adapter。
+`Mem0PostAnswerFinalizer` 位于该边界内，把 Mem0 特定 status 与 diagnostic 转换为通用 Agent
+契约，并且当前原样返回已经生成的回答。Agent 不导入 Memory，也不知道 Mem0 类型。
 
 ### Protocol 与 Ink TUI
 
@@ -427,13 +572,37 @@ client、使候选 generation 失效、移除该 server namespace，并发布脱
   transcript 投影、主题、剪贴板、仅会话 pending input 和本地展示偏好。
 - **不负责：** 模型、LangGraph、tool、storage、Memory、Skills 或 MCP。
 - **主要文件：** `protocol/jsonrpc.py`、`protocol/stdio.py`、
-  `tui/src/core/process.ts`、`tui/src/app/App.tsx`。
+  `tui/src/core/process.ts`、`tui/src/app/App.tsx`、
+  `tui/src/app/submission-coordinator.ts` 和
+  `tui/src/cli/startup-session-controller.ts`、`tui/src/cli/headless.ts`、
+  `tui/src/cli/skills.ts`。
+
+两个仅属于 session 的 controller 把异步时序移出 React render tree，但不创建另一套状态
+框架。`StartupSessionController` 继续处理类型化的 trust、state reset 和启动 Thread
+selection 结果；它不复制 Application bootstrap phase。`SubmissionCoordinator` 负责单条
+输入的解析、Core 准入、乐观 identity 和 generation fence。既有 React queue 仍只拥有
+pending 展示输入，而 Core 仍是唯一的前台执行权威。
+
+`awesome run` 复用同一个 `ConnectedSurface`、startup controller、Protocol v4 client、
+Application facade 和持久化 Thread/Turn record，但不渲染 Ink。它默认创建新 Thread，或指定
+一个明确 Thread，随后只把持久化的最终 assistant entry 投影为文本或带版本的 JSON 文档。
+父进程 stdout 只承载结果，stderr 只承载诊断；Core stdout 仍是私有 NDJSON。未解决
+interaction 返回退出码 3；SIGINT 会先发送紧急取消，再返回 130 并关闭同一棵 Core 进程树。
+`--allow-network` 只能把当前活动 Turn 精确匹配的 `network.read` prompt 解析为
+`allow_once`；它不能创建 Thread grant、处理其他 interaction 或绕过硬拒绝。
 
 `TerminalInput.tsx` 是唯一 keyboard subscriber。一个可辨识 UI mode 路由 Enter、Escape、
 Tab、方向键和全局取消，不会有相互竞争的 component listener。乐观 user message 使用
 `client_message_id` 作为 key；Thread generation 在 replacement 后拒绝过期 event。活动
 Turn 是一条有序 Thinking/tool/answer timeline，已完成 answer 使用 terminal Markdown
 渲染。
+
+`/retry` 返回一个严格的 Protocol v4 `thread_retry` payload，同时包含权威 Thread
+replacement 与已准入 Operation。由于该 Operation 的 event 可能早于 response 到达，
+`ConnectedSurface` 会暂时缓存有序 event stream，先安装 replacement，再把新 generation
+绑定到返回的 Operation/Thread/Turn identity，最后才重放缓存事件。Gate 的上限为 1,024
+个 event 与 4 MiB 编码内容。容量或 identity 违规属于致命 protocol error；event 绝不会
+投影到来源 Thread。
 
 stdio Host 读取一条有界 NDJSON stream，却将普通请求作为独立 task 调度。固定 in-flight
 上限、有界 recent request-ID history，以及有边界和 deadline 保护的 stdout queue 会限制
@@ -458,9 +627,10 @@ POSIX 保证覆盖仍留在 supervisor session 和 process group 内的 descenda
 sandbox。
 
 单一 Core Operation 活动时，TUI 最多可以排队三个终端输入。Queue 只属于会话，位于
-Thread Surface state 之外：它会跨 `/new` 与 `/resume` 保留；每个 head 只在被提升时
-解析；按 FIFO 执行；Composer 为空时按 Up 可以召回 tail；排队的 `/quit` 被视作终止
-barrier。它绝不会成为 Runtime、protocol method、database record 或第二执行权威。
+Thread Surface state 之外：它会跨 `/new`、`/resume`、`/fork` 与 `/retry` 保留；每个
+head 只在被提升时解析；按 FIFO 执行；Composer 为空时按 Up 可以召回 tail；排队的
+`/quit` 被视作终止 barrier。它绝不会成为 Runtime、protocol method、database record 或
+第二执行权威。
 
 ### 安全
 
@@ -495,22 +665,29 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 
 | 导入方 package | 可以导入的 Awesome package root |
 | --- | --- |
-| `agent` | `agent`、`core`、`memory`、`modeling` |
-| `application` | `agent`、`application`、`config`、`context`、`conversation`、`core`、`extensions`、`memory`、`modeling`、`paths`、`providers`、`safety`、`storage`、`version` |
-| `config` | `config`、`paths` |
+| `agent` | `agent`、`core`、`modeling` |
+| `application` | `agent`、`application`、`config`、`context`、`conversation`、`core`、`extensions`、`memory`、`modeling`、`paths`、`providers`、`safety`、`storage`、`version`、`web` |
+| `config` | `config`、`core`、`modeling`、`paths` |
 | `context` | `context`、`conversation`、`core`、`memory`、`modeling` |
-| `conversation` | `config`、`conversation` |
+| `conversation` | `config`、`conversation`、`core` |
 | `core` | `core`、`safety` |
 | `extensions` | `context`、`core`、`extensions` |
-| `memory` | `config`、`core`、`memory`、`modeling`、`paths`、`safety` |
-| `modeling` | `config`、`modeling` |
+| `memory` | `agent`、`config`、`core`、`memory`、`modeling`、`paths`、`safety` |
+| `modeling` | `modeling` |
 | `protocol` | `application`、`core`、`paths`、`protocol`、`version` |
 | `providers` | `config`、`modeling`、`providers` |
 | `safety` | `modeling`、`safety` |
-| `storage` | `agent`、`conversation`、`core`、`extensions`、`storage` |
+| `storage` | `agent`、`config`、`conversation`、`core`、`extensions`、`storage` |
+| `web` | `core`、`web` |
 
 `tests/structural/test_dependency_architecture.py` 是该精确 adjacency table 和外部 framework
-所有权的可执行来源。TUI 是独立 TypeScript 进程，只通过 Protocol v3 访问 Python。
+所有权的可执行来源。TUI 是独立 TypeScript 进程，只通过 Protocol v4 访问 Python。
+`memory` -> `agent` 这一行刻意采用比 package 级表象更窄的约束：仅允许
+`memory/finalization.py` 导入 `agent/finalization.py`。
+
+因此 package 依赖箭头是 `config -> modeling`，绝不是 `modeling -> config`。
+Application 将静态模型目录与动态 configuration、credential state 组装起来，再通过
+Protocol v4 发布 catalog，使 Ink 无需复制 model 或 Provider 枚举。
 
 具体 provider 与 storage adapter 在 `application/composition.py` 中装配。Agent 导入
 提供商中立契约，protocol 导入 Application facade，而不是各个子系统。
@@ -520,7 +697,7 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | 状态 | 所有者 | 位置 | 生命周期 |
 | --- | --- | --- | --- |
 | 工作区信任 | Application Storage | `state/application.db` | 直到用户数据被移除 |
-| Thread、Turn、transcript、summary | Conversation + Storage | `state/application.db` | 持久本地历史 |
+| Thread、直接父级 lineage、Turn、transcript、summary | Conversation + Storage | `state/application.db` | 持久本地历史 |
 | Tool activity summary | Storage | `state/application.db` | 有界本地历史 |
 | Agent graph channel | LangGraph | `state/checkpoints.db` | 仅未完成 Turn |
 | ChangeSet metadata | Change Journal + Storage | `state/application.db` | 持久本地历史 |
@@ -530,11 +707,18 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | 工作区 memory | Memory | `workspaces/<key>/MEMORY.md` | 工作区范围 |
 | 云端事实 | Mem0 Cloud | 外部账户 | 仅启用时 |
 | UI 偏好 | Ink TUI | `ui.json` | 用户控制 |
+| Application invocation diagnostics | Application 进程/会话 | `logs/application.jsonl{,.1,.2,.3,.4}` | 有界本地运行历史 |
 | 工作区文件 | 用户和工具 | workspace | 主要项目状态 |
 
+Thread export 是普通工作区文件，不是产品状态的第二份副本。其确定性的公开投影排除
+workspace key 与内部 metadata；发生变化的导出会进入 journal，可像其他受控文件写入一样
+撤销。路径和输出上限会在 mutation 前检查。失败且 reconciliation 后没有 mutation evidence
+的尝试不会发布空 ChangeSet；若字节已经落盘，恢复会保留真实 evidence。
+
 Token delta、spinner、原始 provider payload、无界 shell output 和 credential 不会作为产品
-历史保存。未完成 Turn 所需的 tool observation 保留在 LangGraph checkpoint；面向用户的
-activity history 存储有界 summary。
+历史保存。未完成 Turn 所需的 tool observation 会保留在 LangGraph checkpoint 中，其中包括
+序列化 `tool_results` 内的 citations 和派生的有序 `citations` 快照。面向用户的 activity
+history 存储有界 summary。
 
 ## 错误、取消与恢复
 
@@ -543,8 +727,9 @@ activity history 存储有界 summary。
 - Provider adapter 会分类错误并报告 retry usage；Agent 强制配置的 retry 与 model-call
   上限。
 - 取消会经过 foreground operation、model call 和 tool execution 传播。Application 将
-  Turn 标记为 cancelled，随后尝试封存已知变更并删除其 checkpoint。有界清理失败会
-  保留主要 cancelled 事实；启动校正会重试残留终态 checkpoint evidence。
+  Turn 标记为 cancelled，随后继续持有 foreground lease，直到本地 activity、transcript、
+  ChangeSet 与 checkpoint cleanup 得到明确结果。清理失败会保留主要 cancelled 事实；启动
+  校正会重试残留终态 checkpoint evidence。只有进程清理与 best-effort event delivery 有界。
 - 终态 event 允许 TUI 提升一个 pending input。类型化 busy 竞态会把同一 identity 重新
   放回队首，不产生重复 failure text。
 - TUI cancellation 与 interaction controller 会在下一个 Operation 或 Interaction 前
@@ -555,17 +740,21 @@ activity history 存储有界 summary。
 - 启动恢复只根据产品记录和 checkpoint 中的证据行动。结果不确定的外部副作用需要用户
   决策，而不是自动重放。
 - 上下文压缩、消息修复、预算耗尽和终结是 Agent 不变量，不是可选 middleware。
+- 可选的回答后 finalization 隔离在 Agent-owned port 后。实现被取消、失败、无效或超预算时
+  不能覆盖已经生成的回答；取消仍会传播，有效 result 则会在 completion 前计费。
 
 ## 扩展点
 
 当前扩展点被有意保持得很窄：
 
-- 新 model adapter 实现现有 provider 契约，并在 Application 边界组装；
+- 受支持 model 或 Provider 同时加入静态模型 catalog 与具体 adapter factory，再在
+  Application 边界组装；这不是 runtime registry，也不要求虚构第三个 Provider；
 - 新 built-in 或 MCP tool 进入现有 Registry/Policy/Executor 路径；
 - 新 Skill 遵循当前 manifest schema 与受信发现顺序；
 - 第二个外部 memory service 必须证明共享 provider abstraction 的必要性；
 - 未来界面适配 `ApplicationFacade` 和类型化 event，而不是重新实现 Core 行为。
 
-产品 roadmap 还包含单命令 Skills 安装、Multi-Agent delegation、search tool、Cron task、
-Gateway messaging 和可选 Docker tool backend。这些是未来 capability，不属于当前系统图。
-Docker backend 会位于 Tool Executor policy 之下，不会替代 workspace trust。
+产品 roadmap 还包含 Multi-Agent delegation、search tool、Cron task、Gateway messaging 和
+可选 Docker tool backend。这些是未来 capability，不属于当前系统图。本地单命令 User Skill
+包管理已经属于当前 Application 与 CLI 边界。Docker backend 会位于 Tool Executor policy
+之下，不会替代 workspace trust。

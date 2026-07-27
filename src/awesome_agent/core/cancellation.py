@@ -5,7 +5,7 @@ import contextvars
 import logging
 import math
 import threading
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from concurrent.futures import Future as ConcurrentFuture
 from typing import Any
 
@@ -16,11 +16,44 @@ logger = logging.getLogger(__name__)
 _BLOCKING_CALL_CLEANUP_TIMEOUT_SECONDS = 22.0
 
 
+async def finish_cancellation_safe[ResultT](
+    operation: Awaitable[ResultT],
+) -> tuple[ResultT, asyncio.CancelledError | None]:
+    """Observe one caller-owned convergent action before exposing cancellation.
+
+    The action must be fully owned by the caller and guaranteed to converge. This
+    helper can wait without a deadline, so it must not wrap arbitrary external I/O.
+    A successful action returns its result and the first caller cancellation; if
+    the action fails after cancellation, that first cancellation remains primary.
+    """
+
+    task = asyncio.ensure_future(operation)
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            if cancellation is None:
+                cancellation = error
+        except BaseException:
+            if cancellation is not None:
+                raise cancellation from None
+            raise
+    try:
+        result = task.result()
+    except BaseException:
+        if cancellation is not None:
+            raise cancellation from None
+        raise
+    return result, cancellation
+
+
 async def run_cancellation_safe_blocking_call[ResultT](
     call: Callable[[], ResultT],
     *,
     on_completed: Callable[[ResultT], None] | None = None,
     on_abandoned: Callable[[], None] | None = None,
+    on_late_completed: Callable[[ResultT], None] | None = None,
     cleanup_timeout_seconds: float = _BLOCKING_CALL_CLEANUP_TIMEOUT_SECONDS,
 ) -> ResultT:
     """Run one indivisible blocking transaction without freezing the event loop.
@@ -29,7 +62,10 @@ async def run_cancellation_safe_blocking_call[ResultT](
     long enough for the resource-lock deadline, and run the optional in-memory
     commit on the event-loop thread before re-raising the caller's cancellation.
     If cleanup expires, invoke ``on_abandoned`` synchronously so callers can fence
-    state that a late worker may still change without an in-memory commit.
+    state that a late worker may still change without an in-memory commit. A
+    successful worker result that arrives later is never passed to ``on_completed``;
+    when supplied, ``on_late_completed`` receives it on the event-loop thread so
+    the caller can release resources that were created after the deadline.
     The commit must be non-blocking and must not perform filesystem, network, lock,
     or database I/O; all such work belongs in ``call`` and its returned value.
     """
@@ -38,6 +74,7 @@ async def run_cancellation_safe_blocking_call[ResultT](
         raise ValueError("Blocking-call cleanup timeout must be finite and positive.")
 
     worker_source, worker_result = _start_daemon_worker(call)
+    loop = asyncio.get_running_loop()
     try:
         result = await asyncio.shield(worker_result)
     except asyncio.CancelledError:
@@ -54,7 +91,16 @@ async def run_cancellation_safe_blocking_call[ResultT](
                         "Blocking-call abandonment callback failed.",
                         exc_info=True,
                     )
-            worker_source.add_done_callback(_consume_concurrent_future)
+            if on_late_completed is None:
+                worker_source.add_done_callback(_consume_concurrent_future)
+            else:
+                worker_source.add_done_callback(
+                    lambda result: _schedule_late_completion(
+                        result,
+                        loop=loop,
+                        callback=on_late_completed,
+                    )
+                )
             worker_result.cancel()
         elif not worker_result.cancelled() and worker_result.exception() is None:
             try:
@@ -172,3 +218,31 @@ def _consume_concurrent_future(result: ConcurrentFuture[Any]) -> None:
         result.exception()
     except Exception:
         return
+
+
+def _schedule_late_completion[ResultT](
+    result: ConcurrentFuture[ResultT],
+    *,
+    loop: asyncio.AbstractEventLoop,
+    callback: Callable[[ResultT], None],
+) -> None:
+    if result.cancelled():
+        return
+    try:
+        value = result.result()
+    except BaseException:
+        return
+    try:
+        loop.call_soon_threadsafe(_run_late_completion, callback, value)
+    except RuntimeError:
+        logger.warning("Late blocking-call resource cleanup could not be scheduled.")
+
+
+def _run_late_completion[ResultT](
+    callback: Callable[[ResultT], None],
+    value: ResultT,
+) -> None:
+    try:
+        callback(value)
+    except BaseException:
+        logger.warning("Late blocking-call resource cleanup failed.", exc_info=True)

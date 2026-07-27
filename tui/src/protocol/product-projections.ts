@@ -8,6 +8,10 @@ import {
   utcTimestampSchema,
 } from "./base.js";
 import { modelIdentitySchema } from "./identity.js";
+import {
+  modelCatalogSchema,
+  type ProviderDescriptor,
+} from "./model-catalog.js";
 
 const nonNegativeIntegerSchema = safeIntegerSchema.min(0);
 const positiveIntegerSchema = safeIntegerSchema.min(1);
@@ -15,6 +19,73 @@ const identifierSchema = boundedText(1, 128);
 const clientMessageIdentifierSchema = identifierSchema.regex(
   /^client_[A-Za-z0-9_-]+$/,
 );
+
+export const citationSchema = z.strictObject({
+  id: z.string().regex(/^S[1-9][0-9]{0,5}$/u),
+  title: boundedText(1, 500).refine(
+    (value) =>
+      value.trim().length > 0 &&
+      !Array.from(value).some((character) => {
+        const codePoint = character.codePointAt(0) ?? 0;
+        return (
+          codePoint < 32 ||
+          (codePoint >= 127 && codePoint <= 159) ||
+          character === "\u2028" ||
+          character === "\u2029"
+        );
+      }),
+    "Expected a non-blank single-line title",
+  ),
+  url: boundedText(1, 8_000).refine((value) => {
+    if (
+      value.includes("\\") ||
+      Array.from(value).some((character) => {
+        const codePoint = character.codePointAt(0) ?? 0;
+        return (
+          codePoint < 32 ||
+          (codePoint >= 127 && codePoint <= 159) ||
+          /\s/u.test(character)
+        );
+      })
+    ) {
+      return false;
+    }
+    try {
+      const parsed = new URL(value);
+      return (
+        parsed.protocol === "https:" &&
+        parsed.hostname.length > 0 &&
+        parsed.username.length === 0 &&
+        parsed.password.length === 0
+      );
+    } catch {
+      return false;
+    }
+  }, "Expected an absolute HTTPS URL"),
+});
+export type Citation = z.infer<typeof citationSchema>;
+
+const assistantMetadataSchema = z
+  .strictObject({
+    citations: z.array(citationSchema).max(128),
+  })
+  .superRefine(({ citations }, context) => {
+    if (citations.some((citation, index) => citation.id !== `S${index + 1}`)) {
+      context.addIssue({
+        code: "custom",
+        message: "Citation identifiers must be contiguous",
+      });
+    }
+    if (
+      new Set(citations.map((citation) => citation.url)).size !==
+      citations.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Citation URLs must be unique",
+      });
+    }
+  });
 
 export const usageSummarySchema = z.strictObject({
   input_tokens: safeIntegerSchema.min(0),
@@ -26,6 +97,7 @@ export const usageSummarySchema = z.strictObject({
   tool_calls: safeIntegerSchema.min(0),
   provider_retries: safeIntegerSchema.min(0),
   compressions: safeIntegerSchema.min(0),
+  web_requests: safeIntegerSchema.min(0),
   active_execution_seconds: z.number().finite().min(0),
 });
 
@@ -71,29 +143,114 @@ const secretStatusSchema = z.strictObject({
   mem0_api_key: z.boolean(),
 });
 
-export const applicationStateSchema = z.strictObject({
-  initialized: z.boolean(),
-  session_id: identifierSchema,
-  workspace_key: identifierSchema,
-  workspace: workspacePresentationSchema,
-  workspace_trusted: z.boolean(),
-  current_thread_id: identifierSchema.optional(),
-  model_identity: modelIdentitySchema.optional(),
-  thinking_enabled: z.boolean(),
-  skill_mode: boundedText(1, 64),
-  active_operation_id: identifierSchema.optional(),
-  pending_interaction_id: identifierSchema.optional(),
-  permission_mode: permissionModeSchema,
-  workspace_instruction_diagnostic: workspaceInstructionDiagnosticSchema
-    .nullable()
-    .optional(),
-  configuration_valid: z.boolean(),
-  secret_status: secretStatusSchema,
-  provider_credentials: providerCredentialStatusesSchema,
-  memory_status: z.record(z.string(), jsonValueSchema),
-  mcp_status: z.array(z.record(z.string(), jsonValueSchema)),
-  usage: z.record(z.string(), z.number().finite().min(0)),
-  configuration_diagnostics: z.array(z.string()),
+export const applicationStateSchema = z
+  .strictObject({
+    initialized: z.boolean(),
+    session_id: identifierSchema,
+    workspace_key: identifierSchema,
+    workspace: workspacePresentationSchema,
+    workspace_trusted: z.boolean(),
+    current_thread_id: identifierSchema.optional(),
+    model_catalog: modelCatalogSchema,
+    model_identity: modelIdentitySchema.optional(),
+    thinking_enabled: z.boolean(),
+    skill_mode: boundedText(1, 64),
+    active_operation_id: identifierSchema.optional(),
+    pending_interaction_id: identifierSchema.optional(),
+    permission_mode: permissionModeSchema,
+    workspace_instruction_diagnostic: workspaceInstructionDiagnosticSchema
+      .nullable()
+      .optional(),
+    configuration_valid: z.boolean(),
+    secret_status: secretStatusSchema,
+    provider_credentials: providerCredentialStatusesSchema,
+    memory_status: z.record(z.string(), jsonValueSchema),
+    mcp_status: z.array(z.record(z.string(), jsonValueSchema)),
+    usage: z.record(z.string(), z.number().finite().min(0)),
+    configuration_diagnostics: z.array(z.string()),
+  })
+  .superRefine((application, context) => {
+    const credentialStatuses = Object.values(application.provider_credentials);
+    for (const [
+      index,
+      provider,
+    ] of application.model_catalog.providers.entries()) {
+      if (
+        !credentialStatuses.some(
+          (status) => status.provider === provider.credential_id,
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["model_catalog", "providers", index, "credential_id"],
+          message: "Model Provider credential is not published by Application",
+        });
+      }
+    }
+
+    const identity = application.model_identity;
+    if (!identity) return;
+    const provider = application.model_catalog.providers.find(
+      (candidate) => candidate.id === identity.provider,
+    );
+    if (!provider) {
+      context.addIssue({
+        code: "custom",
+        path: ["model_identity", "provider"],
+        message: "Model identity Provider is absent from the catalog",
+      });
+      return;
+    }
+    const catalogModels = application.model_catalog.providers.flatMap(
+      (candidate) => candidate.models,
+    );
+    if (
+      !catalogModels.some((model) => model.id === identity.configured_model)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["model_identity", "configured_model"],
+        message: "Configured model is absent from the catalog",
+      });
+    }
+    if (
+      !provider.models.some((model) => model.id === identity.effective_model)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["model_identity", "effective_model"],
+        message: "Effective model does not belong to its catalog Provider",
+      });
+    }
+  });
+
+export type ProviderCredentialStatus = z.infer<
+  typeof providerCredentialStatusSchema
+>;
+
+export function modelProviderCredentialStatus(
+  application: z.infer<typeof applicationStateSchema>,
+  provider: ProviderDescriptor,
+): ProviderCredentialStatus | undefined {
+  return Object.values(application.provider_credentials).find(
+    (status) => status.provider === provider.credential_id,
+  );
+}
+
+export function credentialConfigured(
+  status: ProviderCredentialStatus | undefined,
+): boolean {
+  return status?.selected_source === "environment"
+    ? status.environment_configured
+    : status?.selected_source === "awesome"
+      ? status.awesome_configured
+      : false;
+}
+
+export const threadLineageSchema = z.strictObject({
+  kind: z.enum(["fork", "retry"]),
+  source_thread_id: identifierSchema,
+  source_turn_id: identifierSchema,
 });
 
 export const threadSchema = z.strictObject({
@@ -104,35 +261,45 @@ export const threadSchema = z.strictObject({
   current_model: boundedText(0, 200).optional(),
   thinking_enabled: z.boolean(),
   skill_mode: boundedText(1, 64),
+  lineage: threadLineageSchema.nullable(),
   created_at: utcTimestampSchema,
   updated_at: utcTimestampSchema,
 });
 
-export const threadEntrySchema = z
-  .strictObject({
-    id: identifierSchema,
-    thread_id: identifierSchema,
-    sequence: positiveIntegerSchema,
-    kind: z.enum(["user_message", "assistant_message", "direct_command"]),
-    content: boundedText(0, 200_000),
-    client_message_id: clientMessageIdentifierSchema.optional(),
+const threadEntryBase = {
+  id: identifierSchema,
+  thread_id: identifierSchema,
+  sequence: positiveIntegerSchema,
+  content: boundedText(0, 200_000),
+  created_at: utcTimestampSchema,
+} as const;
+
+export const threadEntrySchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    ...threadEntryBase,
+    kind: z.literal("user_message"),
+    client_message_id: clientMessageIdentifierSchema,
     metadata: z.record(z.string(), jsonValueSchema),
-    created_at: utcTimestampSchema,
-  })
-  .superRefine(({ kind, content, client_message_id }, context) => {
-    if ((kind === "user_message") !== (client_message_id !== undefined)) {
-      context.addIssue({
-        code: "custom",
-        message: "User message identity and entry kind disagree",
-      });
-    }
-    if (kind === "direct_command" && Array.from(content).length > 30_000) {
+  }),
+  z.strictObject({
+    ...threadEntryBase,
+    kind: z.literal("assistant_message"),
+    metadata: assistantMetadataSchema,
+  }),
+  z
+    .strictObject({
+      ...threadEntryBase,
+      kind: z.literal("direct_command"),
+      metadata: z.record(z.string(), jsonValueSchema),
+    })
+    .superRefine(({ content }, context) => {
+      if (Array.from(content).length <= 30_000) return;
       context.addIssue({
         code: "custom",
         message: "Direct command exceeds 30000 code points",
       });
-    }
-  });
+    }),
+]);
 
 export const budgetSchema = z.strictObject({
   model_calls: positiveIntegerSchema.max(256),
@@ -141,6 +308,7 @@ export const budgetSchema = z.strictObject({
   compressions: nonNegativeIntegerSchema.max(10),
   active_execution_seconds: positiveIntegerSchema.max(21_600),
   total_context_tokens: positiveIntegerSchema,
+  web_requests: nonNegativeIntegerSchema.max(8),
 });
 
 export const turnSchema = z

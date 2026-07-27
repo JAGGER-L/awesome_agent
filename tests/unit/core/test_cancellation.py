@@ -7,7 +7,57 @@ import time
 
 import pytest
 
-from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.cancellation import (
+    finish_cancellation_safe,
+    run_cancellation_safe_blocking_call,
+)
+
+
+@pytest.mark.asyncio
+async def test_owned_action_success_after_cancel_returns_first_cancellation() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def finish() -> str:
+        entered.set()
+        await release.wait()
+        return "persisted"
+
+    operation = asyncio.create_task(finish_cancellation_safe(finish()))
+    await entered.wait()
+    operation.cancel("first cancellation")
+    await asyncio.sleep(0)
+    operation.cancel("second cancellation")
+    release.set()
+
+    result, cancellation = await operation
+
+    assert result == "persisted"
+    assert cancellation is not None
+    assert cancellation.args == ("first cancellation",)
+
+
+@pytest.mark.asyncio
+async def test_owned_action_error_after_cancel_preserves_first_cancellation() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail() -> None:
+        entered.set()
+        await release.wait()
+        raise RuntimeError("late durable failure")
+
+    operation = asyncio.create_task(finish_cancellation_safe(fail()))
+    await entered.wait()
+    operation.cancel("first cancellation")
+    await asyncio.sleep(0)
+    operation.cancel("second cancellation")
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await operation
+
+    assert cancelled.value.args == ("first cancellation",)
 
 
 @pytest.mark.asyncio
@@ -169,6 +219,43 @@ async def test_late_worker_success_does_not_commit_after_cleanup_deadline() -> N
     await asyncio.sleep(0.1)
 
     assert committed == []
+
+
+@pytest.mark.asyncio
+async def test_late_worker_result_can_be_released_on_event_loop_thread() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    late_results: list[tuple[int, int]] = []
+    event_loop_thread = threading.get_ident()
+
+    def complete_late() -> int:
+        entered.set()
+        if not release.wait(1.0):
+            raise RuntimeError("worker release was not scheduled")
+        return 42
+
+    operation = asyncio.create_task(
+        run_cancellation_safe_blocking_call(
+            complete_late,
+            on_late_completed=lambda value: late_results.append(
+                (value, threading.get_ident())
+            ),
+            cleanup_timeout_seconds=0.02,
+        )
+    )
+    assert await asyncio.to_thread(entered.wait, 1.0)
+    operation.cancel("shutdown")
+
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+
+    release.set()
+    deadline = asyncio.get_running_loop().time() + 1.0
+    while not late_results:
+        assert asyncio.get_running_loop().time() < deadline
+        await asyncio.sleep(0)
+
+    assert late_results == [(42, event_loop_thread)]
 
 
 @pytest.mark.asyncio

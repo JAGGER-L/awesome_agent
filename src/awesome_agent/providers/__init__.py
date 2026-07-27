@@ -7,7 +7,7 @@ from awesome_agent.providers.deepseek import (
     DEEPSEEK_OFFICIAL_BASE_URL,
     DeepSeekProvider,
 )
-from awesome_agent.providers.factory import create_provider_mapping
+from awesome_agent.providers.factory import managed_gateway_factory
 from awesome_agent.providers.kimi import KIMI_OFFICIAL_BASE_URLS, KimiProvider
 
 __all__ = [
@@ -16,5 +16,5 @@ __all__ = [
     "DeepSeekProvider",
     "KimiProvider",
     "ProviderCredentialValidator",
-    "create_provider_mapping",
+    "managed_gateway_factory",
 ]

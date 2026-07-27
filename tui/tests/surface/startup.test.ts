@@ -17,6 +17,8 @@ import type {
   MethodValue,
 } from "../../src/protocol/methods.js";
 import type { CommandSelection } from "../../src/protocol/commands.js";
+import { PROTOCOL_VERSION } from "../../src/protocol/version.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 type Call = { method: MethodName; params: MethodParams[MethodName] };
 
@@ -28,6 +30,7 @@ const thread = (id: string): MethodValue["thread.list"]["threads"][number] => ({
   current_model: "deepseek/deepseek-chat",
   thinking_enabled: false,
   skill_mode: "auto",
+  lineage: null,
   created_at: "2026-07-11T00:00:00Z",
   updated_at: "2026-07-11T01:00:00Z",
 });
@@ -313,6 +316,7 @@ function applicationState({
     workspace_key: "workspace_1",
     workspace: { display_path: "E:\\projects\\awesome", branch: "main" },
     workspace_trusted: true,
+    model_catalog: freshModelCatalog(),
     ...(model === null ? {} : { model_identity: modelIdentity(model) }),
     thinking_enabled: false,
     skill_mode: "auto",
@@ -386,7 +390,7 @@ function startupHarness({
             ok: true,
             value: {
               product_version: "0.1.0",
-              protocol_version: 3,
+              protocol_version: PROTOCOL_VERSION,
               status,
               session_id: "session_1",
               ...(status === "ready"
@@ -397,7 +401,7 @@ function startupHarness({
                       : "interaction_response",
                   }),
               workspace: { display_path: "E:\\projects\\awesome" },
-              capabilities: [],
+              capabilities: ["web", "citations"],
             },
           } as never;
         }
@@ -658,6 +662,25 @@ describe("trusted startup state machine", () => {
         readiness: "diagnostics_ready",
         diagnostic: { model, environmentVariable },
         safeCommands: SAFE_DIAGNOSTIC_COMMANDS,
+      },
+    );
+  });
+
+  it("resolves the selected Provider credential through the published catalog", async () => {
+    const application = applicationState({ deepseek: true, kimi: false });
+    const [deepseekProvider] = application.model_catalog.providers;
+    if (!deepseekProvider) throw new Error("DeepSeek fixture is missing");
+    deepseekProvider.credential_id = "kimi";
+    const { surface } = startupHarness({ application });
+
+    await expect(beginStartup(surface, { kind: "new" })).resolves.toMatchObject(
+      {
+        kind: "ready",
+        readiness: "diagnostics_ready",
+        diagnostic: {
+          model: "deepseek/deepseek-v4-flash",
+          environmentVariable: "MOONSHOT_API_KEY",
+        },
       },
     );
   });

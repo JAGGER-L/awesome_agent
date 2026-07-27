@@ -12,13 +12,15 @@ These sources serve different trust boundaries; they are not interchangeable.
 | Workspace configuration | `<workspace>/.awesome/config.yaml` | Repository | Only after workspace trust | No |
 | Thread state | `application.db` | Awesome | Thread selection and each Turn | No |
 
-Both YAML documents use schema version `1`. Unknown fields, duplicate mapping
-keys, values that cannot be converted to the declared scalar type, and
-out-of-range values invalidate the whole document. Structure is strict, but
-Pydantic scalar coercion is currently enabled: for example, a quoted `"32"` can
-be accepted as an integer and a quoted `"false"` as a boolean. Do not rely on
-that coercion in maintained configuration; use native YAML scalar types. Fully
-strict scalar validation is a known runtime hardening gap.
+User configuration uses schema version `2`; workspace configuration remains at
+version `1`. A user version-1 document is upgraded only in memory while it is
+read, then written atomically as version 2 by the first supported configuration
+change. Unknown fields, duplicate mapping keys, values with the wrong native
+YAML scalar type, and out-of-range values
+invalidate the whole document. Validation does not coerce quoted numbers or
+booleans: use `32`, not `"32"`, and `false`, not `"false"`. Enum values remain
+their documented strings, YAML sequences remain the representation for lists,
+and `null` is accepted only for fields that explicitly permit it.
 
 ## User configuration
 
@@ -26,7 +28,7 @@ The following is a complete valid document. Every field shown with its default
 can be omitted.
 
 ```yaml
-version: 1
+version: 2
 
 providers:
   default_model: deepseek/deepseek-v4-flash
@@ -36,6 +38,8 @@ credentials:
   deepseek: environment
   kimi: awesome
   mem0: awesome
+  tavily: environment
+  web_proxy: null
 
 budgets:
   model_calls: 32
@@ -44,6 +48,12 @@ budgets:
   compressions: 2
   active_execution_seconds: 1800
   total_context_tokens: 262144
+  web_requests: 8
+
+web:
+  enabled: false
+  provider: tavily
+  blocked_domains: []
 
 memory:
   local_file_memory: false
@@ -73,17 +83,26 @@ mcp_servers:
 | `default_model` | Curated model ID or `null` | `null` | Initial model for a new Thread when no startup model is supplied. |
 | `kimi_region` | `cn` or `global` | `cn` | Kimi API region used by the Provider adapter. |
 
-The curated model IDs are:
+The static, provider-neutral model hierarchy is the sole model directory:
 
-- `deepseek/deepseek-v4-flash`
-- `deepseek/deepseek-v4-pro`
-- `kimi/kimi-k2.6`
-- `kimi/kimi-k2.5`
+```text
+ModelCatalog -> ProviderDescriptor -> ModelProfile
+```
 
-All four current profiles advertise a 262,144-token context window plus tool
-calling and reasoning. Curating the list lets the Core bind known capabilities
-and context limits instead of trusting an arbitrary model string. `/model`
-updates both the selected Thread and this user default.
+| Provider | `credential_id` | Supported regions (default) | Model | Context | Tools | Reasoning | Provider default |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `deepseek` | `deepseek` | none | `deepseek/deepseek-v4-flash` | 262,144 | yes | yes | yes |
+| `deepseek` | `deepseek` | none | `deepseek/deepseek-v4-pro` | 262,144 | yes | yes | no |
+| `kimi` | `kimi` | `cn`, `global` (`cn`) | `kimi/kimi-k2.6` | 262,144 | yes | yes | yes |
+| `kimi` | `kimi` | `cn`, `global` (`cn`) | `kimi/kimi-k2.5` | 262,144 | yes | yes | no |
+
+Curating the directory lets Core bind known capabilities and context limits
+instead of trusting an arbitrary model string. Configuration does not build or
+extend the catalog: it records `providers.default_model` and the active Kimi
+region, while Application combines those choices with current credential
+presence and the selected Thread. `/model` updates both the selected Thread and
+the user default. The Provider-local catalog default is used only when exactly
+one Provider has a configured credential and no explicit default exists.
 
 If no default is set, Awesome selects the sole configured Provider's default
 model. If zero or multiple Providers are configured, a model must be chosen
@@ -91,15 +110,18 @@ before an Agent Turn can start.
 
 ### `credentials`
 
-Each service accepts `environment`, `awesome`, or an omitted/`null` selection:
+The static credential catalog defines five services:
 
 | Service | Environment variable | `awesome` storage |
 | --- | --- | --- |
 | DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_API_KEY` in `<AWESOME_HOME>/.env` |
 | Kimi | `MOONSHOT_API_KEY` | `MOONSHOT_API_KEY` in `<AWESOME_HOME>/.env` |
 | Mem0 | `MEM0_API_KEY` | `MEM0_API_KEY` in `<AWESOME_HOME>/.env` |
+| Tavily | `TAVILY_API_KEY` | Not supported; this selection must be `environment` |
+| Web proxy | `AWESOME_WEB_PROXY_URL` | `AWESOME_WEB_PROXY_URL` in `<AWESOME_HOME>/.env` |
 
-With no explicit selection, a non-empty process environment value wins; the
+DeepSeek, Kimi, Mem0, and Web proxy accept `environment`, `awesome`, or an
+omitted/`null` selection. With no explicit selection, a non-empty process environment value wins; the
 Awesome credential file is used only when the environment value is absent. An
 explicit source never falls back to the other source. For example, selecting
 `environment` while the variable is missing reports that Provider as not
@@ -112,8 +134,9 @@ file atomically, masks secret input, and never exposes its value through
 before normal saving (with an explicit save-unverified path for reachability
 failure). Mem0 keys receive only local format/storage validation and are saved
 without a remote check; rejection appears when the cloud adapter is enabled or
-called. See [files and state](files-and-state.md) for ownership and backup
-guidance.
+called. `/auth` currently manages DeepSeek, Kimi, and Mem0; it does not edit the
+Tavily or Web proxy entries. See [files and state](files-and-state.md) for
+ownership and backup guidance.
 
 ### `budgets`
 
@@ -125,11 +148,34 @@ guidance.
 | `compressions` | 2 | 0–10 | Context compression passes in one Turn |
 | `active_execution_seconds` | 1,800 | 1–21,600 | Active foreground execution time for one Turn |
 | `total_context_tokens` | 262,144 | any positive integer | Requested total context budget before the model profile and input allocation reduce it |
+| `web_requests` | 8 | 0–8 | Maximum Web requests reserved for one Turn; a workspace may only lower it |
 
 A budget is a circuit breaker, not a target. A Turn may finish far below it.
 `total_context_tokens` is capped again by the selected model profile; the Context
 Builder reserves output/headroom before allocating effective input. Provider
 retries do not make non-idempotent tools repeat.
+
+### `web`
+
+| Field | Type and values | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `false` | User-owned Web enablement. Workspace configuration cannot turn it on. |
+| `provider` | `tavily` | `tavily` | Static Web Provider selection, separate from model Providers. |
+| `blocked_domains` | up to 128 unique normalized ASCII hostnames | `[]` | Domains sent as Tavily `exclude_domains`; the Workspace may add restrictions but cannot enable Web. |
+
+Web Provider selection and catalog concerns remain in this separate Web/config
+boundary. Tavily is never a model Provider and does not appear in
+`ModelCatalog` or model selection.
+
+When `enabled` is true and the Tavily credential and explicit proxy are valid,
+runtime construction registers `web_search` and `web_fetch`; otherwise `/web
+status` reports a bounded diagnostic and both tools are absent. Enablement never grants
+`network.read`: first use still asks in every permission mode. `/web on|off`
+performs the supported atomic user-config write and runtime rebuild, while
+`/web revoke` clears the active Thread grant. The HTTP client uses
+`trust_env=False`; ambient proxy variables are ignored. Search queries and
+requested Fetch URLs are sent to Tavily; Fetch extraction happens in Tavily's
+cloud rather than through a connection from Awesome Core to the target URL.
 
 ### `memory`
 
@@ -173,9 +219,9 @@ not have this field. See [MCP](../extensions/mcp.md).
 
 ## Workspace configuration
 
-A workspace can only make budgets stricter, disable Skills, and declare MCP
-servers. It cannot choose credentials, enable Memory, choose a model, or raise a
-user safety limit.
+A workspace can only make budgets stricter, add Web domain blocks, disable
+Skills, and declare MCP servers. It cannot choose credentials, enable Web or
+Memory, choose a model, or raise a user safety limit.
 
 ```yaml
 version: 1
@@ -187,6 +233,11 @@ budgets:
   compressions: 1
   active_execution_seconds: 900
   total_context_tokens: 131072
+  web_requests: 3
+
+web:
+  blocked_domains:
+    - internal.example
 
 skills:
   disabled:
@@ -207,19 +258,13 @@ field independently. That monotonic rule is the key design invariant: content
 from a trusted repository may reduce resource authority, but never enlarge the
 local user's authority.
 
-The file is not opened until the user trusts the workspace. Trust does not turn
-MCP declarations on; each workspace server still requires `/mcp enable <id>`,
-and changing its declaration invalidates that approval.
-
-> **Current filesystem limitation:** the workspace-config loader is trust-gated
-> but currently checks `is_file()` and then reads the path normally. It has no
-> dedicated size bound, no no-follow open, and no post-open identity comparison.
-> A trusted repository can therefore point `.awesome/config.yaml` through a
-> link/reparse boundary, replace it between check and read, or supply an
-> excessively large YAML document. Treat workspace trust as authority to read
-> this file, avoid linked configuration, and use an external sandbox for a
-> hostile repository. This loader should be hardened independently; the
-> stronger `AGENTS.md` and Workspace Skill guarantees do not apply here.
+The file is not opened until the user trusts the workspace. Its read is capped
+at 1 MiB, requires strict UTF-8 text without NUL, pins and rechecks the workspace
+and path identities, and rejects links, reparse points, hard links, and
+replacement during the read. An unsafe or oversized file invalidates workspace
+configuration rather than being followed or truncated. Trust does not turn MCP
+declarations on; each workspace server still requires `/mcp enable <id>`, and
+changing its declaration invalidates that approval.
 
 ## Runtime precedence
 
@@ -229,8 +274,8 @@ overwriting another:
 ```text
 User YAML --------------------------> Application configuration
 Trusted workspace YAML ------------> Application configuration
-  (minimum budgets, disabled union,             |
-   and MCP declarations)                        |
+  (minimum budgets, blocked-domain union,       |
+   disabled union, and MCP declarations)        |
                                                 v
 Persisted Thread choices -----------------> Turn configuration
 AWESOME_MODEL at new-Thread creation ------>    |
@@ -265,6 +310,8 @@ an internal resolver seam from becoming an accidental compatibility promise.
 | `DEEPSEEK_API_KEY` | DeepSeek credential when its selected source is `environment`. |
 | `MOONSHOT_API_KEY` | Kimi credential when its selected source is `environment`. |
 | `MEM0_API_KEY` | Mem0 credential when its selected source is `environment`. |
+| `TAVILY_API_KEY` | Tavily credential; its source is always `environment`. |
+| `AWESOME_WEB_PROXY_URL` | Explicit Web proxy when `credentials.web_proxy` resolves to `environment`. |
 
 `AWESOME_HOME` accepts a platform path and expands the home marker supported by
 the host runtime. An empty value behaves as unset. Changing it selects a
@@ -291,7 +338,7 @@ appropriate. Common failures are:
 | Symptom | Cause | Corrective action |
 | --- | --- | --- |
 | `duplicate_config_key` | A YAML mapping repeats a field. | Remove the duplicate; do not rely on last-key-wins behavior. |
-| `configuration_invalid` | Unknown field, invalid enum/model/name, bad type, or out-of-range budget. | Compare the document with the tables above. |
+| `configuration_invalid` | Unknown field, invalid enum/model/name, non-native scalar type, out-of-range budget, or unsafe/oversized workspace config. | Compare the document with the tables above and keep `.awesome/config.yaml` a plain UTF-8 file no larger than 1 MiB. |
 | `provider_not_configured` | The selected model's explicitly selected credential source is unavailable. | Use `/auth`, set the selected environment variable, or change `credentials`. |
 | `model_not_configured` | No model can be selected unambiguously. | Use `/model` or set `providers.default_model`. |
 | workspace settings appear ignored | Workspace has not been trusted, or the file is not at `.awesome/config.yaml`. | Complete the trust interaction and restart. |

@@ -11,18 +11,18 @@ Awesome 使用两份经过 schema 验证的 YAML 文档、少量进程环境变�
 | Workspace 配置 | `<workspace>/.awesome/config.yaml` | Repository | 仅在 Workspace 获得信任后 | 否 |
 | Thread 状态 | `application.db` | Awesome | 选择 Thread 和每个 Turn 时 | 否 |
 
-两份 YAML 文档都使用 schema 版本 `1`。未知字段、重复 mapping key、无法转换为所声明标量
-类型的值以及超出范围的值，都会使整份文档无效。结构是严格的，但当前启用了 Pydantic
-标量强制转换：例如，加引号的 `"32"` 可能被接受为整数，加引号的 `"false"` 可能被接受为
-布尔值。维护配置时不要依赖这种强制转换；请使用原生 YAML 标量类型。完全严格的标量验证
-是一个已知的运行时加固缺口。
+User 配置使用 schema 版本 `2`；Workspace 配置仍使用版本 `1`。读取 User version-1 文档时
+只在内存中升级，第一次受支持的配置写操作会再将其原子写为 version 2。未知字段、重复
+mapping key、错误的原生 YAML 标量类型以及超出范围的值，都会使整份文档无效。验证不会转换加引号的数字或布尔值：
+应使用 `32` 而不是 `"32"`，使用 `false` 而不是 `"false"`。Enum 值仍使用文档规定的字符串，
+list 仍使用 YAML sequence 表示；只有明确允许的字段才能使用 `null`。
 
 ## User 配置
 
 以下是一份完整、有效的文档。显示默认值的所有字段都可以省略。
 
 ```yaml
-version: 1
+version: 2
 
 providers:
   default_model: deepseek/deepseek-v4-flash
@@ -32,6 +32,8 @@ credentials:
   deepseek: environment
   kimi: awesome
   mem0: awesome
+  tavily: environment
+  web_proxy: null
 
 budgets:
   model_calls: 32
@@ -40,6 +42,12 @@ budgets:
   compressions: 2
   active_execution_seconds: 1800
   total_context_tokens: 262144
+  web_requests: 8
+
+web:
+  enabled: false
+  provider: tavily
+  blocked_domains: []
 
 memory:
   local_file_memory: false
@@ -69,31 +77,41 @@ mcp_servers:
 | `default_model` | 精选 model ID 或 `null` | `null` | 没有提供启动 model 时，新 Thread 的初始 model。 |
 | `kimi_region` | `cn` 或 `global` | `cn` | Provider adapter 使用的 Kimi API region。 |
 
-精选 model ID 为：
+静态、提供商中立的模型层级是唯一模型目录：
 
-- `deepseek/deepseek-v4-flash`
-- `deepseek/deepseek-v4-pro`
-- `kimi/kimi-k2.6`
-- `kimi/kimi-k2.5`
+```text
+ModelCatalog -> ProviderDescriptor -> ModelProfile
+```
 
-当前四个 profile 都宣告 262,144-token context window，以及 tool calling 和 reasoning 能力。
-精选列表使 Core 能绑定已知 capability 和 context limit，而不必信任任意 model 字符串。
-`/model` 会同时更新选中的 Thread 和该 User 默认值。
+| Provider | `credential_id` | 支持的 region（默认） | Model | Context | Tool | Reasoning | Provider 默认项 |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `deepseek` | `deepseek` | 无 | `deepseek/deepseek-v4-flash` | 262,144 | 是 | 是 | 是 |
+| `deepseek` | `deepseek` | 无 | `deepseek/deepseek-v4-pro` | 262,144 | 是 | 是 | 否 |
+| `kimi` | `kimi` | `cn`、`global`（`cn`） | `kimi/kimi-k2.6` | 262,144 | 是 | 是 | 是 |
+| `kimi` | `kimi` | `cn`、`global`（`cn`） | `kimi/kimi-k2.5` | 262,144 | 是 | 是 | 否 |
+
+策划该目录使 Core 能绑定已知 capability 和 context limit，而不必信任任意 model 字符串。
+Configuration 不构建或扩展 catalog：它记录 `providers.default_model` 和活动 Kimi region；
+Application 再把这些选择与当前 credential 存在性及已选 Thread 组合起来。`/model` 会同时更新
+选中的 Thread 和 User 默认值。只有恰好一个 Provider 的 credential 已配置且没有显式默认项
+时，才使用 Provider 内 catalog 默认项。
 
 如果没有设置默认值，Awesome 会选择唯一已配置 Provider 的默认 model。如果配置了零个或
 多个 Provider，就必须在 Agent Turn 开始前选择 model。
 
 ### `credentials`
 
-每项 service 接受 `environment`、`awesome` 或省略/`null` 选择：
+静态 credential catalog 定义五项 service：
 
 | Service | 环境变量 | `awesome` 存储 |
 | --- | --- | --- |
 | DeepSeek | `DEEPSEEK_API_KEY` | `<AWESOME_HOME>/.env` 中的 `DEEPSEEK_API_KEY` |
 | Kimi | `MOONSHOT_API_KEY` | `<AWESOME_HOME>/.env` 中的 `MOONSHOT_API_KEY` |
 | Mem0 | `MEM0_API_KEY` | `<AWESOME_HOME>/.env` 中的 `MEM0_API_KEY` |
+| Tavily | `TAVILY_API_KEY` | 不支持；该选择必须是 `environment` |
+| Web proxy | `AWESOME_WEB_PROXY_URL` | `<AWESOME_HOME>/.env` 中的 `AWESOME_WEB_PROXY_URL` |
 
-没有显式选择时，非空的进程环境值优先；只有环境值不存在时，才使用 Awesome 凭据文件。
+DeepSeek、Kimi、Mem0 和 Web proxy 接受 `environment`、`awesome` 或省略/`null`。没有显式选择时，非空的进程环境值优先；只有环境值不存在时，才使用 Awesome 凭据文件。
 显式来源绝不会回退到另一个来源。例如，选择 `environment` 而变量缺失时，即使
 `<AWESOME_HOME>/.env` 中有 key，也会报告该 Provider 未配置。这让 provenance 可见，并
 防止 operator 在不知情的情况下使用陈旧的本地秘密。
@@ -102,7 +120,7 @@ mcp_servers:
 秘密输入，并且绝不会通过 `/config` 或 protocol 状态暴露其值。DeepSeek 和 Kimi key 在
 正常保存前会经过远程验证（如果只是不可达，则有明确的 save-unverified 路径）。Mem0 key
 只接受本地格式/存储验证，不经远程检查就会保存；只有启用或调用 cloud adapter 时才会出现
-拒绝。所有权和备份指导见[文件与状态](files-and-state.zh-CN.md)。
+拒绝。`/auth` 当前管理 DeepSeek、Kimi 和 Mem0，不编辑 Tavily 或 Web proxy 条目。所有权和备份指导见[文件与状态](files-and-state.zh-CN.md)。
 
 ### `budgets`
 
@@ -114,10 +132,30 @@ mcp_servers:
 | `compressions` | 2 | 0–10 | 一个 Turn 中的上下文 compression pass |
 | `active_execution_seconds` | 1,800 | 1–21,600 | 一个 Turn 的活动前台执行时间 |
 | `total_context_tokens` | 262,144 | 任意正整数 | 在 model profile 和 input allocation 进一步降低前，请求的总上下文预算 |
+| `web_requests` | 8 | 0–8 | 一个 Turn 预留的 Web 请求上限；Workspace 只能降低它 |
 
 预算是 circuit breaker，不是目标。Turn 可能在远低于预算时完成。`total_context_tokens` 还会
 再次受已选 model profile 限制；Context Builder 会先预留 output/headroom，再分配有效输入。
 Provider 重试不会导致非幂等工具重复执行。
+
+### `web`
+
+| 字段 | 类型和值 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `false` | User 拥有的 Web enablement；Workspace 配置不能开启它。 |
+| `provider` | `tavily` | `tavily` | 静态 Web Provider 选择，与 model Provider 分离。 |
+| `blocked_domains` | 最多 128 个唯一、规范化的 ASCII hostname | `[]` | 作为 Tavily `exclude_domains` 发送；Workspace 可增加限制，但不能启用 Web。 |
+
+Web Provider selection 和 catalog concern 留在这个独立的 Web/config 边界。Tavily 绝不是
+model Provider，也不会进入 `ModelCatalog` 或 model selection。
+
+`enabled` 为 true 且 Tavily credential 与显式 proxy 有效时，runtime construction 会注册
+`web_search` 与 `web_fetch`；否则 `/web status` 会报告有界 diagnostic，且两个工具都不存在。
+Enablement 绝不
+grant `network.read`：在每种 permission mode 下首次使用仍会 ASK。`/web on|off` 执行受支持的
+原子 user-config 写入与 runtime rebuild，`/web revoke` 清除当前 Thread grant。HTTP client
+使用 `trust_env=False`，忽略环境 proxy 变量。Search query 与请求的 Fetch URL 会发送给
+Tavily；Fetch extraction 在 Tavily 云端执行，Awesome Core 不会连接目标 URL。
 
 ### `memory`
 
@@ -156,8 +194,8 @@ User MCP 声明由本地拥有，因此它们的 `enabled` bit 位于 User YAML�
 
 ## Workspace 配置
 
-Workspace 只能使预算更严格、禁用 Skills 和声明 MCP 服务器。它不能选择凭据、启用 Memory、
-选择 model 或提高 User 安全限制。
+Workspace 只能使预算更严格、增加 Web domain 阻断、禁用 Skills 和声明 MCP 服务器。
+它不能选择凭据、启用 Web 或 Memory、选择 model 或提高 User 安全限制。
 
 ```yaml
 version: 1
@@ -169,6 +207,11 @@ budgets:
   compressions: 1
   active_execution_seconds: 900
   total_context_tokens: 131072
+  web_requests: 3
+
+web:
+  blocked_domains:
+    - internal.example
 
 skills:
   disabled:
@@ -187,15 +230,11 @@ mcp_servers:
 独立取 `min(user value, workspace value)`。这条单调规则是关键设计不变量：来自受信任仓库
 的内容可以降低资源权限，但绝不能扩大本地用户权限。
 
-在用户信任 Workspace 之前，不会打开该文件。信任并不会开启 MCP 声明；每个 Workspace
-服务器仍然需要 `/mcp enable <id>`，修改其声明也会使该审批失效。
-
-> **当前文件系统限制：** Workspace config loader 受信任门控制，但当前只检查
-> `is_file()`，然后按普通方式读取路径。它没有专门的大小上限、no-follow open 或打开后
-> 身份比较。因此，受信任仓库可以让 `.awesome/config.yaml` 穿过 link/reparse 边界，在
-> 检查和读取之间替换它，或提供过大的 YAML 文档。请把 Workspace 信任视为读取该文件的
-> 权限，避免链接配置，并对恶意仓库使用外部沙箱。这个 loader 应单独加固；更强的
-> `AGENTS.md` 和 Workspace Skill 保证不适用于此处。
+在用户信任 Workspace 之前，不会打开该文件。读取上限为 1 MiB，只接受不含 NUL 的严格
+UTF-8 文本；读取器会固定并重新检查 Workspace 与路径身份，并拒绝 link、reparse point、
+hard link 和读取期间的替换。不安全或超限的文件会使 Workspace 配置无效，而不会被跟随或
+截断。信任并不会开启 MCP 声明；每个 Workspace 服务器仍然需要 `/mcp enable <id>`，修改
+其声明也会使该审批失效。
 
 ## 运行时优先级
 
@@ -204,8 +243,8 @@ mcp_servers:
 ```text
 User YAML --------------------------> Application configuration
 Trusted workspace YAML ------------> Application configuration
-  (minimum budgets, disabled union,             |
-   and MCP declarations)                        |
+  (minimum budgets, blocked-domain union,       |
+   disabled union, and MCP declarations)        |
                                                 v
 Persisted Thread choices -----------------> Turn configuration
 AWESOME_MODEL at new-Thread creation ------>    |
@@ -237,6 +276,8 @@ environment 解析实际 Turn。因此在这个 release 中，`AWESOME_THINKING`
 | `DEEPSEEK_API_KEY` | 所选来源为 `environment` 时使用的 DeepSeek 凭据。 |
 | `MOONSHOT_API_KEY` | 所选来源为 `environment` 时使用的 Kimi 凭据。 |
 | `MEM0_API_KEY` | 所选来源为 `environment` 时使用的 Mem0 凭据。 |
+| `TAVILY_API_KEY` | Tavily 凭据；其来源始终是 `environment`。 |
+| `AWESOME_WEB_PROXY_URL` | `credentials.web_proxy` 解析为 `environment` 时使用的显式 Web proxy。 |
 
 `AWESOME_HOME` 接受平台路径，并展开 host runtime 支持的 home marker。空值等同于未设置。
 更改它会选择一整套不同的状态/配置 universe；它不是只迁移一个 database 的安全方式。
@@ -256,7 +297,7 @@ Provider 时使用 `/doctor`。常见失败包括：
 | 症状 | 原因 | 修正操作 |
 | --- | --- | --- |
 | `duplicate_config_key` | YAML mapping 重复了一个字段。 | 删除重复项；不要依赖 last-key-wins 行为。 |
-| `configuration_invalid` | 未知字段、无效 enum/model/name、错误类型或超范围预算。 | 将文档与上表比较。 |
+| `configuration_invalid` | 未知字段、无效 enum/model/name、非原生标量类型、超范围预算，或不安全/超限的 Workspace 配置。 | 将文档与上表比较，并确保 `.awesome/config.yaml` 是不超过 1 MiB 的普通 UTF-8 文件。 |
 | `provider_not_configured` | 所选 model 明确指定的凭据来源不可用。 | 使用 `/auth`、设置选中的环境变量，或更改 `credentials`。 |
 | `model_not_configured` | 无法无歧义地选择 model。 | 使用 `/model` 或设置 `providers.default_model`。 |
 | Workspace 设置看似被忽略 | Workspace 尚未获得信任，或文件不在 `.awesome/config.yaml`。 | 完成信任交互并重启。 |

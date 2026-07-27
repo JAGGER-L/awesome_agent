@@ -34,7 +34,7 @@ Context 代码不能导入 Application 或提供商实现。Agent 代码不能�
 
 1. 产品指令；
 2. 工作区根指令；
-3. 已选择的 Skill；
+3. 有界自动 Skill catalog 或一个已选择的 Skill；
 4. 用户 memory；
 5. 工作区 memory；
 6. Mem0 recall；
@@ -47,10 +47,11 @@ Context 代码不能导入 Application 或提供商实现。Agent 代码不能�
 顺序具有语义。指令必须先于对话；summary 不得改变直接命令的顺序；当前输入必须是普通
 基础来源中的最后一个。因此，改变 enum 顺序就会改变提示词行为与冻结 manifest 的校验。
 
-以下来源一经选中即为 mandatory：产品和模型身份、工作区指令、已选择的 Skill、显式
-路径、当前输入，以及未闭合的工具链。系统绝不会为了让提示词容纳它们而静默截断。
-如果 mandatory 来源加预留上下文超过生效输入上限，Turn 会以 context overflow 失败，
-而不会改变指令含义或丢弃工具 observation。
+以下来源一经选中即为 mandatory：产品和模型身份、工作区指令、有界自动 Skill catalog
+或已选择的 Skill、显式路径、当前输入，以及未闭合的工具链。系统绝不会为了让提示词容纳
+它们而静默截断；Skill catalog 在成为 mandatory 前已受边界约束。如果 mandatory 来源加
+预留上下文超过生效输入上限，Turn 会以 context overflow 失败，而不会改变指令含义或
+丢弃工具 observation。
 
 ## 预算计算
 
@@ -75,6 +76,8 @@ Context 代码不能导入 Application 或提供商实现。Agent 代码不能�
 
 每个保留的来源都会生成一个 `ContextManifestItem`，其中包含 kind、source ID、顺序、
 估算 token、截断状态、SHA-256 内容哈希，以及它所覆盖的 transcript 序列范围（如有）。
+Skill 来源还携带严格的版本化 package identity tuple 与说明性 `allowed-tools` 值。该 tuple
+会持久化到 Turn 和 checkpoint，并在压缩后保留。
 
 只有在语义允许时才按内容去重：
 
@@ -124,14 +127,58 @@ provider_id
 stream(ModelRequest) -> async ModelStreamEvent sequence
 ```
 
+frozen、提供商中立的模型目录只有一种形状和一个实例：
+
+```text
+MODEL_CATALOG
+  -> ProviderDescriptor
+       -> ModelProfile
+```
+
+它是受支持模型 identity、capability、context limit、Provider 内默认项、受支持 region 与
+credential 关联的唯一来源。当前目录恰好包含两个 Provider 和四个 model profile：
+
+| Provider | `credential_id` | Region（默认） | Model | Context | Tool | Reasoning | Provider 默认项 |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `deepseek` | `deepseek` | 无 | `deepseek/deepseek-v4-flash` | 262,144 | 是 | 是 | 是 |
+| `deepseek` | `deepseek` | 无 | `deepseek/deepseek-v4-pro` | 262,144 | 是 | 是 | 否 |
+| `kimi` | `kimi` | `cn`、`global`（`cn`） | `kimi/kimi-k2.6` | 262,144 | 是 | 是 | 是 |
+| `kimi` | `kimi` | `cn`、`global`（`cn`） | `kimi/kimi-k2.5` | 262,144 | 是 | 是 | 否 |
+
+Catalog 不表示 credential 已存在，也不选择活动 model 或 region。Credential 来源与存在性、
+`providers.default_model`、Thread 选择和已配置的 Kimi region 仍属于动态的
+Application/configuration state。Catalog 默认项只在恰好配置一个 model Provider 时作为
+确定性 fallback。
+
 具体 DeepSeek 与 Kimi 适配器位于 `providers/`，只由 Application 组装层实例化。
 它们将 SDK payload 转换为中立事件并规范化错误；Agent 和 Context 绝不导入 OpenAI
 client 或提供商适配器。
+
+Provider 资源组装也保留在 `providers/`。一个 managed factory 会捕获 candidate 配置，并为
+每个已配置 provider 最多创建一个可复用的异步 SDK client。`RuntimeResources` 按 provider
+和 model 缓存中立的 `ModelGateway`，因此多个模型可以共享 provider client，而无需读取可变
+Application 状态。Candidate retirement 会关闭内部持有的 client；注入的 gateway factory
+只借用。Credential validation 每次尝试使用独立 client，并在成功、错误、超时或取消时于
+有界清理期限内关闭。
 
 `ModelGateway` 冻结一次 catalog 选择，并强制执行流行为。它只会重试在任何可见输出或
 完成之前发生的可重试失败，会报告重试事件、保留取消，并要求恰好一个匹配的、已完成的
 模型 Turn。一旦文本、reasoning 或工具调用已经可见，透明重放会复制可观察工作，因此
 被禁止。
+
+Catalog 只描述受支持模型，不构造 client。具体 factory 与 adapter dispatch 仍位于
+`providers/`，显式保留官方 endpoint `https://api.deepseek.com`、
+`https://api.moonshot.cn/v1` 与 `https://api.moonshot.ai/v1`。这不是 provider registry 或
+DI container，也没有为了抽象而虚构第三个 model Provider。Web Provider selection 和
+catalog concern 留在独立的 Web/configuration 边界；Tavily Web search/fetch capability
+绝不会进入 `ModelCatalog`。
+
+Application 通过 Protocol v4 `ApplicationState` 发布 catalog，并与动态的
+`provider_credentials` 并列。TUI 会校验这些字段，并从中推导 startup 与 credential setup，
+不复制 model 或 Provider enum。Application 从同一 catalog 生成 `/model` 的
+`CommandSelection` option，TUI 只做通用渲染。在 Python 边界，依赖方向是
+`config -> modeling`；`modeling/` 不再导入 configuration。Application 将两者与具体
+Provider factory 组合起来。
 
 策划后的 catalog 是封闭的，不接受任意 provider/model 字符串。这会限制灵活性，但能让
 配置、能力、上下文上限、身份报告和测试就受支持的产品达成一致。
@@ -139,7 +186,8 @@ client 或提供商适配器。
 ## Skills
 
 Skills 提供有界的指令包。发现优先级依次为 bundled、user、workspace；后出现的同名来源
-会遮蔽先前 descriptor，并产生诊断。禁用的名称会被排除。
+会遮蔽先前 descriptor，并产生诊断。禁用的名称会被排除。每个有效 descriptor 都会获得
+版本化 identity，由规范化 metadata、已固定的 `SKILL.md` fingerprint 与内容派生。
 
 Workspace Skills 的路径由受信项目控制，因此处理更严格：
 
@@ -153,18 +201,51 @@ workspace anchor
 
 每个组件都必须是普通目录或文件，不能是 symlink、junction 或其他 reparse point。
 发现过程会存储 anchor、root、package 身份以及初始 `SKILL.md` fingerprint。加载和资源
-读取会重新打开固定的目录树，校验这些身份与包含关系，再进行有界 UTF-8 读取。因此，
-发现后替换 package 会 fail closed。一个无效 package 只产生诊断，不会抑制有效 package。
+读取会重新打开固定的目录树，校验这些身份与包含关系，再进行有界 UTF-8 读取。Bundled
+和 User package 固定 package 与 `SKILL.md` identity；Workspace package 还固定完整的受信任
+anchor 链。因此，发现后替换 package 会 fail closed。一个无效 package 只产生诊断，不会
+抑制有效 package。
 
 发现时 fingerprint 适用于 `SKILL.md`，而非所有资源。一次资源遍历会证明其组件是普通、
 受包含的，并在该次受检打开的前后保持稳定；但它不会把普通嵌套目录或资源内容与发现时
 身份比较。因此，在资源读取开始前已经安全完成的替换可以被读取到。
 
-Bundled 和 user Skills 保留原有、更宽松的来源行为。严格 reparse 策略被有意限制在
-workspace 内容，以免意外重新定义用户管理的扩展布局。
+本地 User 包管理属于 Application use case，不是 Agent 工具，也不是第二套发现实现：
 
-选中的 Skill 会成为 mandatory system context。它的 `allowed-tools` metadata 描述预期
-兼容性，但绝不会授予权限或绕过共享 Tool Executor。
+```text
+awesome skills CLI
+  -> argument parsing + optional TTY confirmation
+  -> private Protocol v4 skill.list / skill.install / skill.remove
+  -> Application SkillManagementService
+  -> one blocking worker operation
+  -> SkillPackageManager validation + recoverable package transaction
+  -> <AWESOME_HOME>/skills
+```
+
+包 RPC 只在 Application 恰好处于 `UNINITIALIZED` 时准入；一个由 Application 持有的
+pre-initialize guard 使三者彼此互斥，也与 `initialize` 互斥。RPC 本身不会构建
+`WorkspaceRuntime`、Thread、Turn、graph、model 或 Tool Executor，并且不会改变 phase。Node
+launcher 只拥有命令语法、稳定输出和移除确认；manifest、archive、path、size、identity、
+locking 与 recovery 规则全部只由 Core 拥有。官方 CLI 收到一个有界 product result 后会关闭
+私有 Core。其他私有 client 可以在同一个仍未初始化的 Core 上执行 mutation，随后调用
+initialize；discovery 会看到变更后的包。Session 一旦初始化，其 catalog 就保持不可变，绝不
+hot-update。
+
+全新安装通过一次同目录 no-replace rename，把完整校验后的 stage 发布到不存在的 target。
+替换是两次正向 rename（target 到 quarantine，再由 stage 到 target）组成的可恢复序列，不是
+一次原子替换。移除同样先 quarantine target，再执行已发布后的清理。Marker 驱动发布前回滚
+与发布后向前清理。调用方取消时会等待 owned worker 收敛，不设 wall-clock 清理 deadline，
+随后重新抛出取消。
+
+`auto` 会冻结最多 64 个 identity 的确定性 catalog，并暴露 `load_skill` 与
+`read_skill_resource`；它不会执行 Skill。`off` 不冻结 Skill 来源，也不暴露两个工具。
+具名模式会 eagerly 冻结正文和 identity 作为 mandatory system context，并且只为该 package
+暴露 `read_skill_resource`。
+
+两个工具都使用 `context.read`。Registration 自有的硬准入会在 permission policy 之前把
+操作和 package identity 与冻结 Turn scope 匹配，handler 在返回内容前再次检查 identity。
+因此，即使重建后的 Runtime 发现了不同 package，恢复仍会保留 checkpoint 的 authority。
+`allowed-tools` 只描述预期兼容性，绝不会授予权限或绕过共享 Tool Executor。
 
 ## 本地与云端 Memory
 
@@ -176,6 +257,28 @@ Mem0 Cloud 是可选适配器，也是目前唯一的外部 memory 提供商。R
 身份范围约束，会与本地 memory 去重，并作为不受信上下文表示。云端失败会成为诊断，
 不会导致整个 Turn 配置无效。回答后的 distillation 使用独立策略，绝不会默认上传原始
 transcript。
+
+`memory/finalization.py` 拥有 `Mem0PostAnswerFinalizer`，即 Agent 通用
+`PostAnswerFinalizer` 端口在 Memory 边界内的实现。Application 只会为已启用且完整的 Mem0
+session 装配它；否则注入 Agent 的 disabled 实现。该 adapter 在 Memory 边界内转换 Mem0
+identity、distillation status 与 `Mem0Diagnostic`。它返回原回答、distiller 的 model-call/
+usage 计费，以及通用 `PostAnswerDiagnostic`：保留原 code，message 固定为
+`Optional memory operation did not complete.`。构建该 result 后，它会尝试投影已启用的
+Memory status。Status 投影失败时会保留为 `memory_status_projection_failed`，固定 message
+为 `Optional memory status projection failed.`，回答和计费不会因此丢失。Status 投影取消
+不会转换为 diagnostic；原始取消会传播到 Agent 边界。Agent 看不到任何 Mem0 特定类型。
+
+通用 request 可以携带有序工具 citations，但当前 Mem0 实现不会消费它们、重写 citation
+marker 或改变回答。无效输出、预算超限和意外失败会成为 Agent warning，同时保留已经生成
+的回答。逃出 adapter 的取消会保留此前 checkpoint 中的回答，不触发另一条 Agent warning，
+而是立即重新抛出；详见
+[Application 与 Agent](application-and-agent.zh-CN.md#回答后-finalizer-端口)。
+
+Mem0 SDK 当前会在异步 client 构造函数中执行同步 credential validation。Awesome 在支持
+取消的 worker 中运行该构造函数，避免阻塞事件循环，并且只把内部创建的 client 注册到
+runtime 退出栈；注入 client 只借用。如果 SDK 构造函数超过有界取消清理期限，Python 无法
+停止该 worker，因此 Awesome 会及时返回取消、避免无限等待，并通过 late-completion 清理
+hook 关闭它最终生成的 client。
 
 Memory 工具有自己的 memory policy。启用 Memory 不会授予工作区、shell 或 MCP 能力。
 
@@ -260,7 +363,7 @@ Turn 中重连或重放。取消会执行有界连接清理，并继续传播取
 - 模型：`modeling/`、`providers/deepseek.py`、`providers/kimi.py`
 - Skills：`extensions/skills/discovery.py`、`loader.py`
 - MCP：`extensions/mcp/catalog.py`、`manager.py`、`adapter.py`、`stdio.py`
-- Memory：`memory/`
+- Memory：`memory/finalization.py`、`memory/`
 - 测试：`tests/unit/context/`、`tests/integration/test_context_pipeline.py`、
   `tests/integration/test_skills_mcp.py`、
   `tests/structural/test_context_architecture.py`、

@@ -37,7 +37,11 @@ def test_bundled_skill_bodies_are_valid_bounded_and_modern() -> None:
     loader = SkillLoader(catalog)
 
     for name in EXPECTED:
-        loaded = loader.load(name, token_limit=5_000)
+        loaded = loader.load(
+            name,
+            expected_identity=loader.identity_snapshot(name).identity,
+            token_limit=5_000,
+        )
         skill_text = loaded.body
         assert loaded.truncated is False
         assert loaded.estimated_tokens <= 5_000

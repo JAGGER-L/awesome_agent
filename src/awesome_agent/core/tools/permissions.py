@@ -5,10 +5,12 @@ from enum import StrEnum
 
 
 class ToolCapability(StrEnum):
+    CONTEXT_READ = "context.read"
     WORKSPACE_READ = "workspace.read"
     WORKSPACE_WRITE = "workspace.write"
     WORKSPACE_DELETE = "workspace.delete"
     SHELL_EXECUTE = "shell.execute"
+    NETWORK_READ = "network.read"
 
 
 class PermissionMode(StrEnum):
@@ -26,6 +28,7 @@ class PolicyAction(StrEnum):
 class ToolApprovalDecision(StrEnum):
     ALLOW_ONCE = "allow_once"
     ALLOW_THREAD_WRITES = "allow_thread_writes"
+    ALLOW_THREAD_NETWORK = "allow_thread_network"
     DENY = "deny"
 
 
@@ -42,9 +45,34 @@ class PermissionSession:
     mode: PermissionMode = PermissionMode.REQUEST_APPROVAL
     granted_capabilities: set[str] = field(default_factory=set)
     generation: int = 0
+    _thread_granted_capabilities: set[tuple[str, str]] = field(
+        default_factory=set,
+        init=False,
+        repr=False,
+    )
 
     def grant_thread_writes(self) -> None:
         self.granted_capabilities.add(ToolCapability.WORKSPACE_WRITE.value)
+
+    @property
+    def thread_granted_capabilities(self) -> frozenset[tuple[str, str]]:
+        return frozenset(self._thread_granted_capabilities)
+
+    def grant_thread_network(self, thread_id: str) -> None:
+        if not thread_id:
+            raise ValueError("thread_id must not be empty")
+        self._thread_granted_capabilities.add(
+            (thread_id, ToolCapability.NETWORK_READ.value)
+        )
+
+    def revoke_thread_network(self, thread_id: str | None = None) -> None:
+        capability = ToolCapability.NETWORK_READ.value
+        self._thread_granted_capabilities = {
+            grant
+            for grant in self._thread_granted_capabilities
+            if grant[1] != capability
+            or (thread_id is not None and grant[0] != thread_id)
+        }
 
     def reset(self) -> None:
         self.set_mode(PermissionMode.REQUEST_APPROVAL)
@@ -52,6 +80,7 @@ class PermissionSession:
     def set_mode(self, mode: PermissionMode) -> None:
         self.mode = mode
         self.granted_capabilities.clear()
+        self._thread_granted_capabilities.clear()
         self.generation += 1
 
 
@@ -60,7 +89,8 @@ class PolicyRequest:
     capability: ToolCapability | str
     mode: PermissionMode
     granted_capabilities: frozenset[ToolCapability | str] = frozenset()
-    hard_deny_reason: str | None = None
+    thread_id: str | None = None
+    granted_thread_capabilities: frozenset[tuple[str, str]] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,12 +100,9 @@ class PolicyDecision:
 
 
 class PermissionPolicy:
-    """Pure capability policy. Hard safety boundaries always take precedence."""
+    """Pure capability policy evaluated after registration-owned admission."""
 
     def evaluate(self, request: PolicyRequest) -> PolicyDecision:
-        if request.hard_deny_reason is not None:
-            return PolicyDecision(PolicyAction.DENY, request.hard_deny_reason)
-
         capability = str(request.capability)
         if capability in {"memory.read", "memory.write"}:
             return PolicyDecision(
@@ -88,6 +115,24 @@ class PermissionPolicy:
             return PolicyDecision(
                 PolicyAction.ASK,
                 "This extension capability requires explicit approval.",
+            )
+        if capability == ToolCapability.NETWORK_READ:
+            thread_grant = (request.thread_id, capability)
+            if request.thread_id is not None and thread_grant in (
+                request.granted_thread_capabilities
+            ):
+                return PolicyDecision(
+                    PolicyAction.ALLOW,
+                    "The active Thread explicitly allows network reads.",
+                )
+            return PolicyDecision(
+                PolicyAction.ASK,
+                "Network reads require explicit approval for the active Thread.",
+            )
+        if capability == ToolCapability.CONTEXT_READ:
+            return PolicyDecision(
+                PolicyAction.ALLOW,
+                "Frozen context resources are governed by hard admission.",
             )
         if capability == ToolCapability.WORKSPACE_READ:
             return PolicyDecision(

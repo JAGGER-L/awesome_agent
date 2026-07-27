@@ -29,6 +29,7 @@ _SUPERVISOR_EVENT_POLL_SECONDS = 0.01
 _SUPERVISOR_EXIT_GRACE_SECONDS = 1.0
 _SPAWN_CLEANUP_SECONDS = 0.25
 _WINDOWS_STATUS_BYTES = 5
+_WINDOWS_STATUS_OPEN_GRACE_SECONDS = 0.25
 _WINDOWS_STATUS_CLEANUP_SECONDS = 0.25
 
 
@@ -254,13 +255,39 @@ def _read_windows_status(path: Path) -> bytes:
         return b""
 
 
+async def _read_windows_status_bounded(path: Path) -> bytes:
+    """Read one atomically published status through transient Windows locks."""
+
+    denied: PermissionError | None = None
+    deadline: float | None = None
+    while True:
+        try:
+            payload = _read_windows_status(path)
+        except PermissionError as error:
+            if denied is None:
+                denied = error
+                deadline = (
+                    asyncio.get_running_loop().time()
+                    + _WINDOWS_STATUS_OPEN_GRACE_SECONDS
+                )
+        else:
+            if denied is None or payload:
+                return payload
+        assert deadline is not None
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            assert denied is not None
+            raise denied
+        await asyncio.sleep(min(_SUPERVISOR_EVENT_POLL_SECONDS, remaining))
+
+
 async def _wait_for_windows_supervisor_spawn(
     path: Path,
     process: asyncio.subprocess.Process,
     executable: str,
 ) -> None:
     while True:
-        payload = _read_windows_status(path)
+        payload = await _read_windows_status_bounded(path)
         if len(payload) == _WINDOWS_STATUS_BYTES:
             kind = payload[:1]
             value = int.from_bytes(payload[1:], byteorder="big", signed=True)

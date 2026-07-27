@@ -70,6 +70,32 @@ describe("scrollback transcript components", () => {
     expect(view.lastFrame()).toContain("❯ /status");
   });
 
+  it("renders durable assistant citations as a bounded Sources list", () => {
+    const view = render(
+      <Transcript
+        blocks={[
+          {
+            key: "assistant:citations",
+            kind: "assistant",
+            text: "Cited answer [[S1]]",
+            citations: [
+              {
+                id: "S1",
+                title: "Primary source",
+                url: "https://example.com/source",
+              },
+            ],
+          },
+        ]}
+        width={120}
+      />,
+    );
+
+    expect(view.lastFrame()).toContain("Sources");
+    expect(view.lastFrame()).toContain("[S1] Primary source");
+    expect(view.lastFrame()).toContain("https://example.com/source");
+  });
+
   it("updates the active projection and retains completed thinking until reconciliation", () => {
     const live: LiveTranscriptProjection = {
       operation_id: "operation_1",

@@ -6,14 +6,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from awesome_agent.context._safe_files import (
+from awesome_agent.context.tokens import estimate_text
+from awesome_agent.core.safe_files import (
     FileChangedError,
     FileTooLargeError,
     PinnedPlainDirectory,
     UnsafePathError,
     lexical_absolute,
 )
-from awesome_agent.context.tokens import estimate_text
 
 WORKSPACE_INSTRUCTION_FILE: Literal["AGENTS.md"] = "AGENTS.md"
 WORKSPACE_INSTRUCTION_MAX_BYTES = 32 * 1024

@@ -3,6 +3,7 @@ import {
   useCallback,
   type Dispatch,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -12,7 +13,6 @@ import type {
   CommandController,
   CommandDispatchOutcome,
 } from "../commands/controller.js";
-import { isOperationBusyOutcome } from "../commands/controller.js";
 import { findCommand } from "../commands/catalog.js";
 import { applyCommandEffect } from "../commands/effects.js";
 import {
@@ -56,15 +56,16 @@ import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
 import type { ExitReason } from "../lifecycle/exit.js";
 import type { PendingInput } from "../pending-input/model.js";
 import {
+  credentialConfigured,
+  modelProviderCredentialStatus,
+} from "../protocol/product-projections.js";
+import {
   usePendingInputDrain,
   usePendingInputQueue,
 } from "../pending-input/use-pending-input-queue.js";
 import type { SurfaceStore } from "../state/index.js";
 import { hydrateThreadPage } from "../transcript/hydrate.js";
-import {
-  createClientMessageId,
-  createCommandSubmissionId,
-} from "../transcript/identity.js";
+import { createClientMessageId } from "../transcript/identity.js";
 import { projectLiveTurn } from "../transcript/live.js";
 import { GlobalKeyController } from "./global-keys.js";
 import { useCommandExecution } from "./use-command-execution.js";
@@ -78,14 +79,10 @@ import {
 } from "./use-thread-transition.js";
 import { isAuthPicker } from "./use-interaction-flow.js";
 import { threadSurfaceKey } from "./thread-surface-key.js";
-
-interface ComposerSubmitResult {
-  readonly accepted: boolean;
-  readonly retryable?: boolean;
-  readonly message?: string;
-  readonly operationBusy?: boolean;
-  readonly operationId?: string;
-}
+import {
+  SubmissionCoordinator,
+  type SubmissionResult,
+} from "./submission-coordinator.js";
 
 export interface AppLifecycle {
   cancelActiveOperation(): Promise<void>;
@@ -99,6 +96,7 @@ export function App({
   width,
   blockingSelection = false,
   welcome,
+  startupWarning,
   localCommands,
   cancellation = { status: "idle" },
   lifecycle,
@@ -113,6 +111,7 @@ export function App({
   width?: number;
   blockingSelection?: boolean;
   welcome?: Omit<WelcomeProps, "width">;
+  startupWarning?: string;
   localCommands?: LocalCommandService;
   cancellation?: CancellationSnapshot;
   lifecycle?: AppLifecycle;
@@ -140,7 +139,7 @@ export function App({
       outcome: CommandDispatchOutcome,
       intent?: CommandIntent,
       generation?: number,
-    ) => Promise<ComposerSubmitResult>
+    ) => Promise<SubmissionResult>
   >(async () => ({ accepted: true }));
   const {
     appendPresentation,
@@ -188,10 +187,16 @@ export function App({
         ),
       }
     : undefined;
+  const application = state.application;
   const providerSetupVisible =
     providerSetupRequired &&
-    !credentialConfigured(state.application?.provider_credentials.deepseek) &&
-    !credentialConfigured(state.application?.provider_credentials.kimi);
+    (application?.model_catalog.providers.every(
+      (provider) =>
+        !credentialConfigured(
+          modelProviderCredentialStatus(application, provider),
+        ),
+    ) ??
+      true);
 
   const runTerminalAction = useCallback(
     (action: () => Promise<void>) => {
@@ -262,7 +267,7 @@ export function App({
   }, [awaitingOperationId, state.active_operation?.id]);
 
   const applyLocalResult = useCallback(
-    (result: LocalCommandResult, generation: number): ComposerSubmitResult => {
+    (result: LocalCommandResult, generation: number): SubmissionResult => {
       if (store.getState().thread_generation !== generation) {
         return { accepted: true };
       }
@@ -320,8 +325,19 @@ export function App({
       outcome: CommandDispatchOutcome,
       intent?: CommandIntent,
       generation = store.getState().thread_generation,
-    ): Promise<ComposerSubmitResult> => {
+    ): Promise<SubmissionResult> => {
       if (store.getState().thread_generation !== generation) {
+        if (
+          outcome.kind === "result" &&
+          outcome.payload.kind === "thread_retry"
+        ) {
+          if (!controller) {
+            throw new Error("Thread retry activation is unavailable");
+          }
+          controller.rejectThreadRetry(
+            "Thread retry response became stale before its transition was installed",
+          );
+        }
         return { accepted: true };
       }
       switch (outcome.kind) {
@@ -368,6 +384,28 @@ export function App({
           );
         case "result": {
           const payload = outcome.payload;
+          if (payload.kind === "thread_retry") {
+            if (!controller) {
+              throw new Error("Thread retry activation is unavailable");
+            }
+            const replacement = applyThreadTransition(
+              payload.transition,
+              generation,
+            );
+            if (replacement.kind !== "replaced") {
+              return controller.rejectThreadRetry(
+                "Thread retry response became stale before its transition was installed",
+              );
+            }
+            controller.activateThreadRetry(
+              payload.operation,
+              replacement.generation,
+            );
+            return {
+              accepted: true,
+              operationId: payload.operation.operation_id,
+            };
+          }
           if (payload.kind === "thread_transition") {
             try {
               applyThreadTransition(payload.transition, generation);
@@ -425,180 +463,15 @@ export function App({
     ],
   );
   applyOutcomeRef.current = applyCommandOutcome;
-  const submit = useCallback(
-    async (
-      value: string,
-      pendingInput?: PendingInput,
-    ): Promise<ComposerSubmitResult> => {
-      dispatch({ type: "notice.clear" });
-      const submitted = value.trimStart();
-      if (submitted.startsWith("/") && pendingInput === undefined) {
-        store.dispatch({
-          type: "transcript.command.submitted",
-          submission_id: createCommandSubmissionId(),
-          text: submitted,
-          generation: store.getState().thread_generation,
-        });
-      }
-      const routed = parseInput(value);
-      if (!routed) return { accepted: true };
-      if (routed.kind === "invalid") {
-        if (value.trimStart().startsWith("/")) {
-          appendCommandResult(
-            value.trimStart().slice(1).split(/\s/u, 1)[0] || "command",
-            "error",
-            routed.code,
-            store.getState().thread_generation,
-          );
-          return { accepted: true };
-        }
-        return { accepted: false, retryable: true, message: routed.code };
-      }
-      if (!controller) {
-        return {
-          accepted: false,
-          retryable: true,
-          message: "surface_not_connected",
-        };
-      }
-      const generation = store.getState().thread_generation;
-      const threadId = store.getState().application?.current_thread_id;
-      const optimisticMessage =
-        routed.kind === "turn"
-          ? {
-              id: pendingInput?.clientMessageId ?? createClientMessageId(),
-              text: routed.content,
-            }
-          : undefined;
-      if (optimisticMessage && pendingInput === undefined) {
-        store.dispatch({
-          type: "transcript.user.pending",
-          client_message_id: optimisticMessage.id,
-          text: optimisticMessage.text,
-          generation,
-        });
-      }
-      let outcome: CommandDispatchOutcome;
-      const compact =
-        routed.kind === "command" && routed.intent.name === "compact";
-      let finishProgress =
-        compact && pendingInput === undefined
-          ? beginProgress("compact", "Compressing context...", generation)
-          : undefined;
-      try {
-        outcome = optimisticMessage
-          ? await controller.submit(routed, threadId, optimisticMessage.id)
-          : await controller.submit(routed, threadId);
-      } catch (error) {
-        const failure = classifyTerminalActionError(error);
-        finishProgress?.({
-          kind: "progress",
-          message: `Context compression failed · ${failure.kind === "request" ? failure.message : "Protocol failure"}`,
-          tone: "danger",
-        });
-        if (
-          failure.kind === "request" &&
-          optimisticMessage &&
-          store.getState().thread_generation === generation
-        ) {
-          store.dispatch({
-            type: "transcript.user.failed",
-            client_message_id: optimisticMessage.id,
-            message: failure.message,
-            generation,
-          });
-          return {
-            accepted: false,
-            retryable: true,
-            message: failure.message,
-          };
-        }
-        throw failure.kind === "fatal" ? failure.error : error;
-      }
-      if (pendingInput && isOperationBusyOutcome(outcome)) {
-        return {
-          accepted: false,
-          retryable: true,
-          operationBusy: true,
-        };
-      }
-      if (pendingInput && submitted.startsWith("/")) {
-        store.dispatch({
-          type: "transcript.command.submitted",
-          submission_id: createCommandSubmissionId(),
-          text: submitted,
-          generation,
-        });
-      }
-      if (pendingInput && optimisticMessage) {
-        store.dispatch({
-          type: "transcript.user.pending",
-          client_message_id: optimisticMessage.id,
-          text: optimisticMessage.text,
-          generation,
-        });
-      }
-      if (compact && pendingInput) {
-        finishProgress = beginProgress(
-          "compact",
-          "Compressing context...",
-          generation,
-        );
-      }
-      if (finishProgress) {
-        if (outcome.kind === "result") {
-          finishProgress(presentCommandPayload("compact", outcome.payload));
-        } else if (
-          outcome.kind === "error" ||
-          outcome.kind === "command_error"
-        ) {
-          const message =
-            outcome.kind === "command_error"
-              ? outcome.message
-              : "error" in outcome
-                ? outcome.error.message
-                : outcome.code;
-          finishProgress({
-            kind: "progress",
-            message: `Context compression failed · ${message}`,
-            tone: "danger",
-          });
-        }
-        return { accepted: true };
-      }
-      if (
-        optimisticMessage &&
-        store.getState().thread_generation === generation
-      ) {
-        if (
-          outcome.kind === "accepted" &&
-          outcome.operation.client_message_id === optimisticMessage.id
-        ) {
-          store.dispatch({
-            type: "transcript.user.accepted",
-            client_message_id: optimisticMessage.id,
-            generation,
-          });
-        } else {
-          store.dispatch({
-            type: "transcript.user.failed",
-            client_message_id: optimisticMessage.id,
-            message:
-              outcome.kind === "error"
-                ? "error" in outcome
-                  ? outcome.error.message
-                  : outcome.code
-                : "Turn acceptance identity did not match the submitted message.",
-            generation,
-          });
-        }
-      }
-      return await applyCommandOutcome(
-        outcome,
-        routed.kind === "command" ? routed.intent : undefined,
-        generation,
-      );
-    },
+  const submissionCoordinator = useMemo(
+    () =>
+      new SubmissionCoordinator(store, controller, {
+        clearNotice: () => dispatch({ type: "notice.clear" }),
+        appendInputError: (command, message, generation) =>
+          appendCommandResult(command, "error", message, generation),
+        beginProgress,
+        applyOutcome: applyCommandOutcome,
+      }),
     [
       applyCommandOutcome,
       appendCommandResult,
@@ -607,6 +480,11 @@ export function App({
       dispatch,
       store,
     ],
+  );
+  const submit = useCallback(
+    async (value: string, pendingInput?: PendingInput) =>
+      await submissionCoordinator.submit(value, pendingInput),
+    [submissionCoordinator],
   );
 
   const promotePendingInput = useCallback(
@@ -951,6 +829,15 @@ export function App({
         welcome={
           liveWelcome ? <Welcome {...liveWelcome} width={columns} /> : null
         }
+        welcomeNotice={
+          startupWarning ? (
+            <Text
+              {...(liveWelcome ? { color: liveWelcome.theme.warning } : {})}
+            >
+              ⚠ {startupWarning}
+            </Text>
+          ) : null
+        }
         transcript={
           <Transcript
             key={threadSurfaceKey(state)}
@@ -974,22 +861,6 @@ export function App({
       />
     </>
   );
-}
-
-function credentialConfigured(
-  status:
-    | {
-        selected_source?: "environment" | "awesome" | null | undefined;
-        environment_configured: boolean;
-        awesome_configured: boolean;
-      }
-    | undefined,
-): boolean {
-  return status?.selected_source === "environment"
-    ? status.environment_configured
-    : status?.selected_source === "awesome"
-      ? status.awesome_configured
-      : false;
 }
 
 function memoryStateEnabled(

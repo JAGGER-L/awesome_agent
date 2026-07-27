@@ -1,9 +1,9 @@
 # Tools and changes
 
 Tools are the only path from model intent to workspace or host effects. Awesome
-therefore centralizes registration, argument validation, hard-deny checks,
-permission decisions, approval, timeout, cancellation, audit, and terminal
-events before calling a built-in or MCP handler.
+therefore centralizes registration, strict argument validation, tool-owned hard
+admission, capability decisions, approval, deadlines, cancellation, audit, and
+terminal events before calling a built-in or MCP handler.
 
 The Change Journal is adjacent but separate. It records and restores file
 mutations made through managed built-ins; it cannot make arbitrary shell or MCP
@@ -11,54 +11,104 @@ effects reversible.
 
 ## Tool contract
 
-A `RegisteredTool` combines four internal facts:
+A `RegisteredTool` combines eight internal facts:
 
 - a provider-visible `ToolSpec` including name, description, JSON schema,
   capability, read-only flag, and display metadata;
 - a strict Pydantic input model;
 - one async handler;
-- an optional dynamic total-timeout resolver.
+- a typed description function that derives bounded operation facts from
+  validated arguments;
+- a hard-admission function that applies non-disableable, tool-specific checks
+  to validated arguments and execution context;
+- an explicit replay-safety classification;
+- an optional dynamic total-timeout resolver;
+- an optional handler-cancellation grace.
 
-The timeout resolver is intentionally not part of the model-visible schema. It
-lets `execute` reserve `timeout_seconds + 10` seconds for bounded cleanup and
-lets MCP use a 40-second outer envelope without teaching the model about
-executor internals.
+The description, admission, replay, deadline, and cancellation facts are
+intentionally not part of the model-visible schema. The description supplies
+bounded presentation and approval facts from an explicitly selected operation
+target; it never receives an unvalidated raw argument map. Hard
+admission owns facts such as path or command safety and cannot be overridden by
+a permission mode or temporary grant. Description runs exactly once after hard
+admission: any bounded metadata probe it performs is inside that admitted
+operation and still precedes approval, the handler, and external effects.
+Replay safety gives recovery an explicit answer instead of asking it to
+recognize tool names. The timeout resolver lets `execute` reserve
+`timeout_seconds + 10` seconds for its total deadline, while cancellation grace
+bounds handler cleanup without teaching the model about executor internals.
 
 The built-in baseline is:
 
-| Tool | Capability | Managed file changes |
-| --- | --- | --- |
-| `ls`, `read_file`, `glob`, `grep` | `workspace.read` | none |
-| `write_file`, `edit_file` | `workspace.write` | journaled |
-| `delete` | `workspace.delete` | journaled |
-| `execute` | `shell.execute` | observation only |
+| Tool | Capability | Managed file changes | Replay safety |
+| --- | --- | --- | --- |
+| `ls`, `read_file`, `glob`, `grep` | `workspace.read` | none | replayable |
+| `write_file`, `edit_file` | `workspace.write` | journaled | non-replayable |
+| `delete` | `workspace.delete` | journaled | non-replayable |
+| `execute` | `shell.execute` | observation only | non-replayable |
+| `web_search`, `web_fetch` (when enabled and configured) | `network.read` | none; external | non-replayable |
 
 The registry is extensible; eight is not a fixed maximum. MCP namespaces are
 replaced atomically with names such as `mcp.<server>.<tool>`.
+
+## Citation transport inside Core and Agent
+
+`core/citations.py` defines the minimal provider-neutral, immutable `Citation`
+value: `id`, `title`, and `url`. The strict contract rejects unknown fields;
+the ID has the bounded `S1` through `S999999` shape, the nonblank single-line
+title is at most 500 characters, and the absolute HTTPS URL is at most 8,000
+characters with no whitespace, control characters, or user information.
+`ToolOutput.citations` and `ToolResult.citations` are tuples that default to
+empty. On a successful handler return, the Executor strictly reconstructs each
+citation and the output, then copies the citations into the normalized result.
+Bounding or truncating the textual `content` does not discard those citations.
+
+`web_search` and `web_fetch` allocate stable, URL-deduplicated `S1...Sn`
+identities within a Turn. Fetch hard admission accepts one public HTTPS URL,
+rejects configured blocked hostnames and their subdomains, and then delegates
+the target connection to Tavily rather than opening it from Core. Agent
+serializes the complete result and derives the ordered
+`AgentState.citations` snapshot, so both survive checkpoint recovery.
+Finalization validates model markers written as `[[S1]]`: unknown IDs produce
+a warning and are not linked; when Web was used but no valid source is cited,
+it appends a bounded deterministic Sources section and records a warning.
+Conversation persists the same sources with the assistant entry, and Protocol
+v4 carries them to the TUI, headless JSON v2, and later exports.
 
 ## Executor pipeline
 
 ```text
 ToolRequest
   -> resolve registry item
-  -> validate Pydantic arguments
-  -> validate built-in path syntax
-  -> compute non-disableable hard deny
-  -> PermissionPolicy: allow | ask | deny
+  -> strict-validate with its registered input model
+  -> run its registered hard admission
+  -> derive its typed description exactly once
+  -> PermissionPolicy for its registered capability: allow | ask | deny
   -> resolve bound approval, when asked
-  -> resolve total timeout
+  -> resolve total deadline
   -> invoke handler under deadline
   -> normalize result or expected failure
-  -> write one ToolActivity
+  -> write one ToolActivity and audit summary
   -> emit one terminal tool event
   -> return one bounded ToolResult
 ```
 
-`tool.started` is emitted before resolution so an unknown tool is still an
-observable attempted call. Argument errors, policy denials, timeouts, and
-expected handler failures become bounded `ToolResult` errors. An unexpected
-handler exception is an invariant failure and terminates the Turn rather than
-being disguised as a model-correctable error.
+Every attempted call emits exactly one `tool.started`, including unknown tools,
+invalid arguments, and hard-admission failures. Calls that fail before a typed
+description exists use only the registration's static presentation and never
+derive a target from untrusted values; an admitted call emits its typed,
+bounded presentation before capability policy or handler execution. Argument
+errors, policy denials, timeouts, and expected handler failures become bounded
+`ToolResult` errors. An unexpected handler exception is an invariant failure
+and terminates the Turn rather than being disguised as a model-correctable
+error.
+
+This is the only execution order. The Executor invokes registration-owned
+behavior uniformly; it does not branch on concrete tool names. Hard admission
+and capability policy answer different questions: admission decides whether
+this exact validated operation is ever acceptable, while policy decides
+whether the registered capability is allowed, denied, or needs approval in the
+current permission session.
 
 Cancellation finalizes a single cancelled activity/event with a bounded cleanup
 attempt, then re-raises the caller's original cancellation. Handler tasks that
@@ -68,15 +118,35 @@ result is consumed to avoid leaking task exceptions.
 Tool content is bounded before it enters Agent state or the transcript. Audit
 summaries retain argument names, not raw argument values.
 
+## Replay safety
+
+Replay safety is registration metadata, not a property inferred by recovery.
+Only a built-in whose managed local semantics prove that a repeated call is
+safe may be marked replayable. Reads meet that requirement. File mutation tools
+do not: after a crash, repeating an edit, overwrite, or deletion could consume
+new filesystem state even though the Change Journal recorded the first effect.
+They are therefore non-replayable, as are MCP calls, Web requests, shell
+commands, and other external or unclassified effects. A crash after dispatch
+defaults to Abort instead of repeating the operation. Recovery looks up the
+same name in the current Runtime Registry and consumes that registration's
+metadata. Replayable work may resume; non-replayable, missing, or unknown
+metadata fails closed into a recovery interaction and is never retried
+automatically. The user may explicitly choose Retry instead of the default
+Abort. A change to a same-named tool's contract must therefore be managed as a
+checkpoint-compatibility change. Neither the Executor nor recovery keeps a
+parallel list of special tool names.
+
 ## Permission decision
 
-Permission is a pure capability decision. Hard denial always wins:
+Permission is a pure capability decision evaluated only after registered hard
+admission succeeds. A hard rejection always wins and cannot be converted to an
+allow by any row in this table:
 
-| Mode | Read | Create/modify | Delete | Shell | MCP/unknown |
-| --- | --- | --- | --- | --- | --- |
-| Request approval | Allow | Ask | Ask | Ask | Ask |
-| Accept edits | Allow | Allow | Ask | Ask | Ask |
-| Full access | Allow | Allow | Allow | Allow | Ask |
+| Mode | Read | Create/modify | Delete | Shell | Network read | MCP/unknown |
+| --- | --- | --- | --- | --- | --- | --- |
+| Request approval | Allow | Ask | Ask | Ask | Ask | Ask |
+| Accept edits | Allow | Allow | Ask | Ask | Ask | Ask |
+| Full access | Allow | Allow | Allow | Allow | Ask | Ask |
 
 This table applies to Agent tool calls using the selected Thread's permission
 session. Direct `! command` input is the user's explicit authorization for that
@@ -88,7 +158,10 @@ cancellation, and redaction boundaries.
 
 An allow-once result applies to the current Tool call. “Allow all edits during
 this session” grants only `workspace.write`; it cannot grant delete, shell, or
-an extension capability. Mode and Thread transitions clear temporary grants.
+an extension capability. Network approval offers deny (the default), allow
+once, or allow for the active Thread. Selecting another Thread, rebuilding the
+runtime, changing permission mode, `/web revoke`, `/web off`, and shutdown all
+clear that Thread grant.
 
 The Tool Executor creates approval text from validated operation facts. The TUI
 renders that typed request and returns a decision; it never infers capability
@@ -138,12 +211,13 @@ host writer.
 ## Command circuit breaker
 
 Both Agent `execute` and direct `!` input call the same pure command policy. The
-executor's pre-approval check receives the command, explicit shell dialect,
-workspace, and the requested lexical working directory joined beneath the
-canonical workspace root. The handler then resolves and identity-checks that
-directory; its pre-spawn check calls the same policy with the verified resolved
-directory. Sharing the evaluator prevents rule drift, while the second stage is
-the one backed by opened-path evidence.
+`execute` registration's hard-admission check receives the command, explicit
+shell dialect, and workspace. It first resolves the requested working directory
+as an existing, no-follow directory inside the pinned workspace, then evaluates
+the command against that resolved path before description or approval. The
+handler repeats both identity resolution and the same policy immediately before
+spawn. Sharing the evaluator prevents rule drift, while the second check closes
+changes between admission and process creation with fresh opened-path evidence.
 
 Bounded CMD, POSIX shell, and PowerShell inspection expands known wrappers,
 compound commands, pipelines, and newlines. It normalizes executable paths,
@@ -273,7 +347,8 @@ journal as a source-control replacement.
 
 ## Source and test map
 
-- Contracts and registry: `core/tools/contracts.py`, `registry.py`
+- Contracts and registry: `core/citations.py`, `core/tools/contracts.py`,
+  `registry.py`
 - Policy and permissions: `core/tools/policy.py`, `permissions.py`,
   `command_policy.py`
 - Executor: `core/tools/executor.py`

@@ -1,3 +1,11 @@
+from awesome_agent.storage.application_sqlite import (
+    ApplicationSQLite,
+    ApplicationSQLiteBusy,
+    ApplicationSQLiteClosed,
+    ApplicationSQLiteError,
+    ApplicationSQLiteResultError,
+    ApplicationSQLiteUnavailable,
+)
 from awesome_agent.storage.changes import FileChangeBlobStore, SQLiteChangeSetStore
 from awesome_agent.storage.checkpoints import sqlite_checkpoint_saver
 from awesome_agent.storage.compatibility import (
@@ -14,7 +22,22 @@ from awesome_agent.storage.database import (
     application_connection,
     initialize_application_database,
 )
+from awesome_agent.storage.health import sqlite_database_health
 from awesome_agent.storage.mcp import SQLiteMcpEnablementStore, mcp_config_hash
+from awesome_agent.storage.migrations import (
+    APPLICATION_MIGRATIONS,
+    APPLICATION_SCHEMA_FLOOR,
+    ApplicationMigration,
+    ApplicationMigrationBackupError,
+    ApplicationMigrationBoundaryError,
+    ApplicationMigrationConnection,
+    ApplicationMigrationCursor,
+    ApplicationMigrationError,
+    ApplicationMigrationOutcomeUnknown,
+    ApplicationMigrationRegistry,
+    ApplicationMigrationStepError,
+    ApplicationMigrationUnavailable,
+)
 from awesome_agent.storage.state_lease import (
     StateLease,
     StateLeaseMode,
@@ -24,7 +47,25 @@ from awesome_agent.storage.state_recovery import StateResetError, reset_local_st
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 
 __all__ = [
+    "APPLICATION_MIGRATIONS",
+    "APPLICATION_SCHEMA_FLOOR",
     "APPLICATION_SCHEMA_VERSION",
+    "ApplicationMigration",
+    "ApplicationMigrationBackupError",
+    "ApplicationMigrationBoundaryError",
+    "ApplicationMigrationConnection",
+    "ApplicationMigrationCursor",
+    "ApplicationMigrationError",
+    "ApplicationMigrationOutcomeUnknown",
+    "ApplicationMigrationRegistry",
+    "ApplicationMigrationStepError",
+    "ApplicationMigrationUnavailable",
+    "ApplicationSQLite",
+    "ApplicationSQLiteBusy",
+    "ApplicationSQLiteClosed",
+    "ApplicationSQLiteError",
+    "ApplicationSQLiteResultError",
+    "ApplicationSQLiteUnavailable",
     "ApplicationSchemaMismatch",
     "ApplicationStateUnavailable",
     "ApplicationStateUnknown",
@@ -45,4 +86,5 @@ __all__ = [
     "mcp_config_hash",
     "reset_local_state",
     "sqlite_checkpoint_saver",
+    "sqlite_database_health",
 ]

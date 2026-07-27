@@ -15,14 +15,19 @@ Awesome 目前提供：
 - 通过提供商中立的模型契约支持 DeepSeek 和 Kimi；
 - 受信任 Workspace 启动、根目录 `AGENTS.md` 指令、Threads、Turns、取消、
   checkpoints 与恢复；
+- 带明确直接父级 lineage 的物化 Thread fork 与 retry、独立复制的历史，以及不重放旧工具
+  或隐式 undo 的语义；
 - 通过唯一的 Registry、Policy 与 Executor 路径提供工作区文件工具和有界本地命令执行；
 - 三种权限模式、单次审批、绑定 Thread 的临时 `workspace.write` 授权，以及不可关闭的
   命令防误操作断路器；
 - 可见的 ChangeSet，以及 diff、undo、redo 和保守的崩溃恢复；
 - 彼此独立且可选的本地 Memory 与 Mem0 Cloud；
-- Bundled、User 和受信任 Workspace 三类 Skills；
+- Bundled、User 和受信任 Workspace 三类 Skills，以及对 User 包执行安全的本地目录/ZIP
+  列出、安装、替换和移除；
 - 使用经过校验且绑定 generation 的 catalog 的 MCP stdio 服务器；
-- Python Core 与 Ink TUI 之间有版本的 Protocol v3 边界；
+- 通过同一 Registry、Policy 与 Executor 提供可选的结构化 Tavily Web Search 与 Fetch，
+  并具有每 Turn 预算、Thread 范围的联网同意和可持久引用；
+- Python Core 与 Ink TUI 之间有版本的 Protocol v4 边界；
 - 从本目录生成、支持搜索的 GitHub Pages 文档站。
 
 [架构总览](../ARCHITECTURE.zh-CN.md)定义当前组件边界。本页其余部分讨论可能增加的能力。
@@ -31,18 +36,8 @@ Awesome 目前提供：
 
 以下内容是当前版本已经存在的行为或契约缺口，不是未来功能，也不表示这些限制值得保留：
 
-- 受信任工作区中的 `.awesome/config.yaml` 读取受 trust gate 保护，但不像
-  `AGENTS.md` 和 Workspace Skills 那样具备大小限制、no-follow 或身份固定。
-  参见[配置](reference/configuration.zh-CN.md#workspace-配置)。
-- 大多数内置工具和 Skill 支持工具的参数模型会忽略未知字段并转换可兼容标量；配置与
-  Skill frontmatter 也存在已记录的转换/语法差异。参见
-  [工具契约](reference/built-in-tools.zh-CN.md#通用请求与结果契约)、
-  [配置](reference/configuration.zh-CN.md)和
-  [Skills](extensions/skills.zh-CN.md#创建-skill)。
-- Skill 模式 `auto` 与 `off` 当前具有相同的可观察行为；尚不存在自动选择器。参见
-  [Skill 选择](extensions/skills.zh-CN.md#选择和加载-skills)。
-- `direct.execute` 先接受 30,000 字符的传输字段，再委托给 8,000 字符的工具字段。
-  参见[方法目录](reference/protocol.zh-CN.md#method-catalog)。
+- Skill frontmatter 仍会使用 `str()` 规范化多个标量值，并且配置允许被禁用名称包含 `_`，
+  而可发现 Skill 的名称不允许。参见 [Skills](extensions/skills.zh-CN.md#创建-skill)。
 - `/auth mem0` 会保存本地格式有效的输入，而不远程验证 Mem0 凭据；失败会在第一次
   云操作时出现。参见 [Memory 配置](extensions/memory.zh-CN.md#配置)。
 
@@ -50,15 +45,6 @@ Awesome 目前提供：
 条目，会把文档变成没有依据的承诺。
 
 ## 近期产品方向
-
-### 一条命令安装 Skills
-
-**用户需要：** 查找并安装 Skill 不应要求用户手工构造包目录。
-
-**不变量：** 安装必须保留 manifest 校验、来源优先级、Workspace 信任、有界读取和
-现有工具策略路径。发现更方便不能把 Skill 变成可执行权限。
-
-**待决策：** registry 所有权、包真实性、更新行为、版本固定、移除与离线安装。
 
 ### Multi-Agent 委派
 
@@ -81,12 +67,18 @@ foreground-operation 模型应如何演进。
 
 ### 搜索工具
 
-**用户需要：** 编程工作经常需要 Workspace 中不存在的最新 Web 或文档事实。
+**当前基础：** 可选的 Tavily Web Search 与 Fetch 已经使用参考文档所述的通用工具、权限、
+预算、恢复和引用契约。Fetch 有意只支持 Tavily 云端对一个公共 HTTPS URL 进行 basic
+Markdown extraction。
 
-**不变量：** Web Search 与 Web Fetch 应与所有其他工具一样进入同一 Registry、Policy、
-Executor、结果、事件、超时和审批路径。远程内容始终是不受信任的上下文。
+**基础之上的用户需要：** 当真实编码与文档工作流暴露具体缺口时，搜索质量与来源选择
+可能需要继续演进。
 
-**待决策：** 提供商选择、网络 allowlist、引用保留、隐私、缓存、输出限制和不确定结果处理。
+**不变量：** 后续搜索改进必须保留提供商中立的工具结果、明确的联网同意、有界且不受信任
+的内容，以及端到端引用，不能创建另一条执行链路。
+
+**待决策：** 只有当前 basic Search 出现可测量缺口时才改变设计；Awesome 不会仅为扩宽
+抽象而增加推测性的 backend 或透明 retry。
 
 ## 后续方向
 

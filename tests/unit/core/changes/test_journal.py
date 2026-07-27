@@ -33,19 +33,21 @@ from awesome_agent.core.changes.ports import PendingMutation
 from awesome_agent.core.filesystem import MutationTargetChanged
 from awesome_agent.core.workspace import resolve_workspace
 
+pytestmark = pytest.mark.asyncio
+
 
 class MemoryChangeSetStore:
     def __init__(self) -> None:
         self.change_sets: dict[str, ChangeSet] = {}
         self.pending: dict[str, PendingMutation] = {}
 
-    def save(self, change_set: ChangeSet) -> None:
+    async def save(self, change_set: ChangeSet) -> None:
         self.change_sets[change_set.id] = change_set
 
-    def get(self, change_set_id: str) -> ChangeSet | None:
+    async def get(self, change_set_id: str) -> ChangeSet | None:
         return self.change_sets.get(change_set_id)
 
-    def latest(self, workspace_key: str) -> ChangeSet | None:
+    async def latest(self, workspace_key: str) -> ChangeSet | None:
         matches = [
             item
             for item in self.change_sets.values()
@@ -53,7 +55,7 @@ class MemoryChangeSetStore:
         ]
         return max(matches, key=lambda item: item.created_at, default=None)
 
-    def list_open(self, workspace_key: str) -> list[ChangeSet]:
+    async def list_open(self, workspace_key: str) -> list[ChangeSet]:
         return [
             item
             for item in self.change_sets.values()
@@ -61,13 +63,29 @@ class MemoryChangeSetStore:
             and item.lifecycle is ChangeLifecycle.OPEN
         ]
 
-    def save_pending(self, pending: PendingMutation) -> None:
+    async def delete_empty_open(self, change_set_id: str) -> bool:
+        change_set = self.change_sets.get(change_set_id)
+        if (
+            change_set is None
+            or change_set.lifecycle is not ChangeLifecycle.OPEN
+            or change_set.files
+            or change_set.execute
+            or any(
+                pending.change_set_id == change_set_id
+                for pending in self.pending.values()
+            )
+        ):
+            return False
+        del self.change_sets[change_set_id]
+        return True
+
+    async def save_pending(self, pending: PendingMutation) -> None:
         self.pending[pending.id] = pending
 
-    def list_pending(self) -> list[PendingMutation]:
+    async def list_pending(self) -> list[PendingMutation]:
         return list(self.pending.values())
 
-    def delete_pending(self, pending_id: str) -> None:
+    async def delete_pending(self, pending_id: str) -> None:
         self.pending.pop(pending_id, None)
 
 
@@ -95,7 +113,7 @@ def journal_fixture(
     return journal, store, blobs, workspace
 
 
-def test_begin_rejects_rebound_identity_at_same_workspace_path(
+async def test_begin_rejects_rebound_identity_at_same_workspace_path(
     tmp_path: Path,
 ) -> None:
     journal, store, _, workspace = journal_fixture(tmp_path)
@@ -104,7 +122,7 @@ def test_begin_rejects_rebound_identity_at_same_workspace_path(
     workspace.mkdir()
 
     with pytest.raises(ChangeLifecycleError, match="different workspace"):
-        journal.begin(
+        await journal.begin(
             session_id="session_1",
             turn_id="turn_1",
             workspace=resolve_workspace(workspace),
@@ -146,18 +164,18 @@ def bound_path_mutation(
     )
 
 
-def test_controlled_change_seals_as_fully_reversible(tmp_path: Path) -> None:
+async def test_controlled_change_seals_as_fully_reversible(tmp_path: Path) -> None:
     journal, _, _, workspace = journal_fixture(tmp_path)
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
     )
 
-    change = journal.apply_file_mutation(
+    change = await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.UPDATED,
         intended_after=NodeSnapshot(
@@ -171,7 +189,7 @@ def test_controlled_change_seals_as_fully_reversible(tmp_path: Path) -> None:
             lambda: write_bytes(path, b"after"),
         ),
     )
-    sealed = journal.seal(change_set.id)
+    sealed = await journal.seal(change_set.id)
 
     assert change.before_blob is not None
     assert change.after_blob is not None
@@ -179,9 +197,9 @@ def test_controlled_change_seals_as_fully_reversible(tmp_path: Path) -> None:
     assert sealed.reversibility is ChangeReversibility.FULL
 
 
-def test_execute_reversibility_is_partial_or_none(tmp_path: Path) -> None:
+async def test_execute_reversibility_is_partial_or_none(tmp_path: Path) -> None:
     journal, _, _, workspace = journal_fixture(tmp_path)
-    mixed = journal.begin(
+    mixed = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
@@ -189,7 +207,7 @@ def test_execute_reversibility_is_partial_or_none(tmp_path: Path) -> None:
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    journal.apply_file_mutation(
+    await journal.apply_file_mutation(
         change_set_id=mixed.id,
         kind=FileChangeKind.UPDATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -199,27 +217,29 @@ def test_execute_reversibility_is_partial_or_none(tmp_path: Path) -> None:
             lambda: write_bytes(path, b"after"),
         ),
     )
-    journal.record_execute(
+    await journal.record_execute(
         change_set_id=mixed.id,
         command="pytest",
         observed_paths=[],
     )
-    assert journal.seal(mixed.id).reversibility is ChangeReversibility.PARTIAL
+    assert (await journal.seal(mixed.id)).reversibility is ChangeReversibility.PARTIAL
 
-    execute_only = journal.begin(
+    execute_only = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
     )
-    journal.record_execute(
+    await journal.record_execute(
         change_set_id=execute_only.id,
         command="pytest",
         observed_paths=[],
     )
-    assert journal.seal(execute_only.id).reversibility is ChangeReversibility.NONE
+    assert (
+        await journal.seal(execute_only.id)
+    ).reversibility is ChangeReversibility.NONE
 
 
-def test_capacity_is_rejected_before_mutation(
+async def test_capacity_is_rejected_before_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -227,7 +247,7 @@ def test_capacity_is_rejected_before_mutation(
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
@@ -241,7 +261,7 @@ def test_capacity_is_rejected_before_mutation(
 
     monkeypatch.setattr(journal_module, "MAX_CHANGESET_BYTES", 3)
     with pytest.raises(ChangeCapacityExceeded):
-        journal.apply_file_mutation(
+        await journal.apply_file_mutation(
             change_set_id=change_set.id,
             kind=FileChangeKind.UPDATED,
             intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -252,7 +272,7 @@ def test_capacity_is_rejected_before_mutation(
     assert path.read_bytes() == b"before"
 
 
-def test_bound_target_change_clears_pending_without_recapturing_a_path(
+async def test_bound_target_change_clears_pending_without_recapturing_a_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -260,7 +280,7 @@ def test_bound_target_change_clears_pending_without_recapturing_a_path(
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
@@ -275,7 +295,7 @@ def test_bound_target_change_clears_pending_without_recapturing_a_path(
         lambda _path: pytest.fail("Bound mutation must not recapture a raw path."),
     )
     with pytest.raises(MutationTargetChanged):
-        journal.apply_file_mutation(
+        await journal.apply_file_mutation(
             change_set_id=change_set.id,
             kind=FileChangeKind.UPDATED,
             intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -289,19 +309,19 @@ def test_bound_target_change_clears_pending_without_recapturing_a_path(
             ),
         )
 
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
     with path.open("rb") as stream:
         assert stream.read() == b"before"
 
 
 @pytest.mark.parametrize("relative_path", [r"\outside.txt", "/outside.txt"])
-def test_bound_mutation_rejects_windows_rooted_relative_paths(
+async def test_bound_mutation_rejects_windows_rooted_relative_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     relative_path: str,
 ) -> None:
     journal, _, _, workspace = journal_fixture(tmp_path)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
@@ -312,7 +332,7 @@ def test_bound_mutation_rejects_windows_rooted_relative_paths(
     )
 
     with pytest.raises(ChangeLifecycleError, match="Mutation path escapes"):
-        journal.apply_file_mutation(
+        await journal.apply_file_mutation(
             change_set_id=change_set.id,
             kind=FileChangeKind.CREATED,
             intended_after=NodeSnapshot(FileNodeType.FILE, b"content", None),
@@ -331,13 +351,13 @@ def test_bound_mutation_rejects_windows_rooted_relative_paths(
     "relative_path",
     ["file.txt:stream", ".env. ", "CON.txt", "dir/NUL.txt"],
 )
-def test_bound_mutation_rejects_windows_aliases_before_mutation(
+async def test_bound_mutation_rejects_windows_aliases_before_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     relative_path: str,
 ) -> None:
     journal, _, _, workspace = journal_fixture(tmp_path)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
@@ -348,7 +368,7 @@ def test_bound_mutation_rejects_windows_aliases_before_mutation(
     )
 
     with pytest.raises(ChangeLifecycleError, match="aliases the workspace"):
-        journal.apply_file_mutation(
+        await journal.apply_file_mutation(
             change_set_id=change_set.id,
             kind=FileChangeKind.CREATED,
             intended_after=NodeSnapshot(FileNodeType.FILE, b"content", None),
@@ -363,7 +383,7 @@ def test_bound_mutation_rejects_windows_aliases_before_mutation(
         )
 
 
-def test_file_count_capacity_is_rejected_before_mutation(
+async def test_file_count_capacity_is_rejected_before_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -371,7 +391,7 @@ def test_file_count_capacity_is_rejected_before_mutation(
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
@@ -384,7 +404,7 @@ def test_file_count_capacity_is_rejected_before_mutation(
 
     monkeypatch.setattr(journal_module, "MAX_CHANGESET_FILES", 0)
     with pytest.raises(ChangeCapacityExceeded):
-        journal.apply_file_mutation(
+        await journal.apply_file_mutation(
             change_set_id=change_set.id,
             kind=FileChangeKind.UPDATED,
             intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -395,7 +415,7 @@ def test_file_count_capacity_is_rejected_before_mutation(
     assert path.read_bytes() == b"before"
 
 
-def test_seal_reconciles_or_preserves_ordinary_pending_mutation(
+async def test_seal_reconciles_or_preserves_ordinary_pending_mutation(
     tmp_path: Path,
 ) -> None:
     journal, store, _, workspace = journal_fixture(tmp_path)
@@ -403,7 +423,7 @@ def test_seal_reconciles_or_preserves_ordinary_pending_mutation(
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
     before = NodeSnapshot(FileNodeType.FILE, b"before", mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
@@ -416,7 +436,7 @@ def test_seal_reconciles_or_preserves_ordinary_pending_mutation(
         path.write_bytes(b"after")
 
     with pytest.raises(OSError, match="capture failed"):
-        journal.apply_file_mutation(
+        await journal.apply_file_mutation(
             change_set_id=change_set.id,
             kind=FileChangeKind.UPDATED,
             intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -429,22 +449,22 @@ def test_seal_reconciles_or_preserves_ordinary_pending_mutation(
         )
 
     with pytest.raises(PendingMutationConflict, match="unresolved pending"):
-        journal.seal(change_set.id)
-    retained = store.get(change_set.id)
+        await journal.seal(change_set.id)
+    retained = await store.get(change_set.id)
     assert retained is not None
     assert retained.lifecycle is ChangeLifecycle.OPEN
-    assert len(store.list_pending()) == 1
+    assert len(await store.list_pending()) == 1
 
-    journal.reconcile_pending()
-    sealed = store.get(change_set.id)
+    await journal.reconcile_pending()
+    sealed = await store.get(change_set.id)
 
     assert sealed is not None
     assert sealed.lifecycle is ChangeLifecycle.APPLIED
     assert [change.path for change in sealed.files] == ["file.txt"]
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
 
-def pending_fixture(
+async def pending_fixture(
     tmp_path: Path,
     current: bytes,
 ) -> tuple[ChangeJournal, MemoryChangeSetStore, Path, PendingMutation]:
@@ -452,7 +472,7 @@ def pending_fixture(
     path = workspace / "file.txt"
     path.write_bytes(current)
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
@@ -474,7 +494,7 @@ def pending_fixture(
         intended_after_mode=mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     return journal, store, path, pending
 
 
@@ -517,19 +537,19 @@ class ParentReplacement:
         self.original.rename(self.parent)
 
 
-def interrupted_undo_fixture(
+async def interrupted_undo_fixture(
     tmp_path: Path,
 ) -> tuple[ChangeJournal, MemoryChangeSetStore, Path, PendingMutation]:
     journal, store, blobs, workspace = journal_fixture(tmp_path)
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
     )
-    journal.apply_file_mutation(
+    await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.UPDATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -539,7 +559,7 @@ def interrupted_undo_fixture(
             lambda: write_bytes(path, b"after"),
         ),
     )
-    journal.seal(change_set.id)
+    await journal.seal(change_set.id)
     path.write_bytes(b"before")
     pending = PendingMutation(
         id="undo_operation_0",
@@ -556,41 +576,43 @@ def interrupted_undo_fixture(
         intended_after_mode=mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     return journal, store, path, pending
 
 
-def test_reconcile_discards_mutation_that_never_happened(tmp_path: Path) -> None:
-    journal, store, _, pending = pending_fixture(tmp_path, b"before")
+async def test_reconcile_discards_mutation_that_never_happened(
+    tmp_path: Path,
+) -> None:
+    journal, store, _, pending = await pending_fixture(tmp_path, b"before")
 
-    journal.reconcile_pending()
+    await journal.reconcile_pending()
 
-    assert store.list_pending() == []
-    change_set = store.get(pending.change_set_id)
+    assert await store.list_pending() == []
+    change_set = await store.get(pending.change_set_id)
     assert change_set is not None
     assert change_set.files == []
 
 
-def test_reconcile_finalizes_completed_mutation(tmp_path: Path) -> None:
-    journal, store, _, pending = pending_fixture(tmp_path, b"after")
+async def test_reconcile_finalizes_completed_mutation(tmp_path: Path) -> None:
+    journal, store, _, pending = await pending_fixture(tmp_path, b"after")
 
-    journal.reconcile_pending()
+    await journal.reconcile_pending()
 
-    change_set = store.get(pending.change_set_id)
+    change_set = await store.get(pending.change_set_id)
     assert change_set is not None
     assert len(change_set.files) == 1
     assert change_set.files[0].after_hash == pending.intended_after_hash
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
 
-def test_reconcile_keeps_a_repeated_transition_as_a_distinct_mutation(
+async def test_reconcile_keeps_a_repeated_transition_as_a_distinct_mutation(
     tmp_path: Path,
 ) -> None:
     journal, store, blobs, workspace = journal_fixture(tmp_path)
     path = workspace / "file.txt"
     path.write_bytes(b"A")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
@@ -598,7 +620,7 @@ def test_reconcile_keeps_a_repeated_transition_as_a_distinct_mutation(
 
     for before, after in ((b"A", b"B"), (b"B", b"A")):
         assert path.read_bytes() == before
-        journal.apply_file_mutation(
+        await journal.apply_file_mutation(
             change_set_id=change_set.id,
             kind=FileChangeKind.UPDATED,
             intended_after=NodeSnapshot(FileNodeType.FILE, after, mode),
@@ -624,44 +646,44 @@ def test_reconcile_keeps_a_repeated_transition_as_a_distinct_mutation(
         intended_after_mode=mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     path.write_bytes(b"B")
 
-    journal.reconcile_pending()
+    await journal.reconcile_pending()
 
-    recovered = store.get(change_set.id)
+    recovered = await store.get(change_set.id)
     assert recovered is not None
     assert len(recovered.files) == 3
     merged = merge_file_changes(recovered.files)
     assert len(merged) == 1
     assert merged[0].before_hash == hashlib.sha256(b"A").hexdigest()
     assert merged[0].after_hash == hashlib.sha256(b"B").hexdigest()
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
     operations = ChangeOperations(
         store,
         blobs,
         resolve_workspace(workspace),
     )
-    operations.undo(change_set.id)
+    await operations.undo(change_set.id)
     assert path.read_bytes() == b"A"
-    operations.redo(change_set.id)
+    await operations.redo(change_set.id)
     assert path.read_bytes() == b"B"
 
 
-def test_reconcile_does_not_append_the_same_persisted_mutation_twice(
+async def test_reconcile_does_not_append_the_same_persisted_mutation_twice(
     tmp_path: Path,
 ) -> None:
     journal, store, blobs, workspace = journal_fixture(tmp_path)
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
     )
-    recorded = journal.apply_file_mutation(
+    recorded = await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.UPDATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -689,30 +711,30 @@ def test_reconcile_does_not_append_the_same_persisted_mutation_twice(
     )
     assert pending.intended_after_blob is not None
     assert blobs.get(pending.intended_after_blob) == b"after"
-    store.save_pending(pending)
+    await store.save_pending(pending)
 
-    journal.reconcile_pending()
-    journal.reconcile_pending()
+    await journal.reconcile_pending()
+    await journal.reconcile_pending()
 
-    recovered = store.get(change_set.id)
+    recovered = await store.get(change_set.id)
     assert recovered is not None
     assert recovered.files == [recorded]
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
 
-def test_reconcile_preserves_a_committed_mutation_reverted_to_before(
+async def test_reconcile_preserves_a_committed_mutation_reverted_to_before(
     tmp_path: Path,
 ) -> None:
     journal, store, _, workspace = journal_fixture(tmp_path)
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
     )
-    recorded = journal.apply_file_mutation(
+    recorded = await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.UPDATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -738,30 +760,30 @@ def test_reconcile_preserves_a_committed_mutation_reverted_to_before(
         intended_after_mode=recorded.after_mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     path.write_bytes(b"before")
 
     with pytest.raises(PendingMutationConflict, match="committed mutation"):
-        journal.reconcile_pending()
+        await journal.reconcile_pending()
 
-    retained = store.get(change_set.id)
+    retained = await store.get(change_set.id)
     assert retained is not None
     assert retained.lifecycle is ChangeLifecycle.OPEN
     assert retained.files == [recorded]
-    assert store.list_pending() == [pending]
+    assert await store.list_pending() == [pending]
 
 
-def test_reconcile_finalizes_a_committed_create_with_an_unconstrained_mode(
+async def test_reconcile_finalizes_a_committed_create_with_an_unconstrained_mode(
     tmp_path: Path,
 ) -> None:
     journal, store, _, workspace = journal_fixture(tmp_path)
     path = workspace / "created.txt"
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
     )
-    recorded = journal.apply_file_mutation(
+    recorded = await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.CREATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"content", None),
@@ -790,28 +812,28 @@ def test_reconcile_finalizes_a_committed_create_with_an_unconstrained_mode(
         intended_after_mode=None,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
 
-    journal.reconcile_pending()
+    await journal.reconcile_pending()
 
-    recovered = store.get(change_set.id)
+    recovered = await store.get(change_set.id)
     assert recovered is not None
     assert recovered.files == [recorded]
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
 
-def test_reconcile_preserves_a_committed_create_if_actual_mode_changed(
+async def test_reconcile_preserves_a_committed_create_if_actual_mode_changed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     journal, store, _, workspace = journal_fixture(tmp_path)
     path = workspace / "created.txt"
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
     )
-    recorded = journal.apply_file_mutation(
+    recorded = await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.CREATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"content", None),
@@ -840,7 +862,7 @@ def test_reconcile_preserves_a_committed_create_if_actual_mode_changed(
         intended_after_mode=None,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     original_capture = WorkspaceTreeTransaction.capture
 
     def capture_with_changed_mode(
@@ -863,24 +885,24 @@ def test_reconcile_preserves_a_committed_create_if_actual_mode_changed(
     )
 
     with pytest.raises(PendingMutationConflict, match="committed mutation"):
-        journal.reconcile_pending()
+        await journal.reconcile_pending()
 
-    assert store.list_pending() == [pending]
+    assert await store.list_pending() == [pending]
 
 
-def test_reconcile_preserves_legacy_mutation_identity_ambiguity(
+async def test_reconcile_preserves_legacy_mutation_identity_ambiguity(
     tmp_path: Path,
 ) -> None:
     journal, store, _, workspace = journal_fixture(tmp_path)
     path = workspace / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
     )
-    recorded = journal.apply_file_mutation(
+    recorded = await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.UPDATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -892,7 +914,7 @@ def test_reconcile_preserves_legacy_mutation_identity_ambiguity(
     )
     assert recorded.mutation_id is not None
     legacy = recorded.model_copy(update={"mutation_id": None})
-    store.save(change_set.model_copy(update={"files": [legacy]}))
+    await store.save(change_set.model_copy(update={"files": [legacy]}))
     pending = PendingMutation(
         id=recorded.mutation_id,
         change_set_id=change_set.id,
@@ -908,25 +930,27 @@ def test_reconcile_preserves_legacy_mutation_identity_ambiguity(
         intended_after_mode=recorded.after_mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
 
     with pytest.raises(PendingMutationConflict, match="legacy mutation identity"):
-        journal.reconcile_pending()
+        await journal.reconcile_pending()
 
-    retained = store.get(change_set.id)
+    retained = await store.get(change_set.id)
     assert retained is not None
     assert retained.files == [legacy]
-    assert store.list_pending() == [pending]
+    assert await store.list_pending() == [pending]
 
 
-def test_unresolved_pending_blocks_a_second_file_mutation(tmp_path: Path) -> None:
+async def test_unresolved_pending_blocks_a_second_file_mutation(
+    tmp_path: Path,
+) -> None:
     journal, store, blobs, workspace = journal_fixture(tmp_path)
     first = workspace / "first.txt"
     second = workspace / "second.txt"
     first.write_bytes(b"before")
     second.write_bytes(b"before")
     mode = stat.S_IMODE(first.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
@@ -946,7 +970,7 @@ def test_unresolved_pending_blocks_a_second_file_mutation(tmp_path: Path) -> Non
         intended_after_mode=mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     mutated = False
 
     def mutate() -> None:
@@ -955,7 +979,7 @@ def test_unresolved_pending_blocks_a_second_file_mutation(tmp_path: Path) -> Non
         second.write_bytes(b"after")
 
     with pytest.raises(PendingMutationConflict, match="unresolved pending"):
-        journal.apply_file_mutation(
+        await journal.apply_file_mutation(
             change_set_id=change_set.id,
             kind=FileChangeKind.UPDATED,
             intended_after=NodeSnapshot(FileNodeType.FILE, b"after", mode),
@@ -964,26 +988,26 @@ def test_unresolved_pending_blocks_a_second_file_mutation(tmp_path: Path) -> Non
 
     assert mutated is False
     assert second.read_bytes() == b"before"
-    assert store.list_pending() == [pending]
+    assert await store.list_pending() == [pending]
 
     with pytest.raises(PendingMutationConflict, match="unresolved pending"):
-        journal.preflight_batch(
+        await journal.preflight_batch(
             change_set_id=change_set.id,
             additional_nodes=1,
             additional_bytes=1,
         )
     with pytest.raises(PendingMutationConflict, match="unresolved pending"):
-        journal.record_execute(
+        await journal.record_execute(
             change_set_id=change_set.id,
             command="echo should-not-run",
             observed_paths=[],
         )
-    retained = store.get(change_set.id)
+    retained = await store.get(change_set.id)
     assert retained is not None
     assert retained.execute == []
 
 
-def test_reconcile_cannot_exceed_the_file_count_limit(
+async def test_reconcile_cannot_exceed_the_file_count_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -994,12 +1018,12 @@ def test_reconcile_cannot_exceed_the_file_count_limit(
     second.write_bytes(b"second")
     first_mode = stat.S_IMODE(first.stat().st_mode)
     second_mode = stat.S_IMODE(second.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
     )
-    journal.apply_file_mutation(
+    await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.UPDATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"committed", first_mode),
@@ -1024,19 +1048,19 @@ def test_reconcile_cannot_exceed_the_file_count_limit(
         intended_after_mode=second_mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     monkeypatch.setattr(journal_module, "MAX_CHANGESET_FILES", 1)
 
     with pytest.raises(ChangeCapacityExceeded, match="file limit"):
-        journal.reconcile_pending()
+        await journal.reconcile_pending()
 
-    retained = store.get(change_set.id)
+    retained = await store.get(change_set.id)
     assert retained is not None
     assert len(retained.files) == 1
-    assert store.list_pending() == [pending]
+    assert await store.list_pending() == [pending]
 
 
-def test_reconcile_cannot_exceed_the_byte_limit(
+async def test_reconcile_cannot_exceed_the_byte_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1047,12 +1071,12 @@ def test_reconcile_cannot_exceed_the_byte_limit(
     second.write_bytes(b"12345")
     first_mode = stat.S_IMODE(first.stat().st_mode)
     second_mode = stat.S_IMODE(second.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id="turn_1",
         workspace=resolve_workspace(workspace),
     )
-    journal.apply_file_mutation(
+    await journal.apply_file_mutation(
         change_set_id=change_set.id,
         kind=FileChangeKind.UPDATED,
         intended_after=NodeSnapshot(FileNodeType.FILE, b"b", first_mode),
@@ -1077,23 +1101,25 @@ def test_reconcile_cannot_exceed_the_byte_limit(
         intended_after_mode=second_mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     monkeypatch.setattr(journal_module, "MAX_CHANGESET_BYTES", 6)
 
     with pytest.raises(ChangeCapacityExceeded, match="byte limit"):
-        journal.reconcile_pending()
+        await journal.reconcile_pending()
 
-    retained = store.get(change_set.id)
+    retained = await store.get(change_set.id)
     assert retained is not None
     assert len(retained.files) == 1
-    assert store.list_pending() == [pending]
+    assert await store.list_pending() == [pending]
 
 
-def test_reconcile_repairs_legacy_sealed_ordinary_pending(tmp_path: Path) -> None:
-    journal, store, _, pending = pending_fixture(tmp_path, b"after")
-    change_set = store.get(pending.change_set_id)
+async def test_reconcile_repairs_legacy_sealed_ordinary_pending(
+    tmp_path: Path,
+) -> None:
+    journal, store, _, pending = await pending_fixture(tmp_path, b"after")
+    change_set = await store.get(pending.change_set_id)
     assert change_set is not None
-    store.save(
+    await store.save(
         change_set.model_copy(
             update={
                 "lifecycle": ChangeLifecycle.APPLIED,
@@ -1102,51 +1128,57 @@ def test_reconcile_repairs_legacy_sealed_ordinary_pending(tmp_path: Path) -> Non
         )
     )
 
-    journal.reconcile_pending()
+    await journal.reconcile_pending()
 
-    repaired = store.get(pending.change_set_id)
+    repaired = await store.get(pending.change_set_id)
     assert repaired is not None
     assert repaired.lifecycle is ChangeLifecycle.APPLIED
     assert [change.path for change in repaired.files] == ["file.txt"]
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
 
-def test_reconcile_preserves_conflicting_pending_mutation(tmp_path: Path) -> None:
-    journal, store, _, pending = pending_fixture(tmp_path, b"user edit")
-
-    with pytest.raises(PendingMutationConflict):
-        journal.reconcile_pending()
-
-    assert store.list_pending() == [pending]
-
-
-def test_reconcile_rolls_back_an_interrupted_uncommitted_undo(
+async def test_reconcile_preserves_conflicting_pending_mutation(
     tmp_path: Path,
 ) -> None:
-    journal, store, path, _ = interrupted_undo_fixture(tmp_path)
+    journal, store, _, pending = await pending_fixture(tmp_path, b"user edit")
 
-    journal.reconcile_pending()
+    with pytest.raises(PendingMutationConflict):
+        await journal.reconcile_pending()
+
+    assert await store.list_pending() == [pending]
+
+
+async def test_reconcile_rolls_back_an_interrupted_uncommitted_undo(
+    tmp_path: Path,
+) -> None:
+    journal, store, path, _ = await interrupted_undo_fixture(tmp_path)
+
+    await journal.reconcile_pending()
 
     assert path.read_bytes() == b"after"
-    assert store.list_pending() == []
+    assert await store.list_pending() == []
 
 
-def test_reconcile_finalizes_an_interrupted_committed_undo(tmp_path: Path) -> None:
-    journal, store, path, pending = interrupted_undo_fixture(tmp_path)
-    change_set = store.get(pending.change_set_id)
+async def test_reconcile_finalizes_an_interrupted_committed_undo(
+    tmp_path: Path,
+) -> None:
+    journal, store, path, pending = await interrupted_undo_fixture(tmp_path)
+    change_set = await store.get(pending.change_set_id)
     assert change_set is not None
-    store.save(change_set.model_copy(update={"lifecycle": ChangeLifecycle.UNDONE}))
+    await store.save(
+        change_set.model_copy(update={"lifecycle": ChangeLifecycle.UNDONE})
+    )
 
-    journal.reconcile_pending()
+    await journal.reconcile_pending()
 
     assert path.read_bytes() == b"before"
-    assert store.list_pending() == []
-    committed = store.get(pending.change_set_id)
+    assert await store.list_pending() == []
+    committed = await store.get(pending.change_set_id)
     assert committed is not None
     assert committed.lifecycle is ChangeLifecycle.UNDONE
 
 
-def test_reconcile_rejects_parent_replacement_without_reading_external_file(
+async def test_reconcile_rejects_parent_replacement_without_reading_external_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1156,7 +1188,7 @@ def test_reconcile_rejects_parent_replacement_without_reading_external_file(
     path = parent / "file.txt"
     path.write_bytes(b"before")
     mode = stat.S_IMODE(path.stat().st_mode)
-    change_set = journal.begin(
+    change_set = await journal.begin(
         session_id="session_1",
         turn_id=None,
         workspace=resolve_workspace(workspace),
@@ -1176,7 +1208,7 @@ def test_reconcile_rejects_parent_replacement_without_reading_external_file(
         intended_after_mode=mode,
         created_at=change_set.created_at,
     )
-    store.save_pending(pending)
+    await store.save_pending(pending)
     outside = tmp_path / "outside"
     outside.mkdir()
     sentinel = outside / "file.txt"
@@ -1184,55 +1216,57 @@ def test_reconcile_rejects_parent_replacement_without_reading_external_file(
     replacement = ParentReplacement(parent, outside)
     original_list_pending = store.list_pending
 
-    def list_pending_with_race() -> list[PendingMutation]:
-        result = original_list_pending()
+    async def list_pending_with_race() -> list[PendingMutation]:
+        result = await original_list_pending()
         replacement.trigger()
         return result
 
     monkeypatch.setattr(store, "list_pending", list_pending_with_race)
     try:
         with pytest.raises(PendingMutationConflict):
-            journal.reconcile_pending()
+            await journal.reconcile_pending()
     finally:
         replacement.restore()
 
     assert sentinel.read_bytes() == b"after"
-    assert original_list_pending() == [pending]
-    restored = store.get(change_set.id)
+    assert await original_list_pending() == [pending]
+    restored = await store.get(change_set.id)
     assert restored is not None
     assert restored.files == []
 
 
-def test_reconcile_rejects_hard_link_and_preserves_pending(tmp_path: Path) -> None:
-    journal, store, path, pending = pending_fixture(tmp_path, b"before")
+async def test_reconcile_rejects_hard_link_and_preserves_pending(
+    tmp_path: Path,
+) -> None:
+    journal, store, path, pending = await pending_fixture(tmp_path, b"before")
     sentinel = tmp_path / "outside.txt"
     sentinel.write_bytes(b"before")
     path.unlink()
     os.link(sentinel, path)
 
     with pytest.raises(PendingMutationConflict):
-        journal.reconcile_pending()
+        await journal.reconcile_pending()
 
     assert sentinel.read_bytes() == b"before"
-    assert store.list_pending() == [pending]
+    assert await store.list_pending() == [pending]
 
 
 @pytest.mark.parametrize("relative_path", [r"\outside.txt", "/outside.txt"])
-def test_reconcile_rejects_windows_rooted_pending_paths(
+async def test_reconcile_rejects_windows_rooted_pending_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     relative_path: str,
 ) -> None:
-    journal, store, _, pending = pending_fixture(tmp_path, b"before")
+    journal, store, _, pending = await pending_fixture(tmp_path, b"before")
     rooted = pending.model_copy(update={"relative_path": relative_path})
-    store.delete_pending(pending.id)
-    store.save_pending(rooted)
+    await store.delete_pending(pending.id)
+    await store.save_pending(rooted)
     monkeypatch.setattr(
         "awesome_agent.core.workspace.path_syntax.workspace_path_platform",
         lambda: "windows",
     )
 
     with pytest.raises(PendingMutationConflict, match="workspace boundary"):
-        journal.reconcile_pending()
+        await journal.reconcile_pending()
 
-    assert store.list_pending() == [rooted]
+    assert await store.list_pending() == [rooted]

@@ -16,6 +16,7 @@ from awesome_agent.core.filesystem import MutationTargetChanged, lstat_child
 from awesome_agent.core.filesystem import identity as filesystem_identity
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
+    ToolArguments,
     ToolErrorCode,
     ToolOutput,
     ToolPresentation,
@@ -33,7 +34,7 @@ from awesome_agent.core.tools.policy import (
 )
 
 
-class DeleteArguments(BaseModel):
+class DeleteArguments(ToolArguments):
     path: str
 
 
@@ -45,6 +46,27 @@ def _deny_protected(relative: Path) -> None:
             "Protected workspace paths cannot be deleted.",
             metadata={"path": relative.as_posix()},
         )
+
+
+def admit_delete(
+    arguments: BaseModel,
+    context: ToolExecutionContext,
+) -> None:
+    options = cast(DeleteArguments, arguments)
+    validate_workspace_path_syntax(options.path)
+    requested = Path(options.path)
+    if requested in {Path("."), Path()}:
+        raise ExpectedToolFailure(
+            ToolErrorCode.PERMISSION_DENIED,
+            "The workspace root cannot be deleted.",
+        )
+    parent = resolve_workspace_path(
+        context.workspace,
+        requested.parent.as_posix(),
+        must_exist=True,
+        expected_kind="directory",
+    )
+    _deny_protected(parent.relative / requested.name)
 
 
 def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
@@ -106,7 +128,7 @@ def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
                     max_bytes=MAX_CHANGESET_BYTES,
                 )
                 try:
-                    journal.preflight_batch(
+                    await journal.preflight_batch(
                         change_set_id=context.change_set_id,
                         additional_nodes=len(nodes),
                         additional_bytes=sum(node.content_bytes for node in nodes),
@@ -119,7 +141,7 @@ def create_delete_handler(journal: ChangeJournal) -> ToolHandler:
                     ) from error
 
                 for node in nodes:
-                    journal.apply_file_mutation(
+                    await journal.apply_file_mutation(
                         change_set_id=context.change_set_id,
                         kind=FileChangeKind.DELETED,
                         intended_after=None,

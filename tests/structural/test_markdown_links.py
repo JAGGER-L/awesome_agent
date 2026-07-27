@@ -326,7 +326,8 @@ def test_state_recovery_docs_use_the_product_flow() -> None:
         encoding="utf-8"
     )
 
-    assert "Schema 7" in storage
+    assert "Schema 8" in storage
+    assert "7 -> 8" in storage
     assert "exclusive" in storage and "lease" in storage
     assert "Reset local state and continue" in troubleshooting
     assert "API keys" in troubleshooting
@@ -336,14 +337,24 @@ def test_state_recovery_docs_use_the_product_flow() -> None:
 
 def test_roadmap_separates_current_behavior_from_future_directions() -> None:
     roadmap = (DOCS / "roadmap.md").read_text(encoding="utf-8")
+    roadmap_zh = (DOCS / "roadmap.zh-CN.md").read_text(encoding="utf-8")
 
     current = roadmap.index("## Current foundation")
     near_term = roadmap.index("## Near-term product directions")
     later = roadmap.index("## Later directions")
     assert current < near_term < later
-    assert "GitHub Pages documentation site" in roadmap[current:near_term]
+    current_foundation = roadmap[current:near_term]
+    assert "GitHub Pages documentation site" in current_foundation
+    assert "safe local directory/ZIP" in current_foundation
+    assert "listing, installation, replacement, and removal" in current_foundation
+
+    current_zh = roadmap_zh.index("## 当前基础")
+    near_term_zh = roadmap_zh.index("## 近期产品方向")
+    current_foundation_zh = roadmap_zh[current_zh:near_term_zh]
+    assert "安全的本地目录/ZIP" in current_foundation_zh
+    assert "列出、安装、替换和移除" in current_foundation_zh
+
     for direction in (
-        "One-command Skills installation",
         "Multi-Agent delegation",
         "More model providers",
         "Search tools",
@@ -418,7 +429,7 @@ def test_public_reference_covers_runtime_contracts() -> None:
         "shutdown",
     ):
         assert f"`{method}`" in protocol
-    assert "protocol v3" in protocol.casefold()
+    assert "protocol v4" in protocol.casefold()
 
 
 def test_documentation_explains_ownership_and_validation() -> None:

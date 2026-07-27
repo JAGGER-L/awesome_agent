@@ -4,9 +4,18 @@ from awesome_agent.context import (
     ContextBuilder,
     ContextOverflow,
     ContextRequest,
+    ContextSkillIdentity,
     ContextSource,
     ContextSourceKind,
     calculate_context_budget,
+    skill_identities_from_manifest,
+)
+
+_REVIEW_IDENTITY = ContextSkillIdentity(
+    name="review",
+    source="user",
+    identity=f"skill-v1-sha256:{'a' * 64}",
+    allowed_tools=("read_file",),
 )
 
 
@@ -17,6 +26,7 @@ def _source(
     mandatory: bool = False,
     source_id: str | None = None,
     token_budget: int | None = None,
+    skill_identities: tuple[ContextSkillIdentity, ...] = (),
 ) -> ContextSource:
     return ContextSource(
         kind=kind,
@@ -24,13 +34,28 @@ def _source(
         content=content,
         mandatory=mandatory,
         token_budget=token_budget,
+        skill_identities=skill_identities,
     )
 
 
 @pytest.mark.asyncio
 async def test_builder_uses_stable_source_order_independent_of_input_order() -> None:
     sources = tuple(
-        _source(kind, kind.value, mandatory=kind is ContextSourceKind.CURRENT_INPUT)
+        _source(
+            kind,
+            kind.value,
+            mandatory=kind is ContextSourceKind.CURRENT_INPUT,
+            source_id=(
+                "review"
+                if kind is ContextSourceKind.SKILL
+                else "auto"
+                if kind is ContextSourceKind.SKILL_CATALOG
+                else None
+            ),
+            skill_identities=(
+                (_REVIEW_IDENTITY,) if kind is ContextSourceKind.SKILL else ()
+            ),
+        )
         for kind in reversed(tuple(ContextSourceKind))
     )
 
@@ -136,6 +161,7 @@ async def test_mandatory_instruction_sources_are_not_deduplicated() -> None:
                     "same instructions",
                     mandatory=True,
                     source_id="review",
+                    skill_identities=(_REVIEW_IDENTITY,),
                 ),
             ),
             configured_total_tokens=262_144,
@@ -262,3 +288,66 @@ async def test_manifest_contains_coverage_but_not_source_body() -> None:
     item = prepared.manifest[0]
     assert (item.covered_sequence_start, item.covered_sequence_end) == (3, 10)
     assert "private source body" not in item.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_builder_freezes_structured_skill_identities_in_manifest() -> None:
+    prepared = await ContextBuilder().prepare(
+        ContextRequest(
+            sources=(
+                ContextSource(
+                    kind=ContextSourceKind.SKILL_CATALOG,
+                    source_id="auto",
+                    content='{"skills":[{"name":"review"}]}',
+                    role="system",
+                    mandatory=True,
+                    skill_identities=(_REVIEW_IDENTITY,),
+                ),
+            ),
+            configured_total_tokens=262_144,
+            model_context_limit=262_144,
+        )
+    )
+
+    assert prepared.manifest[0].skill_identities == (_REVIEW_IDENTITY,)
+    assert skill_identities_from_manifest(prepared.manifest) == (_REVIEW_IDENTITY,)
+
+
+def test_skill_identities_are_scoped_and_malformed_manifests_fail_closed() -> None:
+    with pytest.raises(ValueError, match="Only Skill context"):
+        ContextSource(
+            kind=ContextSourceKind.CURRENT_INPUT,
+            source_id="input",
+            content="question",
+            skill_identities=(_REVIEW_IDENTITY,),
+        )
+
+    with pytest.raises(ValueError, match="must carry its own identity"):
+        ContextSource(
+            kind=ContextSourceKind.SKILL,
+            source_id="review",
+            content="instructions",
+        )
+
+    with pytest.raises(ValueError, match="source ID must be auto"):
+        ContextSource(
+            kind=ContextSourceKind.SKILL_CATALOG,
+            source_id="other",
+            content="catalog",
+        )
+
+    malformed = {
+        "kind": "skill_catalog",
+        "source_id": "auto",
+        "order": 0,
+        "estimated_tokens": 1,
+        "truncated": False,
+        "content_hash": "b" * 64,
+        "skill_identities": [
+            {
+                **_REVIEW_IDENTITY.model_dump(mode="json"),
+                "identity": "not-a-skill-identity",
+            }
+        ],
+    }
+    assert skill_identities_from_manifest((malformed,)) == ()

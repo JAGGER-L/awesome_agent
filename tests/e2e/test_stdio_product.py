@@ -5,7 +5,7 @@ import json
 import os
 import sqlite3
 import sys
-from contextlib import closing
+from contextlib import closing, suppress
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,10 @@ import pytest
 
 from awesome_agent.storage import APPLICATION_SCHEMA_VERSION
 from awesome_agent.version import PRODUCT_VERSION
+
+_FRAME_TIMEOUT_SECONDS = 10.0
+_COLD_START_TIMEOUT_SECONDS = 30.0
+_STDERR_TAIL_BYTES = 4_096
 
 
 def _value(frame: dict[str, Any]) -> dict[str, Any]:
@@ -44,6 +48,8 @@ class Client:
         self,
         method: str,
         params: dict[str, object] | None = None,
+        *,
+        timeout_seconds: float = _FRAME_TIMEOUT_SECONDS,
     ) -> dict[str, Any]:
         self.identifier += 1
         identifier = self.identifier
@@ -61,7 +67,7 @@ class Client:
         )
         await self.process.stdin.drain()
         while True:
-            frame = await self._read()
+            frame = await self._read(timeout_seconds=timeout_seconds)
             if frame.get("method") == "event":
                 self.events.append(frame["params"])
                 continue
@@ -90,14 +96,39 @@ class Client:
                 if event["event_type"] in terminal:
                     return observed
 
-    async def _read(self) -> dict[str, Any]:
+    async def _read(
+        self,
+        *,
+        timeout_seconds: float = _FRAME_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
         assert self.process.stdout is not None
-        raw = await asyncio.wait_for(self.process.stdout.readline(), timeout=10)
+        try:
+            raw = await asyncio.wait_for(
+                self.process.stdout.readline(),
+                timeout=timeout_seconds,
+            )
+        except TimeoutError as error:
+            stderr_tail = await self._terminate_after_timeout()
+            raise AssertionError(
+                f"Timed out after {timeout_seconds:g}s waiting for a protocol frame; "
+                f"returncode={self.process.returncode}; "
+                f"frames_read={len(self.stdout_frames)}; "
+                f"stderr_tail={stderr_tail!r}"
+            ) from error
         assert raw, await self.stderr()
         frame: object = json.loads(raw)
         assert isinstance(frame, dict)
         self.stdout_frames.append(frame)
         return frame
+
+    async def _terminate_after_timeout(self) -> str:
+        if self.process.stdin is not None:
+            self.process.stdin.close()
+        if self.process.returncode is None:
+            with suppress(ProcessLookupError):
+                self.process.kill()
+        _, stderr = await self.process.communicate()
+        return stderr[-_STDERR_TAIL_BYTES:].decode(errors="replace")
 
     async def stderr(self) -> str:
         if self.process.stderr is None:
@@ -179,10 +210,11 @@ async def test_stdio_full_flow_and_restart(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
+        timeout_seconds=_COLD_START_TIMEOUT_SECONDS,
     )
     initialized_value = _value(initialized)
     interaction_id = initialized_value["interaction_id"]
@@ -288,10 +320,11 @@ async def test_stdio_full_flow_and_restart(
     ready = await restarted.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
+        timeout_seconds=_COLD_START_TIMEOUT_SECONDS,
     )
     assert _value(ready)["status"] == "ready"
     resumed = await restarted.request(
@@ -329,10 +362,11 @@ async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
+        timeout_seconds=_COLD_START_TIMEOUT_SECONDS,
     )
     reset_required = _value(initialized)
     assert reset_required["status"] == "state_reset_required"
@@ -356,7 +390,7 @@ async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
     after_reset = await client.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -371,7 +405,7 @@ async def test_stdio_resets_older_state_then_continues_to_workspace_trust(
         },
     )
     assert _value(trusted) == {"accepted": True, "status": "resolved"}
-    assert _schema_version(database) == APPLICATION_SCHEMA_VERSION == 7
+    assert _schema_version(database) == APPLICATION_SCHEMA_VERSION == 8
     with closing(sqlite3.connect(database)) as connection:
         marker = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'legacy_marker'"
@@ -391,17 +425,18 @@ async def test_stdio_rejects_newer_state_without_offering_reset(
     home = tmp_path / "home"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    database = _write_schema_version(home, 8)
+    database = _write_schema_version(home, 9)
     before = database.read_bytes()
     client = await _spawn(home=home, workspace=workspace, provider="deepseek")
 
     initialized = await client.request(
         "initialize",
         {
-            "protocol_version": 3,
+            "protocol_version": 4,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
+        timeout_seconds=_COLD_START_TIMEOUT_SECONDS,
     )
 
     assert initialized["result"] == {
@@ -414,7 +449,7 @@ async def test_stdio_rejects_newer_state_without_offering_reset(
             ),
             "retryable": False,
             "data": {
-                "found_schema": 8,
+                "found_schema": 9,
                 "expected_schema": APPLICATION_SCHEMA_VERSION,
                 "state_directory": str((home / "state").resolve()),
             },

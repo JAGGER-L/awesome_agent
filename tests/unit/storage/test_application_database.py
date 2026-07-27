@@ -1,8 +1,10 @@
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from awesome_agent.storage import database as database_module
 from awesome_agent.storage.database import (
     APPLICATION_SCHEMA_VERSION,
     ApplicationSchemaMismatch,
@@ -24,10 +26,15 @@ def test_initialize_creates_versioned_wal_database(tmp_path: Path) -> None:
         table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name = 'trusted_workspaces'"
         ).fetchone()
-    assert version == APPLICATION_SCHEMA_VERSION == 7
+        thread_columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(threads)").fetchall()
+        }
+    assert version == APPLICATION_SCHEMA_VERSION == 8
     assert str(journal_mode).lower() == "wal"
     assert foreign_keys == 1
     assert table is not None
+    assert "lineage_json" in thread_columns
 
 
 def test_noncurrent_schema_is_rejected(tmp_path: Path) -> None:
@@ -55,8 +62,36 @@ def test_noncurrent_schema_is_rejected_without_mutation(tmp_path: Path) -> None:
 
     assert raised.value.found == 1
     assert raised.value.expected == APPLICATION_SCHEMA_VERSION
-    assert raised.value.direction.value == "older"
+    assert raised.value.direction.value == "migration_unavailable"
     assert path.read_bytes() == before
     assert tuple(sorted(item.name for item in path.parent.iterdir())) == before_entries
     assert not path.with_name("application.db-wal").exists()
     assert not path.with_name("application.db-shm").exists()
+
+
+def test_connect_closes_partial_connection_when_pragma_setup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingConnection:
+        row_factory: object | None = None
+
+        def __init__(self) -> None:
+            self.closed = False
+
+        def execute(self, statement: str) -> None:
+            raise sqlite3.OperationalError(f"injected failure: {statement}")
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = FailingConnection()
+    monkeypatch.setattr(
+        "awesome_agent.storage.database.sqlite3.connect",
+        lambda *args, **kwargs: cast(sqlite3.Connection, connection),
+    )
+
+    with pytest.raises(sqlite3.OperationalError, match="injected failure"):
+        database_module._connect(tmp_path / "application.db")
+
+    assert connection.closed is True

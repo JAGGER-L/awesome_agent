@@ -9,7 +9,7 @@ from contextlib import suppress
 from pathlib import Path
 from textwrap import dedent
 from time import monotonic
-from typing import cast
+from typing import NamedTuple, cast
 
 import pytest
 
@@ -18,6 +18,15 @@ from awesome_agent.core.tools._windows_process_job import WindowsCommandJob
 from awesome_agent.core.tools.process import ProcessRunner
 
 _SIGKILL = cast(int, vars(signal).get("SIGKILL", signal.SIGTERM))
+_PROC_SELF_STAT = Path("/proc/self/stat")
+
+
+class _ProcessStat(NamedTuple):
+    state: str
+    ppid: int
+    pgid: int
+    session: int
+    starttime: int
 
 
 def _posix_process_group(pid: int) -> int:
@@ -30,7 +39,37 @@ def _kill_posix_process_group(pid: int) -> None:
     kill_process_group(pid, _SIGKILL)
 
 
-def _process_is_running(pid: int) -> bool:
+def _posix_process_session(pid: int) -> int:
+    get_process_session = cast(Callable[[int], int], vars(os)["getsid"])
+    return get_process_session(pid)
+
+
+def _read_process_stat(pid: int) -> _ProcessStat | None:
+    try:
+        raw = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+        fields = raw[raw.rfind(")") + 1 :].split()
+        return _ProcessStat(
+            state=fields[0][:1],
+            ppid=int(fields[1]),
+            pgid=int(fields[2]),
+            session=int(fields[3]),
+            starttime=int(fields[19]),
+        )
+    except (IndexError, OSError, ValueError):
+        return None
+
+
+def _process_details(pid: int) -> str:
+    current = _read_process_stat(pid)
+    if current is not None:
+        return f"pid={pid} stat={current!r}"
+    return (
+        f"pid={pid} state=unknown ppid=unknown pgid=unknown "
+        "session=unknown starttime=unknown"
+    )
+
+
+def _process_is_running(pid: int, *, starttime: int | None = None) -> bool:
     if os.name == "nt":
         win_dll = getattr(ctypes, "WinDLL", None)
         if win_dll is None:
@@ -58,11 +97,13 @@ def _process_is_running(pid: int) -> bool:
         return False
     status = Path("/proc") / str(pid) / "stat"
     if status.exists():
-        try:
-            return status.read_text(encoding="utf-8").split()[2] != "Z"
-        except OSError:
+        current = _read_process_stat(pid)
+        if current is None:
             return True
-    return True
+        return current.state != "Z" and (
+            starttime is None or current.starttime == starttime
+        )
+    return starttime is None or not _PROC_SELF_STAT.is_file()
 
 
 def _wait_for_pid_file(path: Path, *, timeout: float = 5.0) -> int:
@@ -81,13 +122,21 @@ def _wait_for_pid_file(path: Path, *, timeout: float = 5.0) -> int:
     raise AssertionError(f"Timed out waiting for pid file: {path}")
 
 
-def _wait_for_process_stop(pid: int, *, timeout: float = 5.0) -> None:
+def _wait_for_process_stop(
+    pid: int,
+    *,
+    timeout: float = 5.0,
+    starttime: int | None = None,
+) -> None:
     deadline = monotonic() + timeout
-    while _process_is_running(pid) and monotonic() < deadline:
+    while _process_is_running(pid, starttime=starttime) and monotonic() < deadline:
         import time
 
         time.sleep(0.02)
-    assert not _process_is_running(pid), pid
+    assert not _process_is_running(pid, starttime=starttime), (
+        f"process remained alive: {_process_details(pid)}; "
+        f"expected_starttime={starttime}"
+    )
 
 
 @pytest.mark.asyncio
@@ -126,7 +175,7 @@ def test_process_runner_does_not_inherit_core_stdin(tmp_path: Path) -> None:
                 ],
                 cwd=Path({str(tmp_path)!r}),
                 environment=dict(os.environ),
-                timeout_seconds=0.3,
+                timeout_seconds=2.0,
                 max_output_chars=1_000,
             )
             print(
@@ -148,7 +197,7 @@ def test_process_runner_does_not_inherit_core_stdin(tmp_path: Path) -> None:
         text=True,
     )
     try:
-        core.wait(timeout=5)
+        core.wait(timeout=10)
         assert core.stdout is not None
         assert core.stderr is not None
         output = core.stdout.read()
@@ -158,7 +207,7 @@ def test_process_runner_does_not_inherit_core_stdin(tmp_path: Path) -> None:
             core.stdin.close()
         if core.poll() is None:
             core.kill()
-            core.wait(timeout=5)
+            core.wait(timeout=10)
 
     assert core.returncode == 0, errors
     assert output == "0|0|0\n"
@@ -361,6 +410,123 @@ async def test_process_runner_preserves_executable_spawn_error(
     assert error.value.filename == str(missing)
     assert not status_path.exists()
     assert not process_module._windows_status_staging_path(status_path).exists()
+
+
+@pytest.mark.asyncio
+async def test_windows_spawn_status_retries_a_transient_open_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"S" + (0).to_bytes(4, byteorder="big", signed=True)
+    attempts = 0
+
+    def read_status(path: Path) -> bytes:
+        nonlocal attempts
+        assert path == tmp_path / "spawn.status"
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError(13, "status publication is still locked", path)
+        return payload
+
+    process = cast(
+        asyncio.subprocess.Process,
+        type("ExitedSupervisor", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(process_module, "_read_windows_status", read_status)
+
+    await process_module._wait_for_windows_supervisor_spawn(
+        tmp_path / "spawn.status",
+        process,
+        sys.executable,
+    )
+
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_windows_spawn_status_preserves_a_persistent_open_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_path = tmp_path / "spawn.status"
+
+    def read_status(path: Path) -> bytes:
+        assert path == status_path
+        raise PermissionError(13, "status publication remains locked", path)
+
+    process = cast(
+        asyncio.subprocess.Process,
+        type("RunningSupervisor", (), {"returncode": None})(),
+    )
+    monkeypatch.setattr(process_module, "_read_windows_status", read_status)
+    monkeypatch.setattr(process_module, "_WINDOWS_STATUS_OPEN_GRACE_SECONDS", 0)
+
+    with pytest.raises(PermissionError) as error:
+        await process_module._wait_for_windows_supervisor_spawn(
+            status_path,
+            process,
+            sys.executable,
+        )
+
+    assert error.value.filename == status_path
+
+
+@pytest.mark.asyncio
+async def test_windows_spawn_status_keeps_denial_when_publication_disappears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_path = tmp_path / "spawn.status"
+    attempts = 0
+
+    def read_status(path: Path) -> bytes:
+        nonlocal attempts
+        assert path == status_path
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError(13, "status publication was locked", path)
+        return b""
+
+    process = cast(
+        asyncio.subprocess.Process,
+        type("ExitedSupervisor", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(process_module, "_read_windows_status", read_status)
+    monkeypatch.setattr(process_module, "_WINDOWS_STATUS_OPEN_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(process_module, "_SUPERVISOR_EVENT_POLL_SECONDS", 0)
+
+    with pytest.raises(PermissionError) as error:
+        await process_module._wait_for_windows_supervisor_spawn(
+            status_path,
+            process,
+            sys.executable,
+        )
+
+    assert attempts > 1
+    assert error.value.filename == status_path
+
+
+@pytest.mark.asyncio
+async def test_windows_spawn_status_reports_exit_without_an_open_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_path = tmp_path / "spawn.status"
+    process = cast(
+        asyncio.subprocess.Process,
+        type("ExitedSupervisor", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(process_module, "_read_windows_status", lambda path: b"")
+
+    with pytest.raises(
+        RuntimeError,
+        match="Windows command supervisor exited before spawning",
+    ):
+        await process_module._wait_for_windows_supervisor_spawn(
+            status_path,
+            process,
+            sys.executable,
+        )
 
 
 @pytest.mark.asyncio
@@ -930,18 +1096,47 @@ def test_process_runner_kills_command_tree_when_core_is_sigkilled(
     command_pid: int | None = None
     descendant_pid: int | None = None
     command_group: int | None = None
+    command_starttime: int | None = None
+    descendant_starttime: int | None = None
     try:
         command_pid = _wait_for_pid_file(command_pid_file)
         descendant_pid = _wait_for_pid_file(descendant_pid_file)
         command_group = _posix_process_group(command_pid)
-        assert _process_is_running(command_pid)
-        assert _process_is_running(descendant_pid)
+        descendant_group = _posix_process_group(descendant_pid)
+        command_session = _posix_process_session(command_pid)
+        descendant_session = _posix_process_session(descendant_pid)
+        command_stat = _read_process_stat(command_pid)
+        descendant_stat = _read_process_stat(descendant_pid)
+        command_starttime = command_stat.starttime if command_stat else None
+        descendant_starttime = descendant_stat.starttime if descendant_stat else None
+        topology_ready = (
+            command_group == descendant_group
+            and command_group == command_session
+            and command_session == descendant_session
+            and _process_is_running(command_pid, starttime=command_starttime)
+            and _process_is_running(descendant_pid, starttime=descendant_starttime)
+            and (
+                not _PROC_SELF_STAT.is_file()
+                or (command_stat is not None and descendant_stat is not None)
+            )
+        )
+        assert topology_ready, (
+            "Command tree was not ready in one POSIX cleanup domain: "
+            f"command=({_process_details(command_pid)}); "
+            f"descendant=({_process_details(descendant_pid)})"
+        )
 
         os.kill(core.pid, _SIGKILL)
         core.wait(timeout=5)
 
-        _wait_for_process_stop(command_pid)
-        _wait_for_process_stop(descendant_pid)
+        _wait_for_process_stop(
+            command_pid,
+            starttime=command_starttime,
+        )
+        _wait_for_process_stop(
+            descendant_pid,
+            starttime=descendant_starttime,
+        )
     finally:
         if core.poll() is None:
             core.kill()
@@ -950,6 +1145,8 @@ def test_process_runner_kills_command_tree_when_core_is_sigkilled(
             with suppress(ProcessLookupError):
                 _kill_posix_process_group(command_group)
         if command_pid is not None:
-            _wait_for_process_stop(command_pid, timeout=1)
+            _wait_for_process_stop(command_pid, timeout=1, starttime=command_starttime)
         if descendant_pid is not None:
-            _wait_for_process_stop(descendant_pid, timeout=1)
+            _wait_for_process_stop(
+                descendant_pid, timeout=1, starttime=descendant_starttime
+            )

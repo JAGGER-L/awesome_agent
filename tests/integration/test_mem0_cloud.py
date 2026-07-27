@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-from awesome_agent.agent import CloudPostAnswerMemory
+from awesome_agent.agent import PostAnswerFinalizationRequest
 from awesome_agent.application.command_results import (
     CommandError,
     CommandResult,
@@ -34,12 +35,13 @@ from awesome_agent.memory import (
     DistillationStatus,
     Mem0CloudAdapter,
     Mem0Identity,
+    Mem0PostAnswerFinalizer,
     MemoryCandidate,
     MemoryScope,
 )
 from awesome_agent.modeling import SelectedModel
 from awesome_agent.paths import AwesomePaths
-from awesome_agent.storage import SQLiteMcpEnablementStore
+from awesome_agent.storage import ApplicationSQLite, SQLiteMcpEnablementStore
 from awesome_agent.storage.conversations import SQLiteConversationRepositories
 
 
@@ -98,6 +100,28 @@ class FakeMem0Client:
         return {"status": "deleted"}
 
 
+_ACTIVE_DATABASE: ApplicationSQLite | None = None
+
+
+@pytest.fixture(autouse=True)
+async def application_database(tmp_path: Path) -> AsyncIterator[ApplicationSQLite]:
+    global _ACTIVE_DATABASE
+    assert _ACTIVE_DATABASE is None
+    database = ApplicationSQLite(tmp_path / "home" / "state" / "application.db")
+    await database.initialize()
+    _ACTIVE_DATABASE = database
+    try:
+        yield database
+    finally:
+        _ACTIVE_DATABASE = None
+        await database.aclose()
+
+
+def _database() -> ApplicationSQLite:
+    assert _ACTIVE_DATABASE is not None
+    return _ACTIVE_DATABASE
+
+
 def _credential_statuses() -> ProviderCredentialStatuses:
     statuses = missing_provider_credential_statuses()
     return statuses.model_copy(
@@ -151,7 +175,7 @@ class Distiller:
         )
 
 
-def _extensions(
+async def _extensions(
     tmp_path: Path,
     *,
     client: FakeMem0Client,
@@ -163,11 +187,11 @@ def _extensions(
     workspace = resolve_workspace(workspace_path)
     paths = AwesomePaths.from_home(tmp_path / "home")
     conversation = ConversationService(
-        store=SQLiteConversationRepositories(paths.application_db)
+        store=SQLiteConversationRepositories(_database())
     )
-    thread = conversation.create_thread(workspace.key)
+    thread = await conversation.create_thread(workspace.key)
     catalog = SkillCatalog((), ())
-    enablements = SQLiteMcpEnablementStore(paths.application_db)
+    enablements = SQLiteMcpEnablementStore(_database())
 
     adapter = Mem0CloudAdapter(client)
     current_config = read_user_config_document(paths.config_file)
@@ -178,9 +202,8 @@ def _extensions(
             catalog=catalog,
             manager=McpManager(
                 configs=(),
-                workspace_key=workspace.key,
                 workspace_trusted=True,
-                enablements=enablements,
+                enablements=await enablements.snapshot(workspace.key),
                 registry=registry,
             ),
             enablements=enablements,
@@ -213,7 +236,7 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
 ) -> None:
     client = FakeMem0Client()
     state_changes: list[tuple[bool, object]] = []
-    service, _thread_id, config_path, workspace_key, adapter = _extensions(
+    service, _thread_id, config_path, workspace_key, adapter = await _extensions(
         tmp_path,
         client=client,
         state_changes=state_changes,
@@ -252,12 +275,19 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
         ),
     )
     client.fail_content = "write fails safely"
-    finalizer = CloudPostAnswerMemory(
+    memory_statuses: list[str] = []
+
+    async def project_memory_status(*, enabled: bool, status: str) -> None:
+        assert enabled
+        memory_statuses.append(status)
+
+    finalizer = Mem0PostAnswerFinalizer(
         distiller=cast(Any, Distiller(candidates)),
         adapter=adapter,
         identity=identity,
+        project_status=project_memory_status,
     )
-    first = await finalizer.finalize(
+    request = PostAnswerFinalizationRequest(
         user_text="remember stable facts",
         final_answer="done",
         selected_model=SelectedModel(
@@ -265,19 +295,13 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
             model="deepseek/deepseek-v4-flash",
         ),
         remaining_model_calls=10,
+        remaining_provider_retries=6,
         workspace_key=workspace_key,
     )
-    await finalizer.finalize(
-        user_text="remember stable facts",
-        final_answer="done",
-        selected_model=SelectedModel(
-            provider="deepseek",
-            model="deepseek/deepseek-v4-flash",
-        ),
-        remaining_model_calls=10,
-        workspace_key=workspace_key,
-    )
-    assert first.status == "warning"
+    first = await finalizer.finalize(request)
+    await finalizer.finalize(request)
+    assert [item.code for item in first.diagnostics] == ["mem0_unavailable"]
+    assert memory_statuses == ["warning", "warning"]
     assert [call for call in client.calls if call == "add"].count("add") == 4
 
     recalled = await mem0_context_source(
@@ -290,7 +314,7 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
     assert "concise answers" in recalled.source.content
     assert "uses pytest" in recalled.source.content
 
-    restarted, _restarted_thread, _, _, _ = _extensions(
+    restarted, _restarted_thread, _, _, _ = await _extensions(
         tmp_path,
         client=client,
         mem0_enabled=True,

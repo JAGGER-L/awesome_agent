@@ -9,6 +9,7 @@ import httpx
 import openai
 import pytest
 from openai import AsyncOpenAI
+from pydantic import ValidationError
 
 from awesome_agent.config import KimiRegion
 from awesome_agent.modeling import (
@@ -265,6 +266,35 @@ async def test_assistant_history_replays_kimi_continuation() -> None:
     call = create.await_args
     assert call is not None
     assert call.kwargs["messages"][1]["reasoning_content"] == "private kimi state"
+
+
+@pytest.mark.asyncio
+async def test_unknown_continuation_schema_never_reaches_kimi() -> None:
+    from awesome_agent.providers.kimi import KimiProvider
+
+    create = AsyncMock(
+        return_value=AsyncEvents((_chunk(content="done", finish_reason="stop"),))
+    )
+    provider = KimiProvider(
+        api_key="test",
+        model="kimi/kimi-k2.6",
+        region=KimiRegion.CN,
+        client=_client(create),
+    )
+
+    with pytest.raises(ValidationError):
+        request = _request(
+            continuation={
+                "provider": "kimi",
+                "kind": "chat.reasoning_content",
+                "schema_version": 2,
+                "data": {"reasoning_content": "private kimi state"},
+            }
+        )
+        async for _ in provider.stream(request):
+            pass
+
+    create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
