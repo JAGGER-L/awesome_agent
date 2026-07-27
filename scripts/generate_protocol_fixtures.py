@@ -105,6 +105,7 @@ METHODS = (
     "initialize",
     "application.getState",
     "thread.list",
+    "thread.search",
     "thread.read",
     "turn.submit",
     "direct.execute",
@@ -307,6 +308,12 @@ def _valid_methods() -> dict[str, object]:
             "thread.list",
             "thread.list",
             {"limit": 50},
+            _success(ThreadListResult(threads=(_thread(),))),
+        ),
+        (
+            "thread.search",
+            "thread.search",
+            {"query": "  fixture source  ", "limit": 50},
             _success(ThreadListResult(threads=(_thread(),))),
         ),
         (
@@ -554,6 +561,24 @@ def _invalid_methods() -> dict[str, object]:
                 "name": "thread.list.explicit_null",
                 "method": "thread.list",
                 "params": {"cursor": None},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.search.blank_query",
+                "method": "thread.search",
+                "params": {"query": "   "},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.search.limit",
+                "method": "thread.search",
+                "params": {"query": "fixture", "limit": 51},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "thread.search.explicit_null",
+                "method": "thread.search",
+                "params": {"query": "fixture", "cursor": None},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -950,6 +975,15 @@ def _valid_command_results() -> dict[str, object]:
         },
         {"kind": "thinking", "enabled": False},
         {"kind": "workspace", "path": "C:\\workspace"},
+        {
+            "kind": "thread_export",
+            "thread_id": THREAD_ID,
+            "path": "exports/fixture.md",
+            "format": "markdown",
+            "write_status": "created",
+            "byte_count": 1_024,
+            "change_set_id": "change_11111111111111111111111111111111",
+        },
         {"kind": "diff", "change_set_id": None, "content": ""},
         {
             "kind": "change",
@@ -1217,6 +1251,65 @@ def _invalid_command_results() -> dict[str, object]:
                 "outcome": {
                     "kind": "result",
                     "payload": {**web_status, "diagnostic_code": ""},
+                },
+            },
+            {
+                "name": "thread_export_changed_without_change_set",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_export",
+                        "thread_id": THREAD_ID,
+                        "path": "exports/fixture.md",
+                        "format": "markdown",
+                        "write_status": "updated",
+                        "byte_count": 1_024,
+                    },
+                },
+            },
+            {
+                "name": "thread_export_unchanged_with_change_set",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_export",
+                        "thread_id": THREAD_ID,
+                        "path": "exports/fixture.json",
+                        "format": "json",
+                        "write_status": "unchanged",
+                        "byte_count": 1_024,
+                        "change_set_id": "change_1",
+                    },
+                },
+            },
+            {
+                "name": "thread_export_empty_change_set",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_export",
+                        "thread_id": THREAD_ID,
+                        "path": "exports/fixture.md",
+                        "format": "markdown",
+                        "write_status": "created",
+                        "byte_count": 1_024,
+                        "change_set_id": "",
+                    },
+                },
+            },
+            {
+                "name": "thread_export_path_too_long",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        "kind": "thread_export",
+                        "thread_id": THREAD_ID,
+                        "path": "x" * 1_001,
+                        "format": "markdown",
+                        "write_status": "created",
+                        "byte_count": 1_024,
+                        "change_set_id": "change_1",
+                    },
                 },
             },
             {

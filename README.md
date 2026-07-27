@@ -23,6 +23,9 @@ change, and helps verify the result.
 - understand a project and explain how its code fits together;
 - implement, debug, refactor, and test code;
 - show controlled file changes with `/diff`, `/undo`, and `/redo`;
+- search this Workspace's conversation history, then resume a result;
+- export the current Thread as deterministic Markdown or JSON through the
+  Change Journal;
 - continue the latest Thread or resume one by ID;
 - run one Agent Turn non-interactively with deterministic text or JSON output;
 - choose Request approval, Accept edits, or Thread-scoped Full access;

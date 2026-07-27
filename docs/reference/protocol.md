@@ -147,6 +147,7 @@ Lengths are Unicode string lengths after JSON decoding.
 | `initialize` | `protocol_version`; `client_name` 1–128; `client_version` 1–64 | `InitializeResult` |
 | `application.getState` | `{}` | Current `ApplicationState` snapshot |
 | `thread.list` | optional `cursor` 1–1,024; `limit` 1–200, default 50 | Threads, `has_more`, optional next cursor |
+| `thread.search` | trimmed `query` 1–200; optional `cursor` 1–1,024; `limit` 1–50, default 50 | The same `ThreadListResult` as `thread.list` |
 | `thread.read` | `thread_id` 1–128; optional `before_sequence >= 1`; `limit` 1–500, default 100 | Thread view, ChangeSets, reverse-pagination marker |
 | `turn.submit` | `thread_id`; `content` 1–200,000; `client_message_id` matching `client_[A-Za-z0-9_-]+`, max 128 | Operation, Thread, Turn, and client-message IDs |
 | `direct.execute` | `thread_id`; `command` 1–8,000, matching the delegated `execute` tool | Operation and Thread IDs |
@@ -198,6 +199,18 @@ making otherwise valid YAML configuration unusable.
 ### Pagination
 
 `thread.list` uses an opaque cursor; clients must not decode or synthesize it.
+`thread.search` trims its query, searches only the active Workspace, and orders
+matches by `updated_at DESC, id DESC`. Its opaque cursor hash-binds that
+Workspace and normalized query, so replaying it for another scope is invalid
+while the cursor carries no cleartext workspace key. Search is an
+ASCII-case-insensitive literal substring operation over Thread titles and all
+durable transcript entry content. It excludes ToolActivity, summaries,
+checkpoints, and metadata, and provides no FTS, tokenization, snippets,
+relevance ranking, or complete Unicode case folding. Every page query has a
+5,000,000 SQLite VM-op scan budget. Exhaustion returns the existing
+`result_too_large` Product error; clients should refine the query. Unlike the
+50-result `/search` picker, the RPC remains keyset-paginated through
+`has_more` and `next_cursor`.
 `thread.read` paginates backward with `before_sequence` and returns
 `next_before_sequence` when more entries exist. Explicit null pagination fields
 are invalid so “not supplied” has one unambiguous wire representation. The
@@ -237,6 +250,16 @@ owns `help`, `theme`, `copy`, and `quit` locally. A `CommandOutcome` contains
 exactly one branch: typed `result`, typed `interaction`, or stable command
 `error`. Exact grammar and foreground snapshot exceptions are in
 [Slash Commands](commands.md).
+
+The `thread_export` command result contains only `kind`, `thread_id`, `path`
+(1–1,000),
+`format` (`markdown` or `json`), `write_status` (`created`, `updated`, or
+`unchanged`), `byte_count`, and an optional `change_set_id`. Created and updated
+exports require a ChangeSet ID; unchanged exports forbid one. This payload does
+not carry exported content, workspace identity, or internal transcript
+metadata. Export output itself is capped at 5 MiB; the path bound is checked
+after normalization and before mutation. A failed attempt without reconciled
+file evidence emits no empty ChangeSet result.
 
 The `/tools` result is not paginated. Catalog admission applies its own
 aggregate bounds; the transport's final byte check still returns

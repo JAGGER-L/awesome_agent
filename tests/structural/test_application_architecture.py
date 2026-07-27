@@ -36,7 +36,7 @@ def test_dispatcher_inventory_is_complete_and_composition_only_wires_it() -> Non
         encoding="utf-8"
     )
 
-    assert len(core_commands) == 22
+    assert len(core_commands) == 24
     assert "return await runtime.command_dispatcher.dispatch(intent)" in composition
     assert "CommandResult(" not in composition
     assert "CommandInteractionResult(" not in composition
@@ -109,6 +109,7 @@ def test_workspace_runtime_is_one_immutable_service_graph_snapshot() -> None:
         "conversation",
         "turns",
         "commands",
+        "thread_export",
         "command_dispatcher",
         "diagnostic_commands",
         "change_commands",

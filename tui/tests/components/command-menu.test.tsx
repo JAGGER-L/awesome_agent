@@ -16,7 +16,7 @@ describe("CommandMenu", () => {
       />,
     ).lastFrame();
 
-    expect(frame).toContain("4–13 of 26");
+    expect(frame).toContain("4–13 of 28");
     expect(frame?.match(/^\s*[› ]\s*\//gmu)).toHaveLength(10);
     expect(frame).not.toContain("[thread_id]");
   });

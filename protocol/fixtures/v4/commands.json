@@ -13,6 +13,14 @@
       "owner": "application"
     },
     {
+      "name": "search",
+      "owner": "application"
+    },
+    {
+      "name": "export",
+      "owner": "application"
+    },
+    {
       "name": "context",
       "owner": "application"
     },

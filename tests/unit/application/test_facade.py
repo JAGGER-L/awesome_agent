@@ -37,6 +37,7 @@ from awesome_agent.application.facade import (
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
 )
 from awesome_agent.application.middleware import (
@@ -54,6 +55,7 @@ METHODS = {
     "initialize",
     "get_state",
     "list_threads",
+    "search_threads",
     "read_thread",
     "submit_turn",
     "execute_direct",
@@ -95,6 +97,13 @@ class Backend:
 
     async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult:
         self.calls.append(("threads", query))
+        return ThreadListResult()
+
+    async def search_workspace_threads(
+        self,
+        query: ThreadSearchQuery,
+    ) -> ThreadListResult:
+        self.calls.append(("search", query))
         return ThreadListResult()
 
     async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult:
@@ -320,6 +329,10 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     assert _unwrap(await facade.get_state()).workspace_trusted is True
     assert _unwrap(await facade.list_threads(ThreadListQuery())).threads == ()
     assert (
+        _unwrap(await facade.search_threads(ThreadSearchQuery(query="needle"))).threads
+        == ()
+    )
+    assert (
         _unwrap(
             await facade.submit_turn("thread_1", "inspect", "client_1")
         ).operation_id
@@ -365,6 +378,7 @@ async def test_facade_routes_only_closed_operation_names_through_middleware() ->
     await facade.initialize()
     await facade.get_state()
     await facade.list_threads(ThreadListQuery())
+    await facade.search_threads(ThreadSearchQuery(query="private query"))
     with pytest.raises(LookupError):
         await facade.read_thread(ThreadReadQuery(thread_id="thread_private"))
     await facade.submit_turn(

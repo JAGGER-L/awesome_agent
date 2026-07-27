@@ -201,6 +201,33 @@
       }
     },
     {
+      "method": "thread.search",
+      "name": "thread.search",
+      "params": {
+        "limit": 50,
+        "query": "  fixture source  "
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "has_more": false,
+          "threads": [
+            {
+              "created_at": "2026-07-11T08:00:00Z",
+              "current_model": "deepseek/deepseek-v4-flash",
+              "id": "thread_11111111111111111111111111111111",
+              "skill_mode": "auto",
+              "thinking_enabled": true,
+              "title": "Fixture Thread",
+              "title_source": "automatic",
+              "updated_at": "2026-07-11T08:00:00Z",
+              "workspace_key": "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          ]
+        }
+      }
+    },
+    {
       "method": "thread.read",
       "name": "thread.read",
       "params": {

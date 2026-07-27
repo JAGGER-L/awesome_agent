@@ -25,6 +25,7 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ThreadListQuery,
     ThreadReadQuery,
+    ThreadSearchQuery,
 )
 from awesome_agent.application.facade import ApplicationFacade
 from awesome_agent.application.interactions import InteractionDecision
@@ -83,6 +84,22 @@ class _ThreadListParams(BaseModel):
     @classmethod
     def reject_null_fields(cls, value: object) -> object:
         return _reject_explicit_nulls(value, frozenset({"cursor", "limit"}))
+
+
+class _ThreadSearchParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    query: str = Field(min_length=1, max_length=200, strict=True)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
+    limit: JsonSafeInteger = Field(default=50, ge=1, le=50)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_and_reject_null_fields(cls, value: object) -> object:
+        checked = _reject_explicit_nulls(value, frozenset({"cursor", "limit"}))
+        if isinstance(checked, Mapping) and isinstance(checked.get("query"), str):
+            return {**checked, "query": checked["query"].strip()}
+        return checked
 
 
 class _ThreadReadParams(_ThreadParams):
@@ -150,6 +167,7 @@ class JsonRpcDispatcher:
             "initialize": self._initialize,
             "application.getState": self._get_state,
             "thread.list": self._list_threads,
+            "thread.search": self._search_threads,
             "thread.read": self._read_thread,
             "turn.submit": self._submit_turn,
             "direct.execute": self._execute_direct,
@@ -243,6 +261,15 @@ class JsonRpcDispatcher:
         wire = _ThreadListParams.model_validate(params)
         query = ThreadListQuery(cursor=wire.cursor, limit=wire.limit)
         return await self._facade.list_threads(query)
+
+    async def _search_threads(self, params: Mapping[str, object]) -> object:
+        wire = _ThreadSearchParams.model_validate(params)
+        query = ThreadSearchQuery(
+            query=wire.query,
+            cursor=wire.cursor,
+            limit=wire.limit,
+        )
+        return await self._facade.search_threads(query)
 
     async def _read_thread(self, params: Mapping[str, object]) -> object:
         wire = _ThreadReadParams.model_validate(params)

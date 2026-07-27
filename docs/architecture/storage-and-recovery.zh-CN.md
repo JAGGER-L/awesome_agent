@@ -26,6 +26,13 @@ Awesome 将产品状态保存在解析后的 `AWESOME_HOME` 本地目录。之�
 可重置边界恰好是 `<AWESOME_HOME>/state`。配置、凭据、Memory、Skills、UI 偏好和项目文件
 都位于边界之外。
 
+确定性的 Thread export 属于该可重置边界之外的项目文件。Application 只投影公开
+transcript 字段，通过 identity-bound safe filesystem 路径写入，并为创建或更新的字节记录
+journal 以支持 undo。规范化目标会在 mutation 前按 1–1,000 字符契约检查，渲染在 event
+loop 外执行，输出上限为 5 MiB。字节相同的导出为 unchanged 且没有 ChangeSet；失败且
+reconciliation 后没有 evidence 的尝试不会发布空 ChangeSet。两种导出 format 都不含
+workspace key 或内部 metadata。
+
 ## 为什么使用两个 SQLite 数据库
 
 Application SQLite 存储产品事实：用户接受了一条消息、Turn 正在运行、回答已完成，或
@@ -50,6 +57,13 @@ suspend 和 close 则会等到明确的 worker 结果，再传播 caller 的第�
 保持 SQLite 所有权和 transaction 状态明确，也让 event loop 能继续处理紧急控制请求。
 若 SQLite 无法确认 rollback，owner 会关闭并 fail 该 worker，而不会继续复用 transaction
 状态未知的 connection。
+
+Thread search 仍是该同一 owner 上的有界 read。它对 title 与持久 entry 内容使用字面
+substring predicate，把每条 query 隔离到一个 Workspace，并按 `updated_at DESC, id DESC`
+排序。每条 query（包括 selection revalidation）都有 5,000,000 SQLite VM-op budget；耗尽
+预算会稳定返回 `result_too_large`，而不是无界占用 owner。不透明 page cursor 通过 hash
+绑定 Workspace 与规范化 query；没有需要恢复的 FTS index、平行搜索 database 或 relevance
+state。
 
 一个重要事务是接受首条消息：
 

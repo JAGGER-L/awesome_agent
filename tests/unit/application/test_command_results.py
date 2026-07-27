@@ -11,6 +11,7 @@ from awesome_agent.application.command_results import (
     CommandSecretPrompt,
     CommandSelection,
     NoticeCommandPayload,
+    ThreadExportCommandPayload,
     ThreadTransitionCommandPayload,
     ThreadTransitionSnapshot,
     error,
@@ -141,4 +142,67 @@ def test_thread_transition_requires_matching_application_and_thread_identity() -
                 application=application,
                 thread=ThreadReadResult(view=ThreadView(thread=thread)),
             )
+        )
+
+
+def test_thread_export_payload_serializes_the_stable_wire_contract() -> None:
+    payload = ThreadExportCommandPayload(
+        thread_id="fixture-thread",
+        path="exports/thread.json",
+        format="json",
+        write_status="created",
+        byte_count=321,
+        change_set_id="changeset_1",
+    )
+
+    assert payload.model_dump(mode="json", exclude_none=True) == {
+        "kind": "thread_export",
+        "thread_id": "fixture-thread",
+        "path": "exports/thread.json",
+        "format": "json",
+        "write_status": "created",
+        "byte_count": 321,
+        "change_set_id": "changeset_1",
+    }
+    assert COMMAND_OUTCOME_ADAPTER.validate_python(
+        result(payload).model_dump(mode="json")
+    ) == result(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "thread_id": "fixture-thread",
+            "path": "exports/thread.md",
+            "format": "markdown",
+            "write_status": "created",
+            "byte_count": 1,
+        },
+        {
+            "thread_id": "fixture-thread",
+            "path": "exports/thread.md",
+            "format": "markdown",
+            "write_status": "unchanged",
+            "byte_count": 1,
+            "change_set_id": "changeset_1",
+        },
+    ],
+)
+def test_thread_export_payload_change_set_identity_matches_write_status(
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError, match="exactly one ChangeSet"):
+        ThreadExportCommandPayload.model_validate(payload)
+
+
+def test_thread_export_payload_rejects_empty_change_set_identity() -> None:
+    with pytest.raises(ValidationError):
+        ThreadExportCommandPayload(
+            thread_id="fixture-thread",
+            path="exports/thread.md",
+            format="markdown",
+            write_status="created",
+            byte_count=1,
+            change_set_id="",
         )

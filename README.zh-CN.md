@@ -21,6 +21,8 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 - 理解项目结构并解释代码之间的关系；
 - 实现功能、调试问题、重构代码和运行测试；
 - 通过 `/diff`、`/undo`、`/redo` 检查和撤销受控文件修改；
+- 搜索当前 Workspace 的会话历史，并恢复匹配结果；
+- 通过 Change Journal 将当前 Thread 确定性导出为 Markdown 或 JSON；
 - 继续最近的 Thread，或通过 ID 恢复指定 Thread；
 - 以确定性的文本或 JSON 输出非交互运行一个 Agent Turn；
 - 在 Request approval、Accept edits 和 Thread 范围的 Full access 之间切换；

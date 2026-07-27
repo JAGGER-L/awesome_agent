@@ -88,6 +88,23 @@ class ThreadRenamedPayload(_CommandModel):
     thread: Thread
 
 
+class ThreadExportCommandPayload(_CommandModel):
+    kind: Literal["thread_export"] = "thread_export"
+    thread_id: str = Field(min_length=1, max_length=128)
+    path: str = Field(min_length=1, max_length=1_000)
+    format: Literal["markdown", "json"]
+    write_status: Literal["created", "updated", "unchanged"]
+    byte_count: int = Field(ge=0, le=9_007_199_254_740_991)
+    change_set_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_change_set(self) -> Self:
+        changed = self.write_status != "unchanged"
+        if changed != (self.change_set_id is not None):
+            raise ValueError("Changed exports require exactly one ChangeSet identity.")
+        return self
+
+
 class ContextCategory(_CommandModel):
     name: Literal["instructions", "conversation", "files", "memory"]
     estimated_tokens: int = Field(ge=0)
@@ -288,6 +305,7 @@ CommandPayload = Annotated[
     NoticeCommandPayload
     | ThreadTransitionCommandPayload
     | ThreadRenamedPayload
+    | ThreadExportCommandPayload
     | ContextCommandPayload
     | CompactCommandPayload
     | ModelCommandPayload

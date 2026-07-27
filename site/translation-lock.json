@@ -6,14 +6,14 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "8479aa0746d6fc93a348c9710814b4302dcaed246bce797833b68a95b2bcc9a5",
-      "chinese_sha256": "9932b2e3ab52f1b02e381d9ec2c7ef0e539fc134431adfe22856b6fa9405337b"
+      "english_sha256": "6411c836fada0b1a153d0929e79b9c7e0d8be861dc94dc5c01c0fdcf382c7da4",
+      "chinese_sha256": "f2fb997661c0cf2337e1f81d064dff0b131ea501b181701bdf782ac4025231b4"
     },
     {
       "english_source": "README.md",
       "chinese_source": "README.zh-CN.md",
-      "english_sha256": "7cea3764b205840392a3afd456f971994799fc7500919a731b73896cd6927e66",
-      "chinese_sha256": "55aa4abaee0b0c0ac4cfaa94db80ed86bcaf69bc05f05543a0a00274003ee1ca"
+      "english_sha256": "0035a96f0a4d319248aff40f8134e9ca609fbeddadea44cc7ca699592eddb9e7",
+      "chinese_sha256": "ad92ae814969b841a267b293020b4d32e19638556b02c093b8376a4acf88264e"
     },
     {
       "english_source": "docs/README.md",
@@ -42,8 +42,8 @@
     {
       "english_source": "docs/architecture/protocol-and-tui.md",
       "chinese_source": "docs/architecture/protocol-and-tui.zh-CN.md",
-      "english_sha256": "d16cb83155c79e0bbb922b18ae73de0dfb5dc515cb0e68a4921badbb7c3f7679",
-      "chinese_sha256": "798e8b8f602c21708734d78a77ac283470aea22d1d595f2612df83991ca33b0c"
+      "english_sha256": "058275f19f3adc24521ada9d0e054bd23d24d0356ed52b9eb75830c6f5841211",
+      "chinese_sha256": "480cbbde4454953ff7df5ef285be896163e0c06cb4c56c725a1f52274d4aa0c2"
     },
     {
       "english_source": "docs/architecture/request-lifecycles.md",
@@ -60,8 +60,8 @@
     {
       "english_source": "docs/architecture/storage-and-recovery.md",
       "chinese_source": "docs/architecture/storage-and-recovery.zh-CN.md",
-      "english_sha256": "7127a62671181b39e3d2af693199013e3b99b183dcc07f8984ac08ccee8bc4f7",
-      "chinese_sha256": "95588e66008b3e541d524f90597ec9e04e71801400ee597d4a99922fc385ffde"
+      "english_sha256": "e6bd1e8deb1297f71eceeba567c8135d362c30e0b1107de02625888075487284",
+      "chinese_sha256": "8d236d951a5c6eaafb8f96c3a5e6bd876d3ca07de4d7c26d60bedf6370c6407c"
     },
     {
       "english_source": "docs/architecture/tools-and-changes.md",
@@ -192,8 +192,8 @@
     {
       "english_source": "docs/reference/commands.md",
       "chinese_source": "docs/reference/commands.zh-CN.md",
-      "english_sha256": "b1f5553a9c6925cddec09ae033feb1a3d27660dcc458fc859afa55a3e645dc63",
-      "chinese_sha256": "c6880c77fdbab74617581c5783e2af16f5edbdcab5ed5c763aaf54d7743531c3"
+      "english_sha256": "848f78e2a96de963bc46c23bf80d7106de3a9498ea20867ff4dba896b5443270",
+      "chinese_sha256": "6f884b0266474f8ed91b5b98508d2d9e217e5decde4fd5c05c394d9d3ee812a1"
     },
     {
       "english_source": "docs/reference/configuration.md",
@@ -204,8 +204,8 @@
     {
       "english_source": "docs/reference/files-and-state.md",
       "chinese_source": "docs/reference/files-and-state.zh-CN.md",
-      "english_sha256": "5c7f0df1838e7e2765e432ce804c2c7c632f490a1d0457d2b75a053d77f742b0",
-      "chinese_sha256": "9b1441cb592c91b1ecdc41d834983602fc4a6331cc7f83376ea547701aa452c2"
+      "english_sha256": "deabc89bc8591a91f152d940c375ec222030623dcdff3c90253b67e262f3c217",
+      "chinese_sha256": "de535057dcf4bb3eb06a7781fb1e9bfc885a6180ae93fdca7ca124b4d336000b"
     },
     {
       "english_source": "docs/reference/permission-modes.md",
@@ -216,8 +216,8 @@
     {
       "english_source": "docs/reference/protocol.md",
       "chinese_source": "docs/reference/protocol.zh-CN.md",
-      "english_sha256": "60ec6825c0d3e18519e50c8b62552ddae5d0a10c4730ba286d5f2a67f09804b2",
-      "chinese_sha256": "f2e155d3872771e85530a944292247a4e7fbf58fa6dc91f8a70e58e41db9646c"
+      "english_sha256": "93891c4f5d50b177da48fd1fa7040e0526433ab6312f30c994d78488497316cd",
+      "chinese_sha256": "000a1fe1f1907e9765383554493aed8da9d124b89f375bf47ed1f57d5024a565"
     },
     {
       "english_source": "docs/roadmap.md",
@@ -240,8 +240,8 @@
     {
       "english_source": "docs/user-guide/commands.md",
       "chinese_source": "docs/user-guide/commands.zh-CN.md",
-      "english_sha256": "8d8e5dc0155bc86831c74c0ccc573ebe8f2d82aed73c05afebf1485aad138967",
-      "chinese_sha256": "1459fa61b6247d66f4acd22cd106c5eaccadf264983fcf7a446c588679e0ca6a"
+      "english_sha256": "dca7abba4a6878f61ae5d99c2f8fabe4dd9bb67732d364cb8bcbb1296e069173",
+      "chinese_sha256": "f6fbdab3155dc0def7be9d9ef3f2270bb66c93c88b6157519507bac932921d6f"
     },
     {
       "english_source": "docs/user-guide/configuration.md",

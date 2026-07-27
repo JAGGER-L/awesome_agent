@@ -63,6 +63,22 @@ class MemoryChangeSetStore:
             and item.lifecycle is ChangeLifecycle.OPEN
         ]
 
+    async def delete_empty_open(self, change_set_id: str) -> bool:
+        change_set = self.change_sets.get(change_set_id)
+        if (
+            change_set is None
+            or change_set.lifecycle is not ChangeLifecycle.OPEN
+            or change_set.files
+            or change_set.execute
+            or any(
+                pending.change_set_id == change_set_id
+                for pending in self.pending.values()
+            )
+        ):
+            return False
+        del self.change_sets[change_set_id]
+        return True
+
     async def save_pending(self, pending: PendingMutation) -> None:
         self.pending[pending.id] = pending
 

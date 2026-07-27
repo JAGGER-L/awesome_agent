@@ -19,6 +19,7 @@ from awesome_agent.application.contracts import (
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
     thread_display_id,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "ThreadListResult",
     "ThreadReadQuery",
     "ThreadReadResult",
+    "ThreadSearchQuery",
     "WorkspacePresentation",
     "thread_display_id",
 ]

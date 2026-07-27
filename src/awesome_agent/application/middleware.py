@@ -33,6 +33,7 @@ class ApplicationOperation(StrEnum):
     INITIALIZE = "initialize"
     GET_STATE = "application.getState"
     LIST_THREADS = "thread.list"
+    SEARCH_THREADS = "thread.search"
     READ_THREAD = "thread.read"
     SUBMIT_TURN = "turn.submit"
     EXECUTE_DIRECT = "direct.execute"

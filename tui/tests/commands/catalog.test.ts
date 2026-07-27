@@ -20,11 +20,11 @@ describe("COMMAND_CATALOG", () => {
   it("has exact owner counts and useful metadata", () => {
     expect(
       COMMAND_CATALOG.filter(({ owner }) => owner === "application"),
-    ).toHaveLength(22);
+    ).toHaveLength(24);
     expect(COMMAND_CATALOG.filter(({ owner }) => owner === "ink")).toHaveLength(
       4,
     );
-    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(26);
+    expect(new Set(COMMAND_CATALOG.map(({ name }) => name)).size).toBe(28);
     for (const command of COMMAND_CATALOG) {
       expect(command.completion).toBe(`/${command.name}`);
       expect(command.completion).not.toContain("[");
@@ -35,5 +35,8 @@ describe("COMMAND_CATALOG", () => {
     expect(
       COMMAND_CATALOG.find(({ name }) => name === "workspace")?.description,
     ).toBe("Show the current workspace path");
+    expect(
+      COMMAND_CATALOG.find(({ name }) => name === "search")?.examples,
+    ).toContain('/search "provider retry"');
   });
 });

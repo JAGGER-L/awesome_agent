@@ -14,6 +14,7 @@ from awesome_agent.core.changes import (
     ChangeJournal,
     ChangeLifecycle,
     ChangeSet,
+    ExecuteObservation,
     FileChangeKind,
     FileNodeType,
     NodeSnapshot,
@@ -102,6 +103,16 @@ class _BlockingFailBeginJournal(ChangeJournal):
         self.entered.set()
         await self.release.wait()
         raise RuntimeError("journal begin failed")
+
+
+class _RefusingDeleteChangeSetStore(SQLiteChangeSetStore):
+    def __init__(self, database: ApplicationSQLite) -> None:
+        super().__init__(database)
+        self.delete_attempts: list[str] = []
+
+    async def delete_empty_open(self, change_set_id: str) -> bool:
+        self.delete_attempts.append(change_set_id)
+        return False
 
 
 async def _handler(
@@ -240,6 +251,80 @@ async def test_sealing_without_a_mutating_tool_is_a_noop(
     assert await store.latest(workspace_key) is None
 
 
+@pytest.mark.asyncio
+async def test_failed_finalization_deletes_an_empty_open_change_set(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, _ = _scope(tmp_path, database)
+    first = await scope.acquire("export_1", turn_id=None)
+
+    await scope.finalize_failed("export_1")
+
+    assert await store.get(first) is None
+    assert await scope.acquire("export_1", turn_id=None) != first
+
+
+@pytest.mark.asyncio
+async def test_failed_finalization_seals_an_open_change_set_with_evidence(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, _ = _scope(tmp_path, database)
+    first = await scope.acquire("export_1", turn_id=None)
+    open_change = await store.get(first)
+    assert open_change is not None
+    await store.save(
+        open_change.model_copy(
+            update={
+                "execute": [
+                    ExecuteObservation(command="export", observed_paths=["out.md"])
+                ]
+            }
+        )
+    )
+
+    await scope.finalize_failed("export_1")
+
+    sealed = await store.get(first)
+    assert sealed is not None
+    assert sealed.lifecycle is ChangeLifecycle.APPLIED
+    assert sealed.sealed_at is not None
+    assert await scope.acquire("export_1", turn_id=None) != first
+
+
+@pytest.mark.asyncio
+async def test_failed_finalization_seals_when_atomic_empty_delete_is_refused(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = resolve_workspace(workspace_path)
+    store = _RefusingDeleteChangeSetStore(database)
+    scope = ChangeScope(
+        journal=ChangeJournal(
+            store,
+            FileChangeBlobStore(tmp_path / "change-journal"),
+            workspace,
+        ),
+        store=store,
+        registry=_registry(),
+        session_id="session_1",
+        workspace=workspace,
+    )
+    first = await scope.acquire("export_1", turn_id=None)
+
+    await scope.finalize_failed("export_1")
+
+    retained = await store.get(first)
+    assert store.delete_attempts == [first]
+    assert retained is not None
+    assert retained.lifecycle is ChangeLifecycle.APPLIED
+    assert retained.sealed_at is not None
+    assert await scope.acquire("export_1", turn_id=None) != first
+
+
 async def _conflicting_pending(
     tmp_path: Path,
     *,
@@ -336,6 +421,31 @@ async def test_failed_seal_retains_the_owner_for_a_safe_retry(
     assert sealed.lifecycle is ChangeLifecycle.APPLIED
     assert len(sealed.files) == 1
     assert await store.list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_failed_finalization_unpublishes_after_reconciliation_failure(
+    tmp_path: Path,
+    database: ApplicationSQLite,
+) -> None:
+    scope, store, workspace_key = _scope(tmp_path, database)
+    first = await scope.acquire("export_1", turn_id=None)
+    await _conflicting_pending(
+        tmp_path,
+        store=store,
+        change_set_id=first,
+        workspace_key=workspace_key,
+        pending_id="pending_export",
+        relative_path="export.md",
+    )
+
+    with pytest.raises(PendingMutationConflict):
+        await scope.finalize_failed("export_1")
+
+    retained = await store.get(first)
+    assert retained is not None
+    assert retained.lifecycle is ChangeLifecycle.OPEN
+    assert await scope.acquire("export_1", turn_id=None) != first
 
 
 @pytest.mark.asyncio

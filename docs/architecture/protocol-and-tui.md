@@ -54,6 +54,7 @@ The current request methods are:
 | `initialize` | negotiate identity and perform startup/bootstrap |
 | `application.getState` | read authoritative Application state |
 | `thread.list` | page workspace Threads |
+| `thread.search` | page workspace-isolated conversation substring matches |
 | `thread.read` | page one Thread and transcript projection |
 | `turn.submit` | admit natural-language foreground work |
 | `direct.execute` | admit a direct shell Operation |
@@ -67,6 +68,17 @@ Core sends `event` notifications containing a strict envelope. Event families
 cover Operation and Turn lifecycle, assistant text/reasoning deltas, provider
 retry, tool lifecycle, context preparation/compression, usage, Memory status,
 interactions, and warnings.
+
+`thread.search` deliberately reuses `ThreadListResult`, so surfaces need no
+parallel Thread-card model. The query is trimmed and bounded before Application
+SQLite performs literal substring matching under a 5,000,000 VM-op scan budget;
+the opaque cursor binds both the active Workspace and query hash and keeps RPC
+keyset pagination available. `/search` reuses the generic selection
+continuation but presents only the 50 newest matches, with a prompt to refine
+the query when more exist. An exhausted scan returns `result_too_large`.
+`/export` adds only a strict `thread_export` result whose path is 1–1,000
+characters and whose nonempty `change_set_id` is present exactly when bytes
+changed; the exhaustive presenter does not read raw files or private metadata.
 
 ## Cross-language evidence
 

@@ -65,6 +65,14 @@ const threadListResultSchema = z.strictObject({
   has_more: z.boolean(),
   next_cursor: boundedText(1, 1_024).optional(),
 });
+const threadSearchParamsSchema = z.strictObject({
+  query: z
+    .string()
+    .transform((value) => value.trim())
+    .pipe(boundedText(1, 200)),
+  cursor: boundedText(1, 1_024).optional(),
+  limit: positiveIntegerSchema.max(50).default(50),
+});
 const threadReadParamsSchema = z.strictObject({
   thread_id: identifierSchema,
   before_sequence: positiveIntegerSchema.optional(),
@@ -111,6 +119,11 @@ export const methodSchemas = {
   },
   "thread.list": {
     params: threadListParamsSchema,
+    value: threadListResultSchema,
+    result: applicationResultSchema(threadListResultSchema),
+  },
+  "thread.search": {
+    params: threadSearchParamsSchema,
     value: threadListResultSchema,
     result: applicationResultSchema(threadListResultSchema),
   },

@@ -42,6 +42,10 @@ class ConversationConflict(ConversationError):
     pass
 
 
+class ThreadSearchLimitExceeded(ConversationError):
+    pass
+
+
 class ConversationStore(Protocol):
     async def create_thread(self, thread: Thread) -> Thread: ...
     async def set_thread_model(
@@ -87,6 +91,21 @@ class ConversationStore(Protocol):
         cursor: tuple[datetime, str] | None,
         limit: int,
     ) -> ThreadListPage: ...
+    async def search_threads_page(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage: ...
+    async def thread_matches_search(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        thread_id: str,
+    ) -> bool: ...
     async def read_thread(self, thread_id: str) -> ThreadView: ...
     async def read_thread_page(
         self,

@@ -300,6 +300,14 @@ command result。斜杠命令是确定性的产品操作，绝不会提交隐藏
 discriminated outcome，TypeScript 对其进行严格校验并穷尽展示。Command progress 是
 pending Surface lifecycle state，不是第二种持久化 operation model。
 
+会话发现通过同一个由 Application 管理的边界提供两个入口。Protocol `thread.search` 使用
+keyset 分页返回 Workspace 隔离的 substring match。`/search <query>` 最多展示最近更新的
+50 条匹配；存在更多结果时会要求用户缩小 query，并通过既有 transition payload 恢复选中的
+Thread。两条路径共享 5,000,000 SQLite VM-op scan budget，并稳定返回
+`result_too_large`。`/export` 同样是确定性的 Application command：它把不超过 5 MiB 的
+公开 transcript 投影到规范化后长度为 1–1,000 字符的 Workspace 相对 Markdown 或 JSON
+路径，在 event loop 外完成渲染，再通过 Change Journal 报告安全写入。
+
 ### Resume 与恢复
 
 `--continue` 选择最近使用的工作区 Thread；`--resume <id>` 选择精确或前缀唯一的 Thread，
@@ -454,6 +462,10 @@ model Provider。
 可重置边界恰好是 `<AWESOME_HOME>/state`。Storage 在 exclusive lease 下执行原子替换；
 Application 负责确认和继续启动；Protocol 传输类型化事实；Ink 只展示和路由决策。配置、
 凭据、Skills、Memory、UI 偏好和工作区文件都位于该边界之外，会在确认 reset 后保留。
+
+Thread search 是按 `updated_at DESC, id DESC` 排序的 Application SQLite read。其不透明
+cursor 用 hash 绑定当前 Workspace 与规范化 query；cursor 不会携带明文 workspace key。
+首版使用字面 substring match，而不是 FTS 或 relevance ranking。
 
 这里的原子替换描述文件系统 namespace transition，不表示撤销在 Awesome lease protocol
 之外打开的任意 handle。打开的数据库 handle 会在 Windows 上阻止 rename。POSIX 允许
@@ -657,6 +669,11 @@ Protocol v4 发布 catalog，使 Ink 无需复制 model 或 Provider 枚举。
 | UI 偏好 | Ink TUI | `ui.json` | 用户控制 |
 | Application invocation diagnostics | Application 进程/会话 | `logs/application.jsonl{,.1,.2,.3,.4}` | 有界本地运行历史 |
 | 工作区文件 | 用户和工具 | workspace | 主要项目状态 |
+
+Thread export 是普通工作区文件，不是产品状态的第二份副本。其确定性的公开投影排除
+workspace key 与内部 metadata；发生变化的导出会进入 journal，可像其他受控文件写入一样
+撤销。路径和输出上限会在 mutation 前检查。失败且 reconciliation 后没有 mutation evidence
+的尝试不会发布空 ChangeSet；若字节已经落盘，恢复会保留真实 evidence。
 
 Token delta、spinner、原始 provider payload、无界 shell output 和 credential 不会作为产品
 历史保存。未完成 Turn 所需的 tool observation 会保留在 LangGraph checkpoint 中，其中包括

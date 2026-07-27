@@ -68,4 +68,23 @@ describe("command presenters", () => {
     expect(formatTokenCount(262_144)).toBe("256K");
     expect(formatTokenCount(1_048_576)).toBe("1M");
   });
+
+  it("renders deterministic export results and their change set", () => {
+    const presentation = presentCommandPayload("export", {
+      kind: "thread_export",
+      thread_id: "thread_123",
+      path: "reports/thread.md",
+      format: "markdown",
+      write_status: "updated",
+      byte_count: 2_048,
+      change_set_id: "change_123",
+    });
+    const frame = render(
+      <CommandResultView presentation={presentation} width={100} />,
+    ).lastFrame();
+    expect(frame).toContain("reports/thread.md");
+    expect(frame).toContain("Updated");
+    expect(frame).toContain("2048");
+    expect(frame).toContain("change_123");
+  });
 });

@@ -26,7 +26,13 @@ from awesome_agent.agent import (
 )
 from awesome_agent.application.change_commands import ChangeCommandService
 from awesome_agent.application.change_scope import ChangeScope
-from awesome_agent.application.command_results import CommandOutcome, error
+from awesome_agent.application.command_results import (
+    CommandOption,
+    CommandOutcome,
+    CommandSelection,
+    error,
+    interaction,
+)
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.contracts import (
@@ -47,6 +53,7 @@ from awesome_agent.application.contracts import (
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
     thread_display_id,
 )
@@ -87,6 +94,7 @@ from awesome_agent.application.provider_configuration import (
     reconcile_provider_model_transaction,
 )
 from awesome_agent.application.runtime_resources import RuntimeResources
+from awesome_agent.application.thread_export import ThreadExportService
 from awesome_agent.application.turns import (
     RecoveryResult,
     RecoveryStatus,
@@ -135,6 +143,7 @@ from awesome_agent.conversation import (
     ConversationService,
     Thread,
     ThreadNotFound,
+    ThreadSearchLimitExceeded,
     ToolActivity,
     ToolActivityOrigin,
     Turn,
@@ -255,7 +264,9 @@ from awesome_agent.storage.conversations import SQLiteConversationRepositories
 from awesome_agent.storage.pagination import (
     InvalidThreadCursor,
     decode_thread_cursor,
+    decode_thread_search_cursor,
     encode_thread_cursor,
+    encode_thread_search_cursor,
 )
 from awesome_agent.storage.trust import SQLiteWorkspaceTrustStore
 from awesome_agent.version import PRODUCT_VERSION
@@ -412,6 +423,7 @@ class WorkspaceRuntime:
     conversation: ConversationService
     turns: TurnCoordinator
     commands: ConversationCommandService
+    thread_export: ThreadExportService
     command_dispatcher: CommandDispatcher
     diagnostic_commands: DiagnosticCommandService
     change_commands: ChangeCommandService
@@ -829,6 +841,65 @@ class _LocalApplicationBackend:
         )
         next_cursor = (
             encode_thread_cursor((page.threads[-1].updated_at, page.threads[-1].id))
+            if page.has_more and page.threads
+            else None
+        )
+        return ThreadListResult(
+            threads=page.threads,
+            has_more=page.has_more,
+            next_cursor=next_cursor,
+        )
+
+    async def search_workspace_threads(
+        self,
+        query: ThreadSearchQuery,
+    ) -> ThreadListResult:
+        runtime = self._require_runtime()
+        with self._runtime_request_scope(runtime) as bound_runtime:
+            return await self._search_workspace_threads_in_runtime(
+                query,
+                runtime=bound_runtime,
+            )
+
+    async def _search_workspace_threads_in_runtime(
+        self,
+        query: ThreadSearchQuery,
+        *,
+        runtime: WorkspaceRuntime,
+    ) -> ThreadListResult:
+        try:
+            cursor = (
+                decode_thread_search_cursor(
+                    query.cursor,
+                    workspace_key=self._workspace.key,
+                    query=query.query,
+                )
+                if query.cursor is not None
+                else None
+            )
+        except InvalidThreadCursor as error:
+            raise _application_failure(
+                ProductErrorCode.INVALID_ARGUMENTS,
+                "Thread search cursor is invalid.",
+            ) from error
+        try:
+            page = await runtime.conversation.search_thread_page(
+                self._workspace.key,
+                query=query.query,
+                cursor=cursor,
+                limit=query.limit,
+            )
+        except ThreadSearchLimitExceeded as error:
+            raise _application_failure(
+                ProductErrorCode.RESULT_TOO_LARGE,
+                "Thread search exceeded its scan limit; refine the query.",
+            ) from error
+        next_cursor = (
+            encode_thread_search_cursor(
+                (page.threads[-1].updated_at, page.threads[-1].id),
+                workspace_key=self._workspace.key,
+                query=query.query,
+            )
             if page.has_more and page.threads
             else None
         )
@@ -2592,11 +2663,20 @@ class _LocalApplicationBackend:
                 validate_proxy=validate_web_proxy_url,
                 configuration_control=self._web_configuration_control,
             )
+            thread_export = ThreadExportService(
+                conversation=self._conversation,
+                workspace=self._workspace,
+                current_thread_id=lambda: commands.current_thread_id,
+                journal=journal,
+                change_scope=change_scope,
+            )
             command_dispatcher = CommandDispatcher(
                 {
                     CommandName.NEW: commands.new,
                     CommandName.RENAME: commands.rename,
                     CommandName.RESUME: commands.resume,
+                    CommandName.SEARCH: self._search_command,
+                    CommandName.EXPORT: thread_export.export,
                     CommandName.CONTEXT: self._context_command,
                     CommandName.COMPACT: self._compact_command,
                     CommandName.AUTH: provider_configuration.auth_command,
@@ -2627,6 +2707,7 @@ class _LocalApplicationBackend:
                 conversation=self._conversation,
                 turns=turns,
                 commands=commands,
+                thread_export=thread_export,
                 command_dispatcher=command_dispatcher,
                 diagnostic_commands=diagnostic_commands,
                 change_commands=change_commands,
@@ -2887,6 +2968,76 @@ class _LocalApplicationBackend:
             ).model
         except ValueError:
             return None
+
+    async def _search_command(self, intent: CommandIntent) -> CommandOutcome:
+        if len(intent.arguments) not in {1, 2}:
+            return error(
+                "invalid_arguments",
+                'Usage: /search "<query>" [thread_id]',
+            )
+        query = intent.arguments[0].strip()
+        if not 1 <= len(query) <= 200:
+            return error(
+                "invalid_arguments",
+                "Search query must be 1 to 200 characters; quote multi-word queries.",
+            )
+        runtime = self._require_runtime()
+        if len(intent.arguments) == 1:
+            try:
+                page = await runtime.conversation.search_thread_page(
+                    self._workspace.key,
+                    query=query,
+                    cursor=None,
+                    limit=50,
+                )
+            except ThreadSearchLimitExceeded:
+                return error(
+                    "result_too_large",
+                    "Thread search exceeded its scan limit; refine the query.",
+                )
+            if not page.threads:
+                return error("thread_not_found", "No matching Threads were found.")
+            return interaction(
+                CommandSelection(
+                    prompt=(
+                        "Showing the 50 most recent matches; refine the query "
+                        "for older results."
+                        if page.has_more
+                        else "Select a matching Thread to resume."
+                    ),
+                    options=tuple(
+                        CommandOption(
+                            value=thread.id,
+                            label=thread.title,
+                            description=thread.id,
+                            selected=thread.id == runtime.commands.current_thread_id,
+                        )
+                        for thread in page.threads
+                    ),
+                )
+            )
+        thread_id = intent.arguments[1]
+        if not 1 <= len(thread_id) <= 128:
+            return error(
+                "invalid_arguments",
+                "Thread ID must be 1 to 128 characters.",
+            )
+        try:
+            matches = await runtime.conversation.thread_matches_search(
+                self._workspace.key,
+                query=query,
+                thread_id=thread_id,
+            )
+        except ThreadSearchLimitExceeded:
+            return error(
+                "result_too_large",
+                "Thread search exceeded its scan limit; refine the query.",
+            )
+        if not matches:
+            return error("thread_not_found", "Selected Thread no longer matches.")
+        return await runtime.commands.resume(
+            CommandIntent(name=CommandName.RESUME, arguments=(thread_id,))
+        )
 
     async def _context_command(self, intent: CommandIntent) -> CommandOutcome:
         runtime = self._require_runtime()

@@ -765,6 +765,65 @@
       }
     },
     {
+      "name": "thread_export_changed_without_change_set",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "byte_count": 1024,
+          "format": "markdown",
+          "kind": "thread_export",
+          "path": "exports/fixture.md",
+          "thread_id": "thread_11111111111111111111111111111111",
+          "write_status": "updated"
+        }
+      }
+    },
+    {
+      "name": "thread_export_unchanged_with_change_set",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "byte_count": 1024,
+          "change_set_id": "change_1",
+          "format": "json",
+          "kind": "thread_export",
+          "path": "exports/fixture.json",
+          "thread_id": "thread_11111111111111111111111111111111",
+          "write_status": "unchanged"
+        }
+      }
+    },
+    {
+      "name": "thread_export_empty_change_set",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "byte_count": 1024,
+          "change_set_id": "",
+          "format": "markdown",
+          "kind": "thread_export",
+          "path": "exports/fixture.md",
+          "thread_id": "thread_11111111111111111111111111111111",
+          "write_status": "created"
+        }
+      }
+    },
+    {
+      "name": "thread_export_path_too_long",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "byte_count": 1024,
+          "change_set_id": "change_1",
+          "format": "markdown",
+          "kind": "thread_export",
+          "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "thread_id": "thread_11111111111111111111111111111111",
+          "write_status": "created"
+        }
+      }
+    },
+    {
       "name": "web_status_invalid_diagnostic_code",
       "outcome": {
         "kind": "result",

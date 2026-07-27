@@ -1,6 +1,6 @@
 # Slash Command 参考
 
-Awesome 有一个封闭的命令 catalog。其中二十二条命令属于 Python Application，四条属于
+Awesome 有一个封闭的命令 catalog。其中二十四条命令属于 Python Application，四条属于
 Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中，但不会作为模型对话
 消息存储。
 
@@ -11,6 +11,7 @@ Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中
 | `/new` | 无参数 | 创建并选择新 Thread；重置 Thread 作用域的权限状态。 |
 | `/rename <title>` | 一个或多个标题 token | 为选中的 Thread 持久化手动标题。 |
 | `/resume [thread_id]` | 零或一个 ID/prefix | 打开 picker 或选择一个 Workspace Thread。 |
+| `/search <query> [thread_id]` | 一个 query token（多词时加引号），随后可选精确结果 ID | 搜索当前 Workspace、打开 picker，或恢复选中的匹配 Thread。 |
 | `/context` | 无参数 | 显示最新的活动上下文类别、实际 token 数和预算。 |
 | `/compact` | 无参数 | 立即构建并持久化新的对话摘要。 |
 | `/auth [deepseek\|kimi\|mem0]` | 正常使用时为零或一个 service | 通过 picker 选择并管理 Environment 或 Awesome API-key 来源。 |
@@ -19,6 +20,7 @@ Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中
 | `/permissions [request_approval\|accept_edits\|full_access]` | 零或一个 mode | 检查或更改会话权限模式；Full access 需要单独确认。 |
 | `/workspace` | 无参数 | 显示活动 Workspace 的展示路径。 |
 | `/diff [change_set_id]` | 零或一个 ID | 渲染最新或指定 ChangeSet 的 diff。 |
+| `/export <workspace-relative-path> [markdown\|json]` | 一个路径和可选 format；默认 `markdown` | 通过安全且进入 journal 的工作区写入确定性导出当前 Thread。 |
 | `/undo [change_set_id]` | 零或一个 ID | 恢复已应用且可逆的 ChangeSet 的 before-state。 |
 | `/redo [change_set_id]` | 零或一个 ID | 恢复已撤销 ChangeSet 的 after-state。 |
 | `/tools` | 无参数 | 列出有效 catalog，以及当前模式下是否需要审批。 |
@@ -37,6 +39,26 @@ Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中
 
 `/resume` 接受精确 Thread ID，或由 8–32 个小写十六进制数字组成且无歧义的 `thread_`
 prefix。有歧义的 prefix 会打开 picker；绝不会选择其他 Workspace 的 Thread。
+
+`/search` 接受一个 query 参数。多词 query 必须加引号，例如
+`/search "provider retry"`；选择后，TUI 会把选中的精确 Thread ID 追加到原始 query。
+搜索仅限活动 Workspace，并对 Thread 标题及所有持久 transcript entry 内容执行 ASCII
+大小写不敏感的字面 substring match，包括 user、assistant 和 direct-command entry。它不搜索
+ToolActivity、summary、checkpoint 或 metadata，也不提供 FTS、分词、snippet、relevance
+ranking 或完整 Unicode case folding。结果按 `updated_at DESC, id DESC` 排序。Picker 最多
+显示最近更新的 50 条匹配；存在更多结果时，prompt 会要求缩小 query。每次搜索和选中结果
+revalidation 都受 5,000,000 SQLite VM-op scan budget 限制；预算耗尽时返回
+`result_too_large`。Protocol client 可改用 `thread.search` 返回的 keyset cursor 继续读取匹配
+page。
+
+`/export` 接受 Workspace 相对目标路径，以及可选的 `markdown` 或 `json` format；默认
+Markdown。同一 Thread 会生成最多 5 MiB 的确定字节，渲染在 event loop 外执行。Citation
+保留在各自 assistant entry 上：有引用的 Markdown entry 会渲染自己的 Sources 区域，JSON
+assistant entry 始终公开 `citations` list。导出只包含公开会话数据，绝不暴露内部 workspace
+key 或私有 entry metadata。目标会经过通常的工作区 identity 与 safe-write 校验，且规范化
+路径必须在 mutation 前满足 1–1,000 字符。创建或更新文件时会记录 ChangeSet，可用 `/undo`
+恢复；内容未变化时不记录 ChangeSet。失败且 reconciliation 后没有文件 evidence 的尝试不会
+发布空 ChangeSet；若字节已落盘，恢复会保留其真实 evidence。
 
 `/auth` 绝不接受 key 作为命令参数。Picker 可能为来源选择、替换和删除生成内部 continuation
 token；请使用遮罩交互，而不是编写脚本调用这些 token。保存 DeepSeek 或 Kimi key 会执行

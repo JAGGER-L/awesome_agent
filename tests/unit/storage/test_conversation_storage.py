@@ -10,12 +10,14 @@ from pathlib import Path
 
 import pytest
 
+import awesome_agent.storage.conversations as conversation_storage_module
 from awesome_agent.config import BudgetConfig
 from awesome_agent.conversation import (
     ConversationConflict,
     Thread,
     ThreadEntry,
     ThreadEntryKind,
+    ThreadSearchLimitExceeded,
     ThreadSummary,
     ThreadTitleSource,
     ToolActivity,
@@ -903,6 +905,167 @@ async def test_thread_pages_are_bounded_stable_and_workspace_scoped(
     assert not {thread.id for thread in first.threads + second.threads} & {
         "thread_foreign"
     }
+
+
+async def test_thread_search_is_literal_scoped_and_keyset_paginated(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    timestamp = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
+
+    def seed(connection: sqlite3.Connection) -> None:
+        threads = (
+            Thread(
+                id="thread_title",
+                workspace_key="workspace_1",
+                title="Needle in title",
+                created_at=timestamp,
+                updated_at=timestamp + timedelta(seconds=3),
+            ),
+            Thread(
+                id="thread_entry",
+                workspace_key="workspace_1",
+                title="Entry match",
+                created_at=timestamp,
+                updated_at=timestamp + timedelta(seconds=2),
+            ),
+            Thread(
+                id="thread_hidden",
+                workspace_key="workspace_1",
+                title="Hidden fields only",
+                created_at=timestamp,
+                updated_at=timestamp + timedelta(seconds=1),
+            ),
+            Thread(
+                id="thread_percent",
+                workspace_key="workspace_1",
+                title="100% complete",
+                created_at=timestamp,
+                updated_at=timestamp,
+            ),
+            Thread(
+                id="thread_foreign",
+                workspace_key="workspace_2",
+                title="Needle in another workspace",
+                created_at=timestamp,
+                updated_at=timestamp + timedelta(seconds=4),
+            ),
+        )
+        for thread in threads:
+            _THREADS.create(thread, connection=connection)
+        _ENTRIES.append(
+            _entry(
+                "entry_direct",
+                thread_id="thread_entry",
+                sequence=1,
+                kind=ThreadEntryKind.DIRECT_COMMAND,
+            ).model_copy(update={"content": "echo NEEDLE"}),
+            connection=connection,
+        )
+        _ENTRIES.append(
+            _entry(
+                "entry_hidden",
+                thread_id="thread_hidden",
+                sequence=1,
+                kind=ThreadEntryKind.DIRECT_COMMAND,
+            ).model_copy(
+                update={
+                    "content": "irrelevant",
+                    "metadata": {"hidden": "needle"},
+                }
+            ),
+            connection=connection,
+        )
+        _SUMMARIES.upsert(
+            ThreadSummary(
+                thread_id="thread_hidden",
+                content="needle appears only in the summary",
+                content_hash="a" * 64,
+                covered_entry_sequence=1,
+                covered_turn_count=0,
+                estimated_tokens=1,
+                provider="deepseek",
+                model="deepseek/deepseek-v4-flash",
+                updated_at=timestamp,
+            ),
+            connection=connection,
+        )
+
+    await application_database.write(seed)
+    first = await repositories.search_threads_page(
+        "workspace_1",
+        query="needle",
+        cursor=None,
+        limit=1,
+    )
+    second = await repositories.search_threads_page(
+        "workspace_1",
+        query="needle",
+        cursor=(first.threads[-1].updated_at, first.threads[-1].id),
+        limit=1,
+    )
+    literal_percent = await repositories.search_threads_page(
+        "workspace_1",
+        query="%",
+        cursor=None,
+        limit=50,
+    )
+
+    assert [thread.id for thread in first.threads] == ["thread_title"]
+    assert first.has_more is True
+    assert [thread.id for thread in second.threads] == ["thread_entry"]
+    assert second.has_more is False
+    assert [thread.id for thread in literal_percent.threads] == ["thread_percent"]
+    assert await repositories.thread_matches_search(
+        "workspace_1",
+        query="needle",
+        thread_id="thread_entry",
+    )
+    assert not await repositories.thread_matches_search(
+        "workspace_1",
+        query="needle",
+        thread_id="thread_hidden",
+    )
+    assert not await repositories.thread_matches_search(
+        "workspace_1",
+        query="needle",
+        thread_id="thread_foreign",
+    )
+
+
+@pytest.mark.parametrize("operation", ["page", "match"])
+async def test_thread_search_opcode_limit_is_typed_and_handler_is_reset(
+    application_database: ApplicationSQLite,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    await _create_thread(application_database, _thread())
+    monkeypatch.setattr(
+        conversation_storage_module,
+        "_THREAD_SEARCH_OPCODE_BUDGET",
+        1,
+    )
+
+    with pytest.raises(ThreadSearchLimitExceeded):
+        if operation == "page":
+            await repositories.search_threads_page(
+                "workspace_1",
+                query="missing",
+                cursor=None,
+                limit=50,
+            )
+        else:
+            await repositories.thread_matches_search(
+                "workspace_1",
+                query="missing",
+                thread_id="thread_1",
+            )
+
+    # A failed bounded scan must not leave its progress handler on the owner.
+    assert [thread.id for thread in await repositories.list_threads("workspace_1")] == [
+        "thread_1"
+    ]
 
 
 async def test_thread_entry_pages_read_tail_and_traverse_without_overlap(

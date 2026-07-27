@@ -226,6 +226,16 @@ commands are durable transcript entries but have no Turn ID. Tool activities
 have a unique `(operation_id, call_id)` boundary so completion cannot be
 silently duplicated.
 
+Conversation search reads Thread titles and `thread_entries.content` inside the
+active Workspace. It includes durable user, assistant, and direct-command
+entries but excludes ToolActivity, summaries, checkpoints, and metadata. The
+first implementation is a literal `LOWER`/substring SQLite query, not an FTS
+index. Pages are stable in `updated_at DESC, id DESC` order, and cursor scope is
+hash-bound to the Workspace and normalized query without publishing the
+workspace key inside the cursor. Each page query and exact-result revalidation
+has a 5,000,000 SQLite VM-op budget; exhaustion is surfaced as
+`result_too_large`.
+
 Do not edit this database manually. Row invariants, foreign keys, the Checkpoint
 store, and Change Journal blobs form one recovery contract even though they use
 separate files.
@@ -304,6 +314,18 @@ reconciliation. Writes are temporary-file-plus-replace, and reads recompute the
 digest before returning content. Metadata and pending intent live in
 `application.db`; neither half is independently sufficient for complete undo
 history.
+
+`/export` writes a deterministic public Thread projection to a
+Workspace-relative Markdown or JSON file. Cited Markdown assistant entries keep
+their own Sources section, while JSON assistant entries always carry a
+`citations` list; workspace keys and internal entry metadata are excluded.
+Output is capped at 5 MiB and rendering runs away from the event loop. The write
+uses the shared identity-bound filesystem primitive; its normalized path must be
+1–1,000 characters before mutation. Created and updated files produce Change
+Journal evidence and support `/undo`; byte-identical exports are reported as
+unchanged and produce no ChangeSet. A failed attempt with no reconciled evidence
+publishes no empty ChangeSet, while recovery retains evidence for bytes that did
+land.
 
 Each ChangeSet is bounded to 1,000 nodes and 50 MiB. Shell execution is recorded
 as an irreversible observation rather than a fictional filesystem snapshot.

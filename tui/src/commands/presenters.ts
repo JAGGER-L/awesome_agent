@@ -125,6 +125,21 @@ export function presentCommandPayload(
       };
     case "workspace":
       return { kind: "notice", message: payload.path, tone: "info" };
+    case "thread_export":
+      return panel(
+        title,
+        [
+          { label: "Thread", value: payload.thread_id },
+          { label: "Path", value: payload.path },
+          { label: "Format", value: humanize(payload.format) },
+          { label: "Status", value: humanize(payload.write_status) },
+          { label: "Bytes", value: `${payload.byte_count}` },
+          ...(payload.change_set_id
+            ? [{ label: "Change set", value: payload.change_set_id }]
+            : []),
+        ],
+        payload.write_status === "unchanged" ? "info" : "success",
+      );
     case "diff":
       return payload.content
         ? {

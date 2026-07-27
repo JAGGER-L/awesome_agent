@@ -28,6 +28,15 @@ recovery rules.
 The resettable boundary is exactly `<AWESOME_HOME>/state`. Configuration,
 credentials, Memory, Skills, UI preferences, and project files are outside it.
 
+Deterministic Thread exports are project files outside that resettable boundary.
+Application projects public transcript fields only, writes through the
+identity-bound safe filesystem path, and journals created or updated bytes for
+undo. The normalized destination is checked against the 1–1,000-character
+contract before mutation, rendering runs away from the event loop, and output
+is capped at 5 MiB. A byte-identical export is unchanged and has no ChangeSet;
+a failed attempt with no reconciled evidence publishes no empty ChangeSet.
+Neither export format contains workspace keys or internal metadata.
+
 ## Why two SQLite databases
 
 Application SQLite stores product facts: a user accepted a message, a Turn is
@@ -58,6 +67,14 @@ keeps SQLite ownership and transaction state unambiguous while leaving the
 event loop available for urgent control requests. If SQLite cannot confirm a
 rollback, the owner closes and fails the worker instead of reusing a connection
 whose transaction state is unknown.
+
+Thread search remains a bounded read on this same owner. It uses literal
+substring predicates over titles and durable entry content, isolates every query
+to one Workspace, and orders by `updated_at DESC, id DESC`. Each query, including
+selection revalidation, has a 5,000,000 SQLite VM-op budget; exhaustion becomes
+the stable `result_too_large` error instead of monopolizing the owner without a
+bound. The opaque page cursor hash-binds the Workspace and normalized query;
+there is no FTS index, parallel search database, or relevance state to recover.
 
 One important transaction is first-message acceptance:
 

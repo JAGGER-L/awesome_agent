@@ -20,6 +20,12 @@ const metadata: Readonly<
   new: entry("new", "/new", "Start a new thread"),
   rename: entry("rename", "/rename <title>", "Rename the current conversation"),
   resume: entry("resume", "/resume [thread_id]", "Resume a previous thread"),
+  search: entry(
+    "search",
+    "/search <query> [thread_id]",
+    "Search conversations in this workspace; quote multi-word queries",
+    ['/search "provider retry"', '/search "provider retry" thread_123'],
+  ),
   context: entry("context", "/context", "Show the active context"),
   compact: entry("compact", "/compact", "Compact the current context"),
   model: entry("model", "/model [provider]", "Choose a Provider and model"),
@@ -35,6 +41,12 @@ const metadata: Readonly<
     "Show the current workspace path",
   ),
   diff: entry("diff", "/diff", "Show workspace changes"),
+  export: entry(
+    "export",
+    "/export <workspace-relative-path> [markdown|json]",
+    "Export the current conversation",
+    ["/export reports/thread.md", "/export reports/thread.json json"],
+  ),
   undo: entry("undo", "/undo", "Undo the latest reversible change"),
   redo: entry("redo", "/redo", "Redo the latest undone change"),
   tools: entry("tools", "/tools", "List available tools"),
@@ -77,12 +89,13 @@ function entry<Name extends CommandName>(
   name: Name,
   usage: string,
   description: string,
+  examples: readonly string[] = [usage],
 ): Omit<CommandMetadata, "name" | "owner"> {
   return {
     completion: `/${name}`,
     usage,
     description,
-    examples: [usage],
+    examples,
   };
 }
 

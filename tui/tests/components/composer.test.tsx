@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { App } from "../../src/app/App.js";
 import type { CommandController } from "../../src/commands/controller.js";
+import { searchCommands } from "../../src/commands/search.js";
 import {
   composerReducer,
   initialComposerState,
@@ -249,7 +250,13 @@ describe("App composer integration", () => {
 
     view.stdin.write("/s");
     await eventually(() => expect(view.lastFrame()).toContain("/status"));
-    view.stdin.write("\u001b[B");
+    const statusIndex = searchCommands("/s").findIndex(
+      ({ name }) => name === "status",
+    );
+    expect(statusIndex).toBeGreaterThan(0);
+    for (let index = 0; index < statusIndex; index += 1) {
+      view.stdin.write("\u001b[B");
+    }
     view.stdin.write("\r");
 
     await eventually(() => expect(controller.submit).toHaveBeenCalledOnce());

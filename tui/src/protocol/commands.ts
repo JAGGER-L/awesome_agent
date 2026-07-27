@@ -18,6 +18,8 @@ export const applicationCommandNames = [
   "new",
   "rename",
   "resume",
+  "search",
+  "export",
   "context",
   "compact",
   "auth",
@@ -84,6 +86,8 @@ export const commandOwners: Readonly<Record<CommandName, CommandOwner>> = {
   new: "application",
   rename: "application",
   resume: "application",
+  search: "application",
+  export: "application",
   context: "application",
   compact: "application",
   model: "application",
@@ -230,7 +234,7 @@ export const threadTransitionSnapshotSchema = z
     }
   });
 
-export const commandPayloadSchema = z.discriminatedUnion("kind", [
+const commandPayloadBaseSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("notice"),
     message: boundedText(1, 30_000),
@@ -262,6 +266,15 @@ export const commandPayloadSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({ kind: z.literal("thinking"), enabled: z.boolean() }),
   z.strictObject({ kind: z.literal("workspace"), path: boundedText(1, 4_096) }),
+  z.strictObject({
+    kind: z.literal("thread_export"),
+    thread_id: boundedText(1, 128),
+    path: boundedText(1, 1_000),
+    format: z.enum(["markdown", "json"]),
+    write_status: z.enum(["created", "updated", "unchanged"]),
+    byte_count: safeIntegerSchema.min(0),
+    change_set_id: boundedText(1, 128).optional(),
+  }),
   z.strictObject({
     kind: z.literal("diff"),
     change_set_id: boundedText(1, 128).nullable().optional(),
@@ -347,6 +360,21 @@ export const commandPayloadSchema = z.discriminatedUnion("kind", [
     mode: permissionModeSchema,
   }),
 ]);
+
+export const commandPayloadSchema = commandPayloadBaseSchema.superRefine(
+  (payload, context) => {
+    if (payload.kind !== "thread_export") return;
+    const changed = payload.write_status !== "unchanged";
+    if (changed === Boolean(payload.change_set_id)) return;
+    context.addIssue({
+      code: "custom",
+      path: ["change_set_id"],
+      message: changed
+        ? "Changed exports require a change set"
+        : "Unchanged exports must not include a change set",
+    });
+  },
+);
 
 export const commandInteractionSchema = z.discriminatedUnion("kind", [
   commandSelectionSchema,

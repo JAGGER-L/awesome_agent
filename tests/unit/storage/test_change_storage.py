@@ -9,6 +9,7 @@ from awesome_agent.core.changes import (
     ChangeLifecycle,
     ChangeReversibility,
     ChangeSet,
+    ExecuteObservation,
     FileChange,
     FileChangeKind,
     FileNodeType,
@@ -206,6 +207,149 @@ async def test_list_open_is_scoped_to_the_workspace(
         await store.save(change_set)
 
     assert await store.list_open("ws_1") == [open_change]
+
+
+async def test_delete_empty_open_rechecks_evidence_and_pending_atomically(
+    application_database: ApplicationSQLite,
+) -> None:
+    store = SQLiteChangeSetStore(application_database)
+    created_at = datetime.now(UTC)
+    empty = ChangeSet(
+        id="change_empty",
+        session_id="session_1",
+        turn_id=None,
+        workspace_key="ws_1",
+        lifecycle=ChangeLifecycle.OPEN,
+        reversibility=ChangeReversibility.FULL,
+        created_at=created_at,
+    )
+    applied = empty.model_copy(
+        update={
+            "id": "change_applied",
+            "lifecycle": ChangeLifecycle.APPLIED,
+            "sealed_at": created_at,
+        }
+    )
+    with_file = empty.model_copy(
+        update={
+            "id": "change_file",
+            "files": [
+                FileChange(
+                    path="out.md",
+                    kind=FileChangeKind.CREATED,
+                    node_type=FileNodeType.FILE,
+                    after_hash="a" * 64,
+                    after_blob="a" * 64,
+                )
+            ],
+        }
+    )
+    with_execute = empty.model_copy(
+        update={
+            "id": "change_execute",
+            "execute": [ExecuteObservation(command="export")],
+        }
+    )
+    with_pending = empty.model_copy(update={"id": "change_pending"})
+    for change_set in (empty, applied, with_file, with_execute, with_pending):
+        await store.save(change_set)
+    pending = PendingMutation(
+        id="pending_1",
+        change_set_id=with_pending.id,
+        workspace_key=with_pending.workspace_key,
+        relative_path="out.md",
+        kind=FileChangeKind.CREATED,
+        node_type=FileNodeType.FILE,
+        before_hash=None,
+        before_blob=None,
+        before_mode=None,
+        intended_after_hash="b" * 64,
+        intended_after_blob="b" * 64,
+        intended_after_mode=0o644,
+        created_at=created_at,
+    )
+    await store.save_pending(pending)
+
+    assert await store.delete_empty_open("change_missing") is False
+    assert await store.delete_empty_open(applied.id) is False
+    assert await store.delete_empty_open(with_file.id) is False
+    assert await store.delete_empty_open(with_execute.id) is False
+    assert await store.delete_empty_open(with_pending.id) is False
+    assert await store.delete_empty_open(empty.id) is True
+
+    assert await store.get(empty.id) is None
+    assert await store.get(applied.id) == applied
+    assert await store.get(with_file.id) == with_file
+    assert await store.get(with_execute.id) == with_execute
+    assert await store.get(with_pending.id) == with_pending
+    await store.delete_pending(pending.id)
+    assert await store.delete_empty_open(with_pending.id) is True
+
+
+async def test_delete_empty_open_retains_a_tool_activity_reference(
+    application_database: ApplicationSQLite,
+) -> None:
+    store = SQLiteChangeSetStore(application_database)
+    created_at = datetime.now(UTC)
+    change_set = ChangeSet(
+        id="change_referenced",
+        session_id="session_1",
+        turn_id=None,
+        workspace_key="ws_1",
+        lifecycle=ChangeLifecycle.OPEN,
+        reversibility=ChangeReversibility.FULL,
+        created_at=created_at,
+    )
+    await store.save(change_set)
+
+    def write_reference(connection: sqlite3.Connection) -> None:
+        timestamp = created_at.isoformat()
+        connection.execute(
+            "INSERT INTO threads ("
+            "thread_id, workspace_key, title, title_source, current_model, "
+            "thinking_enabled, skill_mode, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "thread_1",
+                "ws_1",
+                "Thread",
+                "manual",
+                None,
+                0,
+                "off",
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO tool_activities ("
+            "activity_id, thread_id, turn_id, operation_id, call_id, sequence, "
+            "origin, tool_name, outcome, input_summary, result_summary, "
+            "error_code, duration_ms, change_set_id, created_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "activity_1",
+                "thread_1",
+                None,
+                "operation_1",
+                "call_1",
+                1,
+                "direct",
+                "write_file",
+                "success",
+                "input",
+                "result",
+                None,
+                0,
+                change_set.id,
+                timestamp,
+            ),
+        )
+
+    await application_database.write(write_reference)
+
+    assert await store.delete_empty_open(change_set.id) is False
+    assert await store.get(change_set.id) == change_set
 
 
 async def test_file_change_mutation_identity_survives_reopen(

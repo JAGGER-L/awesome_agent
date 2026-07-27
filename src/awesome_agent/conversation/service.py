@@ -106,6 +106,42 @@ class ConversationService:
             limit=limit,
         )
 
+    async def search_thread_page(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        normalized = query.strip()
+        if not 1 <= len(normalized) <= 200:
+            raise ValueError("Thread search query must be 1 to 200 characters.")
+        if not 1 <= limit <= 50:
+            raise ValueError("Thread search limit must be 1 to 50.")
+        return await self._store.search_threads_page(
+            workspace_key,
+            query=normalized,
+            cursor=cursor,
+            limit=limit,
+        )
+
+    async def thread_matches_search(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        thread_id: str,
+    ) -> bool:
+        normalized = query.strip()
+        if not 1 <= len(normalized) <= 200:
+            raise ValueError("Thread search query must be 1 to 200 characters.")
+        return await self._store.thread_matches_search(
+            workspace_key,
+            query=normalized,
+            thread_id=thread_id,
+        )
+
     async def set_skill_mode(self, thread_id: str, skill_mode: str) -> Thread:
         if re.fullmatch(r"(?:auto|off|[a-z][a-z0-9-]{0,63})", skill_mode) is None:
             raise ValueError("Skill mode is invalid.")

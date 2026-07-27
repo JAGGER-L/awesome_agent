@@ -84,6 +84,41 @@
         "code": -32602,
         "kind": "jsonrpc_error"
       },
+      "method": "thread.search",
+      "name": "thread.search.blank_query",
+      "params": {
+        "query": "   "
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.search",
+      "name": "thread.search.limit",
+      "params": {
+        "limit": 51,
+        "query": "fixture"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "thread.search",
+      "name": "thread.search.explicit_null",
+      "params": {
+        "cursor": null,
+        "query": "fixture"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
       "method": "thread.read",
       "name": "thread.read.before_sequence",
       "params": {

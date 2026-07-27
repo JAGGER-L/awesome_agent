@@ -51,6 +51,7 @@ Journal observation.
 | `/new` | Create and select a new Thread in this Workspace. |
 | `/rename <title>` | Persist a user-selected title for the current Thread. |
 | `/resume [thread_id]` | Pick or select a previous Thread from this Workspace. |
+| `/search <query> [thread_id]` | Search this Workspace's durable conversation history, then pick or resume a result. Quote multi-word queries. |
 | `/thinking [on\|off]` | Inspect or set Thinking for future Turns in this Thread. |
 | `/model [deepseek\|kimi]` | Choose a Provider and model for this Thread and the user default. |
 | `/skills [auto\|off\|name]` | Inspect or select the Skill mode for future Turns. |
@@ -63,6 +64,15 @@ Selecting a Thread restores its durable messages, Turns, model, Thinking, and
 Skill choices. It also resets session permission authority to Request approval
 and clears temporary grants. The previous Thread remains available through
 `/resume`.
+
+Search uses literal substring matching over Thread titles and durable user,
+assistant, and direct-command transcript text. It is not full-text or relevance
+search, and never crosses the active Workspace. For example, run
+`/search "provider retry"`, then choose a result; the picker preserves the query
+and appends the selected Thread ID. It displays at most the 50 most recently
+updated matches and asks you to refine the query when older matches remain. A
+search that exhausts its bounded SQLite scan returns `result_too_large` rather
+than running without a limit.
 
 ## Context and Inspection Commands
 
@@ -92,12 +102,22 @@ the terminal outcome.
 | Command | What it does |
 | --- | --- |
 | `/diff [change_set_id]` | Render the latest or selected recorded file delta. |
+| `/export <workspace-relative-path> [markdown\|json]` | Export the current Thread deterministically; Markdown is the default. |
 | `/undo [change_set_id]` | Restore the selected applied ChangeSet's recorded file state. |
 | `/redo [change_set_id]` | Reapply a successfully undone ChangeSet. |
 
 These commands use exact ChangeSet lifecycles and conflict checks. They do not
 claim to reverse arbitrary shell or MCP effects. See
 [Review, undo, and redo](changes.md).
+
+Export uses the same workspace-safe write and Change Journal path as controlled
+file edits, so created or updated exports can be undone. Repeating an unchanged
+export creates no ChangeSet. The normalized path must be 1–1,000 characters,
+output is capped at 5 MiB, and rendering runs away from the event loop. A failed
+attempt with no reconciled file evidence does not publish an empty ChangeSet.
+Each cited Markdown assistant entry retains its own Sources area, every JSON
+assistant entry has a `citations` list, and both formats omit internal workspace
+identity and metadata.
 
 ## Provider and Credential Commands
 

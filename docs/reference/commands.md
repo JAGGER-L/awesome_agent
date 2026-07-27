@@ -1,6 +1,6 @@
 # Slash Command reference
 
-Awesome has one closed command catalog. Twenty-two commands are owned by the
+Awesome has one closed command catalog. Twenty-four commands are owned by the
 Python Application and four are owned by Ink. A Slash Command is product
 control input: it is displayed in the terminal transcript but is not stored as
 a model conversation message.
@@ -12,6 +12,7 @@ a model conversation message.
 | `/new` | no arguments | Create and select a new Thread; reset Thread-scoped permission state. |
 | `/rename <title>` | one or more title tokens | Persist a manual title for the selected Thread. |
 | `/resume [thread_id]` | zero or one ID/prefix | Open a picker or select one workspace Thread. |
+| `/search <query> [thread_id]` | one query token (quote multiple words), then optional exact result ID | Search this Workspace, open a picker, or resume the selected matching Thread. |
 | `/context` | no arguments | Show the latest active context categories, realized token count, and budget. |
 | `/compact` | no arguments | Build and persist a new conversation summary now. |
 | `/auth [deepseek\|kimi\|mem0]` | zero or one service in normal use | Select and manage Environment or Awesome API-key sources through pickers. |
@@ -20,6 +21,7 @@ a model conversation message.
 | `/permissions [request_approval\|accept_edits\|full_access]` | zero or one mode | Inspect or change the session permission mode; Full access requires a separate confirmation. |
 | `/workspace` | no arguments | Show the active workspace display path. |
 | `/diff [change_set_id]` | zero or one ID | Render the latest or selected ChangeSet diff. |
+| `/export <workspace-relative-path> [markdown\|json]` | one path and optional format; default `markdown` | Deterministically export the current Thread through a safe, journaled workspace write. |
 | `/undo [change_set_id]` | zero or one ID | Restore the before-state of an applied reversible ChangeSet. |
 | `/redo [change_set_id]` | zero or one ID | Restore the after-state of an undone ChangeSet. |
 | `/tools` | no arguments | List the effective catalog and approval requirement under the current mode. |
@@ -40,6 +42,34 @@ first accepted natural-language message supplies an automatic title of at most
 `/resume` accepts an exact Thread ID or an unambiguous `thread_` prefix of 8–32
 lowercase hexadecimal digits. Ambiguous prefixes open a picker; cross-workspace
 Threads are never selected.
+
+`/search` accepts one query argument. Quote a multi-word query, for example
+`/search "provider retry"`; after selection the TUI appends the chosen exact
+Thread ID to that original query. Search is isolated to the active Workspace
+and matches ASCII-case-insensitive literal substrings in Thread titles and all
+durable transcript entry content, including user, assistant, and direct-command
+entries. It does not search ToolActivity, summaries, checkpoints, or metadata,
+and does not provide FTS, tokenization, snippets, relevance ranking, or full
+Unicode case folding. Results use `updated_at DESC, id DESC` order. The picker
+shows at most the 50 most recently updated matches; when more exist, its prompt
+asks the user to refine the query. Each search and selected-result revalidation
+has a 5,000,000 SQLite VM-op scan budget and returns `result_too_large` when the
+budget is exhausted. Protocol clients can instead continue matching pages with
+the keyset cursor returned by `thread.search`.
+
+`/export` accepts a Workspace-relative destination and optional `markdown` or
+`json` format; Markdown is the default. The same Thread produces deterministic
+bytes up to a 5 MiB output limit. Rendering runs away from the event loop.
+Citations stay attached to their assistant entry: cited Markdown entries render
+their own Sources section, and JSON assistant entries always expose a
+`citations` list. Exports contain public conversation data only:
+they never expose the internal workspace key or private entry metadata. The
+destination passes the normal workspace identity and safe-write checks, and its
+normalized path must be 1–1,000 characters before mutation begins. A created or
+updated file records a ChangeSet and can be reverted with `/undo`; an unchanged
+write records no ChangeSet. A failed attempt with no reconciled file evidence
+does not publish an empty ChangeSet; if bytes landed, recovery retains their
+actual evidence.
 
 `/auth` never accepts a key as a command argument. The picker may generate
 internal continuation tokens for source selection, replacement, and deletion;

@@ -1,5 +1,6 @@
 """Framework-free local conversation domain contracts."""
 
+from awesome_agent.conversation.export import ThreadExportFormat, render_thread_export
 from awesome_agent.conversation.models import (
     AssistantEntryMetadata,
     Thread,
@@ -23,6 +24,7 @@ from awesome_agent.conversation.repository import (
     ConversationStore,
     InvalidTurnTransition,
     ThreadNotFound,
+    ThreadSearchLimitExceeded,
     TurnBusy,
     TurnNotFound,
     require_turn_transition,
@@ -44,9 +46,11 @@ __all__ = [
     "Thread",
     "ThreadEntry",
     "ThreadEntryKind",
+    "ThreadExportFormat",
     "ThreadListPage",
     "ThreadNotFound",
     "ThreadPage",
+    "ThreadSearchLimitExceeded",
     "ThreadSummary",
     "ThreadTitleSource",
     "ThreadView",
@@ -60,6 +64,7 @@ __all__ = [
     "UsageSummary",
     "automatic_title",
     "normalize_title",
+    "render_thread_export",
     "require_turn_transition",
     "visible_graphemes",
 ]

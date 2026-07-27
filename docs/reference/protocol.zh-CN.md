@@ -125,6 +125,7 @@ Unicode string 长度。
 | `initialize` | `protocol_version`；1–128 的 `client_name`；1–64 的 `client_version` | `InitializeResult` |
 | `application.getState` | `{}` | 当前 `ApplicationState` snapshot |
 | `thread.list` | 可选 1–1,024 的 `cursor`；`limit` 为 1–200，默认 50 | Thread、`has_more`、可选 next cursor |
+| `thread.search` | trim 后 1–200 的 `query`；可选 1–1,024 的 `cursor`；`limit` 为 1–50，默认 50 | 与 `thread.list` 相同的 `ThreadListResult` |
 | `thread.read` | 1–128 的 `thread_id`；可选 `before_sequence >= 1`；`limit` 为 1–500，默认 100 | Thread view、ChangeSet、反向 pagination marker |
 | `turn.submit` | `thread_id`；1–200,000 的 `content`；匹配 `client_[A-Za-z0-9_-]+` 且最多 128 的 `client_message_id` | Operation、Thread、Turn 和 client-message ID |
 | `direct.execute` | `thread_id`；`command` 为 1–8,000，与委托的 `execute` 工具一致 | Operation 和 Thread ID |
@@ -167,7 +168,15 @@ catalog 生成的 `CommandSelection`，TUI 只做通用渲染。
 
 ### Pagination
 
-`thread.list` 使用不透明 cursor；客户端不得解码或合成它。`thread.read` 使用
+`thread.list` 使用不透明 cursor；客户端不得解码或合成它。`thread.search` 会 trim query，
+只搜索活动 Workspace，并按 `updated_at DESC, id DESC` 排序。其不透明 cursor 通过 hash
+绑定该 Workspace 与规范化 query；换 scope 重放会失败，且 cursor 不携带明文 workspace key。
+搜索对 Thread 标题与所有持久 transcript entry 内容执行 ASCII 大小写不敏感的字面
+substring operation。它排除 ToolActivity、summary、checkpoint 与 metadata，也不提供 FTS、
+分词、snippet、relevance ranking 或完整 Unicode case folding。每个 page query 都受
+5,000,000 SQLite VM-op scan budget 限制；预算耗尽时返回既有的 `result_too_large` Product
+error，client 应缩小 query。RPC 与最多显示 50 条的 `/search` picker 不同，仍可通过
+`has_more` 和 `next_cursor` 进行 keyset pagination。`thread.read` 使用
 `before_sequence` 向后分页，并在存在更多条目时返回 `next_before_sequence`。显式 null 的
 pagination 字段无效，因此“不提供”只有一种无歧义 wire 表示。Application 会动态缩小请求的
 page，直到编码结果符合 900 KiB 预算，并为被省略的条目保留 `next_before_sequence`。
@@ -199,6 +208,13 @@ Params 是封闭的 `CommandIntent`：
 `copy` 和 `quit`。`CommandOutcome` 恰好包含一个分支：有类型的 `result`、有类型的
 `interaction` 或稳定的 command `error`。精确语法和 foreground snapshot 例外见
 [Slash Commands](commands.zh-CN.md)。
+
+`thread_export` command result 仅包含 `kind`、`thread_id`、1–1,000 的 `path`、`format`
+（`markdown` 或 `json`）、`write_status`（`created`、`updated` 或 `unchanged`）、
+`byte_count`，以及可选的 `change_set_id`。创建或更新导出必须带 ChangeSet ID；未变化导出
+禁止携带该字段。此 payload 不携带导出内容、workspace identity 或内部 transcript metadata。
+导出输出本身限制为 5 MiB；path 在规范化后、mutation 前执行长度检查。失败且没有
+reconciliation file evidence 的尝试不会发出空 ChangeSet result。
 
 `/tools` 结果不分页。Catalog 准入会执行自己的聚合边界；如果其他 producer 仍破坏该不变量，
 transport 的最终字节检查会返回 `result_too_large`，而不是发送无效 frame。

@@ -358,6 +358,21 @@
       }
     },
     {
+      "name": "result.thread_export",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "byte_count": 1024,
+          "change_set_id": "change_11111111111111111111111111111111",
+          "format": "markdown",
+          "kind": "thread_export",
+          "path": "exports/fixture.md",
+          "thread_id": "thread_11111111111111111111111111111111",
+          "write_status": "created"
+        }
+      }
+    },
+    {
       "name": "result.diff",
       "outcome": {
         "kind": "result",

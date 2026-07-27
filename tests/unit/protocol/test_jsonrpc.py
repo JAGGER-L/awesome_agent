@@ -30,6 +30,7 @@ from awesome_agent.application.contracts import (
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
 )
 from awesome_agent.application.middleware import ApplicationOperation
@@ -94,6 +95,12 @@ class Facade:
         self, query: ThreadListQuery
     ) -> ApplicationResult[ThreadListResult]:
         self.calls.append(("list", query))
+        return ApplicationResult.success(ThreadListResult())
+
+    async def search_threads(
+        self, query: ThreadSearchQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        self.calls.append(("search", query))
         return ApplicationResult.success(ThreadListResult())
 
     async def read_thread(
@@ -177,6 +184,7 @@ def test_dispatcher_exposes_exact_protocol_v4_method_table() -> None:
         "initialize",
         "application.getState",
         "thread.list",
+        "thread.search",
         "thread.read",
         "turn.submit",
         "direct.execute",
@@ -195,6 +203,7 @@ def test_dispatcher_exposes_exact_protocol_v4_method_table() -> None:
         ("initialize", INITIALIZE_PARAMS, "initialize"),
         ("application.getState", {}, "state"),
         ("thread.list", {}, "list"),
+        ("thread.search", {"query": "  provider retry  "}, "search"),
         (
             "turn.submit",
             {
@@ -538,18 +547,46 @@ async def test_thread_query_params_are_typed_and_bounded_before_facade_work() ->
             "params": {"limit": 201},
         }
     )
-    invalid_read = await dispatcher.dispatch(
+    searched = await dispatcher.dispatch(
         {
             "jsonrpc": "2.0",
             "id": 3,
+            "method": "thread.search",
+            "params": {"query": "  provider retry  ", "cursor": "opaque", "limit": 50},
+        }
+    )
+    invalid_search = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "thread.search",
+            "params": {"query": "provider", "limit": 51},
+        }
+    )
+    invalid_read = await dispatcher.dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": 5,
             "method": "thread.read",
             "params": {"thread_id": "thread_1", "before_sequence": 0, "limit": 501},
         }
     )
 
     assert listed is not None and listed["result"]["ok"] is True
-    assert facade.calls == [("list", ThreadListQuery(cursor="opaque", limit=200))]
+    assert searched is not None and searched["result"]["ok"] is True
+    assert facade.calls == [
+        ("list", ThreadListQuery(cursor="opaque", limit=200)),
+        (
+            "search",
+            ThreadSearchQuery(
+                query="provider retry",
+                cursor="opaque",
+                limit=50,
+            ),
+        ),
+    ]
     assert invalid_list is not None and invalid_list["error"]["code"] == -32602
+    assert invalid_search is not None and invalid_search["error"]["code"] == -32602
     assert invalid_read is not None and invalid_read["error"]["code"] == -32602
 
 
@@ -561,6 +598,11 @@ async def test_thread_query_params_are_typed_and_bounded_before_facade_work() ->
         ("thread.list", {"limit": True}),
         ("thread.list", {"cursor": None}),
         ("thread.list", {"limit": None}),
+        ("thread.search", {"query": "   "}),
+        ("thread.search", {"query": "x" * 201}),
+        ("thread.search", {"query": "x", "cursor": None}),
+        ("thread.search", {"query": "x", "limit": None}),
+        ("thread.search", {"query": "x", "limit": True}),
         (
             "thread.read",
             {"thread_id": "thread_1", "before_sequence": "10"},

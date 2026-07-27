@@ -34,6 +34,7 @@ from awesome_agent.application.contracts import (
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
 )
 from awesome_agent.application.middleware import ApplicationOperation
@@ -251,6 +252,12 @@ class Facade:
 
     async def list_threads(
         self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        del query
+        return ApplicationResult.success(ThreadListResult())
+
+    async def search_threads(
+        self, query: ThreadSearchQuery
     ) -> ApplicationResult[ThreadListResult]:
         del query
         return ApplicationResult.success(ThreadListResult())
@@ -653,6 +660,38 @@ async def test_fragmented_ndjson_malformed_duplicate_and_shutdown() -> None:
         ApplicationOperation.SHUTDOWN,
     ]
     assert all(frame.endswith(b"\n") for frame in output.frames)
+
+
+@pytest.mark.asyncio
+async def test_thread_search_routes_through_initialized_stdio_host() -> None:
+    output = Output()
+    facade = Facade()
+    requests = (
+        _initialize_request(0)
+        + _request(1, "thread.search", {"query": "provider retry", "limit": 50})
+        + _request(2, "shutdown", {})
+    )
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(requests),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = [json.loads(frame) for frame in output.frames]
+    assert frames[1] == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "ok": True,
+            "value": {"threads": [], "has_more": False},
+        },
+    }
+    assert facade.bootstrap.operations == [
+        ApplicationOperation.INITIALIZE,
+        ApplicationOperation.SEARCH_THREADS,
+        ApplicationOperation.SHUTDOWN,
+    ]
 
 
 @pytest.mark.asyncio

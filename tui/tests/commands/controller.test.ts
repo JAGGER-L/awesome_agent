@@ -156,6 +156,27 @@ describe("CommandController", () => {
     expect(calls.map((call) => call.method)).toEqual(["command.execute"]);
   });
 
+  it("appends a selected Thread to the original search query", async () => {
+    const { calls, controller } = harness({
+      ok: true,
+      value: { kind: "result", payload: { kind: "notice", message: "ok" } },
+    });
+    await controller.select(
+      { name: "search", arguments: ["provider retry"] },
+      "thread_123",
+      "thread_current",
+    );
+    expect(calls).toEqual([
+      {
+        method: "command.execute",
+        params: {
+          name: "search",
+          arguments: ["provider retry", "thread_123"],
+        },
+      },
+    ]);
+  });
+
   it("classifies only typed operation races as queue-retryable", () => {
     expect(
       isOperationBusyOutcome({

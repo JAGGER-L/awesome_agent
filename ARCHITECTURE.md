@@ -334,6 +334,17 @@ exhaustively.
 Command progress is pending Surface lifecycle state, not a second durable
 operation model.
 
+Conversation discovery has two entry points over the same Application-owned
+boundary. Protocol `thread.search` keyset-pages workspace-isolated substring
+matches. `/search <query>` presents at most the 50 most recently updated
+matches, asks the user to refine the query when more exist, and resumes a
+selected Thread through the existing transition payload. Both paths share the
+same 5,000,000 SQLite VM-op scan budget and stable `result_too_large` failure.
+`/export` is also a deterministic Application command: it projects at most
+5 MiB of public transcript data to a normalized 1–1,000-character
+workspace-relative Markdown or JSON path, renders away from the event loop,
+then reports the safe write through the Change Journal.
+
 ### Resume and recovery
 
 `--continue` selects the most recent workspace Thread; `--resume <id>` selects
@@ -531,6 +542,11 @@ and startup continuation; Protocol carries typed facts; Ink only presents and
 routes the decision. Configuration, credentials, Skills, Memory, UI
 preferences, and workspace files live outside that boundary and survive a
 confirmed reset.
+
+Thread search is an Application SQLite read ordered by `updated_at DESC, id
+DESC`. Its opaque cursor binds the current Workspace and normalized query by
+hash; the cursor never carries that workspace key in cleartext. The first implementation
+uses literal substring matching rather than FTS or relevance ranking.
 
 Here, atomic replacement describes the filesystem namespace transition, not
 revocation of arbitrary handles opened outside Awesome's lease protocol. An
@@ -776,6 +792,13 @@ the protocol imports the Application facade rather than individual subsystems.
 | UI preferences | Ink TUI | `ui.json` | user controlled |
 | Application invocation diagnostics | Application process/session | `logs/application.jsonl{,.1,.2,.3,.4}` | bounded local operational history |
 | Workspace files | user and tools | workspace | primary project state |
+
+Thread exports are ordinary workspace files, not a second copy of product
+state. Their deterministic public projection excludes workspace keys and
+internal metadata; a changed export is journaled and can be undone like other
+controlled file writes. Path and output bounds are checked before mutation. A
+failed attempt with no reconciled mutation evidence does not publish an empty
+ChangeSet; if bytes did land, recovery retains the actual evidence.
 
 Token deltas, spinners, raw provider payloads, unbounded shell output, and
 credentials are not stored as product history. Tool observations required for

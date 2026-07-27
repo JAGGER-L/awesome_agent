@@ -11,7 +11,7 @@ describe("commandMenuWindow", () => {
     expect(commandMenuWindow(COMMAND_CATALOG, selected.name, 0)).toMatchObject({
       start: 3,
       end: 13,
-      total: 26,
+      total: 28,
     });
   });
 

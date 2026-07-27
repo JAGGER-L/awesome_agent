@@ -75,6 +75,41 @@ class ChangeScope:
                 await self._journal.seal(identifier)
         self._identifiers.pop(owner, None)
 
+    async def finalize_failed(self, owner: str) -> None:
+        async with self._lock:
+            identifier = self._identifiers.get(owner)
+            if identifier is None:
+                return
+            await _finish_cancellation_safe(
+                self._finalize_failed_and_unpublish(owner, identifier=identifier)
+            )
+
+    async def _finalize_failed_and_unpublish(
+        self,
+        owner: str,
+        *,
+        identifier: str,
+    ) -> None:
+        try:
+            change_set = await self._store.get(identifier)
+            if change_set is None or change_set.lifecycle is not ChangeLifecycle.OPEN:
+                return
+            await self._journal.reconcile_pending(change_set_id=identifier)
+            reconciled = await self._store.get(identifier)
+            if reconciled is None or reconciled.lifecycle is not ChangeLifecycle.OPEN:
+                return
+            if reconciled.files or reconciled.execute:
+                await self._journal.seal(identifier)
+                return
+            deleted = await self._store.delete_empty_open(identifier)
+            if deleted:
+                return
+            retained = await self._store.get(identifier)
+            if retained is not None and retained.lifecycle is ChangeLifecycle.OPEN:
+                await self._journal.seal(identifier)
+        finally:
+            self._identifiers.pop(owner, None)
+
     async def reconcile(self) -> None:
         async with self._lock:
             if self._identifiers:

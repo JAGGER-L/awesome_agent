@@ -16,8 +16,10 @@ from awesome_agent.application.command_results import (
     CommandError,
     CommandInteractionResult,
     CommandResult,
+    CommandSelection,
     DoctorCommandPayload,
     ModelCommandPayload,
+    ThreadExportCommandPayload,
     ThreadTransitionCommandPayload,
     ToolCatalogCommandPayload,
 )
@@ -29,6 +31,7 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ThreadListQuery,
     ThreadReadQuery,
+    ThreadSearchQuery,
 )
 from awesome_agent.application.facade import LocalApplication
 from awesome_agent.application.interactions import (
@@ -45,7 +48,11 @@ from awesome_agent.config.resource_lock import (
     ResourceLockUnavailable,
 )
 from awesome_agent.context import ContextManifestItem
-from awesome_agent.conversation import ThreadView
+from awesome_agent.conversation import (
+    ThreadListPage,
+    ThreadSearchLimitExceeded,
+    ThreadView,
+)
 from awesome_agent.core.events import (
     CollectingEventSink,
     EventEnvelope,
@@ -292,6 +299,196 @@ async def _wait_for_interaction(application: LocalApplication) -> str:
             return state.pending_interaction_id
         await asyncio.sleep(0.01)
     raise AssertionError("execute interaction was not requested")
+
+
+async def _wait_for_idle(application: LocalApplication) -> None:
+    for _ in range(200):
+        if _unwrap(await application.get_state()).active_operation_id is None:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("foreground operation did not become idle")
+
+
+@pytest.mark.asyncio
+async def test_thread_search_selection_revalidates_before_resume_and_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "exports").mkdir()
+    gateway = BlockingGateway(
+        "deepseek",
+        "deepseek/deepseek-v4-flash",
+    )
+    application = await compose_local_application(
+        home=tmp_path / "home",
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={"DEEPSEEK_API_KEY": "fake-key"},
+        gateway_factory=lambda _provider, _model: cast(ModelGateway, gateway),
+    )
+    initialized = _unwrap(await application.initialize())
+    assert initialized.interaction_id is not None
+    _unwrap(await application.respond_interaction(initialized.interaction_id, "trust"))
+
+    first = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    assert isinstance(first, CommandResult)
+    assert isinstance(first.payload, ThreadTransitionCommandPayload)
+    first_id = first.payload.transition.thread.view.thread.id
+    _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.RENAME, arguments=("Needle thread",))
+        )
+    )
+    second = _unwrap(
+        await application.execute_command(CommandIntent(name=CommandName.NEW))
+    )
+    assert isinstance(second, CommandResult)
+    assert isinstance(second.payload, ThreadTransitionCommandPayload)
+    second_id = second.payload.transition.thread.view.thread.id
+
+    accepted = _unwrap(
+        await application.submit_turn(second_id, "block", "client_search_block")
+    )
+    await asyncio.wait_for(gateway.started.wait(), timeout=0.5)
+
+    direct_search = _unwrap(
+        await application.search_threads(ThreadSearchQuery(query=" needle "))
+    )
+    assert [thread.id for thread in direct_search.threads] == [first_id]
+    selection = _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.SEARCH, arguments=("needle",))
+        )
+    )
+    assert isinstance(selection, CommandInteractionResult)
+    assert isinstance(selection.interaction, CommandSelection)
+    assert [option.value for option in selection.interaction.options] == [first_id]
+    assert _unwrap(await application.get_state()).current_thread_id == second_id
+
+    backend = cast(Any, application)._backend
+    runtime = backend._runtime
+    assert runtime is not None
+    original_search = runtime.conversation.search_thread_page
+    template = direct_search.threads[0]
+
+    async def capped_search(*_args: object, **_kwargs: object) -> ThreadListPage:
+        return ThreadListPage(
+            threads=tuple(
+                template.model_copy(
+                    update={"id": f"fixture_thread_{index:02d}"}
+                )
+                for index in range(50)
+            ),
+            has_more=True,
+        )
+
+    monkeypatch.setattr(runtime.conversation, "search_thread_page", capped_search)
+    capped = _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.SEARCH, arguments=("needle",))
+        )
+    )
+    assert isinstance(capped, CommandInteractionResult)
+    assert isinstance(capped.interaction, CommandSelection)
+    assert capped.interaction.prompt == (
+        "Showing the 50 most recent matches; refine the query for older results."
+    )
+    monkeypatch.setattr(
+        runtime.conversation,
+        "search_thread_page",
+        original_search,
+    )
+
+    async def exhausted_search(*_args: object, **_kwargs: object) -> ThreadListPage:
+        raise ThreadSearchLimitExceeded("fixture budget")
+
+    monkeypatch.setattr(runtime.conversation, "search_thread_page", exhausted_search)
+    limited = await application.search_threads(ThreadSearchQuery(query="needle"))
+    assert limited.ok is False
+    assert limited.error is not None
+    assert limited.error.code == "result_too_large"
+    limited_command = _unwrap(
+        await application.execute_command(
+            CommandIntent(name=CommandName.SEARCH, arguments=("needle",))
+        )
+    )
+    assert isinstance(limited_command, CommandError)
+    assert limited_command.code == "result_too_large"
+    monkeypatch.setattr(
+        runtime.conversation,
+        "search_thread_page",
+        original_search,
+    )
+
+    blocked = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.SEARCH,
+                arguments=("needle", first_id),
+            )
+        )
+    )
+    assert isinstance(blocked, CommandError)
+    assert blocked.code == "operation_busy"
+
+    _unwrap(await application.cancel_operation(accepted.operation_id))
+    await _wait_for_idle(application)
+    resumed = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.SEARCH,
+                arguments=("needle", first_id),
+            )
+        )
+    )
+    assert isinstance(resumed, CommandResult)
+    assert isinstance(resumed.payload, ThreadTransitionCommandPayload)
+    assert resumed.payload.transition.reason == "resume"
+    assert resumed.payload.transition.thread.view.thread.id == first_id
+
+    stale = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.SEARCH,
+                arguments=("needle", second_id),
+            )
+        )
+    )
+    assert isinstance(stale, CommandError)
+    assert stale.code == "thread_not_found"
+    assert _unwrap(await application.get_state()).current_thread_id == first_id
+    unquoted = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.SEARCH,
+                arguments=("two", "words"),
+            )
+        )
+    )
+    assert isinstance(unquoted, CommandError)
+    assert unquoted.code == "thread_not_found"
+    assert _unwrap(await application.get_state()).current_thread_id == first_id
+
+    exported = _unwrap(
+        await application.execute_command(
+            CommandIntent(
+                name=CommandName.EXPORT,
+                arguments=("exports/thread.md",),
+            )
+        )
+    )
+    assert isinstance(exported, CommandResult)
+    assert isinstance(exported.payload, ThreadExportCommandPayload)
+    assert exported.payload.thread_id == first_id
+    assert exported.payload.write_status == "created"
+    assert exported.payload.byte_count == len(
+        (workspace / "exports" / "thread.md").read_bytes()
+    )
+    await application.shutdown()
 
 
 @pytest.mark.asyncio

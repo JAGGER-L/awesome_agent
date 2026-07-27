@@ -221,6 +221,19 @@ class ThreadListQuery(BaseModel):
     limit: int = Field(default=50, ge=1, le=200)
 
 
+class ThreadSearchQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    query: str = Field(min_length=1, max_length=200)
+    cursor: str | None = Field(default=None, min_length=1, max_length=1_024)
+    limit: int = Field(default=50, ge=1, le=50)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def normalize_query(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class ThreadReadQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

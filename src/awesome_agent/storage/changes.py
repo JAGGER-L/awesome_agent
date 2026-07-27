@@ -176,6 +176,43 @@ class SQLiteChangeSetStore:
 
         return await self._database.read(read)
 
+    async def delete_empty_open(self, change_set_id: str) -> bool:
+        def write(connection: sqlite3.Connection) -> bool:
+            row = connection.execute(
+                "SELECT lifecycle, payload_json FROM change_sets "
+                "WHERE change_set_id = ?",
+                (change_set_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            change_set = ChangeSet.model_validate_json(row["payload_json"])
+            if (
+                row["lifecycle"] != ChangeLifecycle.OPEN.value
+                or change_set.lifecycle is not ChangeLifecycle.OPEN
+                or change_set.files
+                or change_set.execute
+            ):
+                return False
+            pending = connection.execute(
+                "SELECT 1 FROM pending_mutations WHERE change_set_id = ? LIMIT 1",
+                (change_set_id,),
+            ).fetchone()
+            if pending is not None:
+                return False
+            referenced = connection.execute(
+                "SELECT 1 FROM tool_activities WHERE change_set_id = ? LIMIT 1",
+                (change_set_id,),
+            ).fetchone()
+            if referenced is not None:
+                return False
+            cursor = connection.execute(
+                "DELETE FROM change_sets WHERE change_set_id = ? AND lifecycle = ?",
+                (change_set_id, ChangeLifecycle.OPEN.value),
+            )
+            return cursor.rowcount == 1
+
+        return await self._database.write(write)
+
     async def save_pending(self, pending: PendingMutation) -> None:
         def write(connection: sqlite3.Connection) -> None:
             connection.execute(

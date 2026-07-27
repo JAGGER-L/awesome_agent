@@ -194,6 +194,13 @@ SQLite connection、cursor 和 row 不会跨越 worker 边界。
 Slash Command 是控制输入，不是模型对话条目。直接命令是持久 transcript 条目，但没有 Turn
 ID。Tool activity 有唯一的 `(operation_id, call_id)` 边界，因此 completion 无法被静默复制。
 
+会话搜索只读取活动 Workspace 内的 Thread title 与 `thread_entries.content`。它包含持久
+user、assistant 和 direct-command entry，但排除 ToolActivity、summary、checkpoint 与
+metadata。首版是 SQLite 字面 `LOWER`/substring query，而不是 FTS index。页面按
+`updated_at DESC, id DESC` 稳定排序；cursor scope 通过 hash 绑定 Workspace 与规范化 query，
+不会在 cursor 中发布 workspace key。每个 page query 与精确结果 revalidation 都受
+5,000,000 SQLite VM-op budget 限制；预算耗尽时返回 `result_too_large`。
+
 不要手动编辑此 database。Row invariant、foreign key、Checkpoint store 和 Change Journal
 blob 虽使用不同文件，却共同组成一份恢复契约。
 
@@ -257,6 +264,15 @@ Turn 记录则提供 join。Checkpoint 缺失或损坏时，Awesome 绝不会杜
 reconciliation 所需、按内容寻址的 before/after byte。写入使用 temporary-file-plus-replace，
 读取会在返回内容前重新计算 digest。Metadata 和 pending intent 位于 `application.db`；两部分
 单独存在时，都不足以提供完整 undo 历史。
+
+`/export` 把确定性的公开 Thread 投影写入 Workspace 相对的 Markdown 或 JSON 文件。有引用的
+Markdown assistant entry 保留自己的 Sources 区域，而 JSON assistant entry 始终带
+`citations` list；workspace key 与内部 entry metadata 会被排除。
+输出上限为 5 MiB，渲染在 event loop 外执行。写入使用共享的 identity-bound filesystem
+primitive；规范化路径必须在 mutation 前满足 1–1,000 字符。创建与更新文件会产生 Change
+Journal 证据并支持 `/undo`；字节相同的导出报告为 unchanged，且不创建 ChangeSet。失败且
+reconciliation 后没有 evidence 的尝试不会发布空 ChangeSet；若字节已经落盘，恢复会保留其
+evidence。
 
 每个 ChangeSet 限制为 1,000 个 node 和 50 MiB。Shell 执行会记录为不可逆 observation，
 而不是虚构的 filesystem snapshot。见[变更指南](../user-guide/changes.zh-CN.md)。

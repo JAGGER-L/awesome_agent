@@ -28,6 +28,7 @@ from awesome_agent.application.contracts import (
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
     WorkspacePresentation,
     thread_display_id,
 )
@@ -54,6 +55,10 @@ class ApplicationFacade(Protocol):
 
     async def list_threads(
         self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]: ...
+
+    async def search_threads(
+        self, query: ThreadSearchQuery
     ) -> ApplicationResult[ThreadListResult]: ...
 
     async def read_thread(
@@ -100,6 +105,10 @@ class _ApplicationBackend(Protocol):
     async def application_state(self) -> ApplicationState: ...
 
     async def workspace_threads(self, query: ThreadListQuery) -> ThreadListResult: ...
+
+    async def search_workspace_threads(
+        self, query: ThreadSearchQuery
+    ) -> ThreadListResult: ...
 
     async def thread_state(self, query: ThreadReadQuery) -> ThreadReadResult: ...
 
@@ -205,6 +214,14 @@ class LocalApplication:
         return await self._invoke(
             ApplicationOperation.LIST_THREADS,
             lambda: self._call(lambda: self._backend.workspace_threads(query)),
+        )
+
+    async def search_threads(
+        self, query: ThreadSearchQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        return await self._invoke(
+            ApplicationOperation.SEARCH_THREADS,
+            lambda: self._call(lambda: self._backend.search_workspace_threads(query)),
         )
 
     async def read_thread(
@@ -374,6 +391,7 @@ __all__ = [
     "ThreadListResult",
     "ThreadReadQuery",
     "ThreadReadResult",
+    "ThreadSearchQuery",
     "WorkspacePresentation",
     "thread_display_id",
 ]

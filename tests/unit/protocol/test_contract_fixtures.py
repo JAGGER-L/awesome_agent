@@ -35,6 +35,7 @@ from awesome_agent.application.contracts import (
     ThreadListResult,
     ThreadReadQuery,
     ThreadReadResult,
+    ThreadSearchQuery,
 )
 from awesome_agent.application.middleware import ApplicationOperation
 from awesome_agent.core.events import EventEnvelope, EventType
@@ -64,6 +65,7 @@ def test_manifest_freezes_complete_protocol_inventory_and_hashes() -> None:
         "initialize",
         "application.getState",
         "thread.list",
+        "thread.search",
         "thread.read",
         "turn.submit",
         "direct.execute",
@@ -116,6 +118,12 @@ class _FixtureFacade:
 
     async def list_threads(
         self, query: ThreadListQuery
+    ) -> ApplicationResult[ThreadListResult]:
+        del query
+        return ApplicationResult[ThreadListResult].model_validate(self._result)
+
+    async def search_threads(
+        self, query: ThreadSearchQuery
     ) -> ApplicationResult[ThreadListResult]:
         del query
         return ApplicationResult[ThreadListResult].model_validate(self._result)
@@ -336,6 +344,7 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
         "model",
         "thinking",
         "workspace",
+        "thread_export",
         "diff",
         "change",
         "tools",

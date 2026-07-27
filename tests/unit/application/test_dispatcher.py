@@ -47,7 +47,7 @@ async def test_dispatcher_requires_and_exposes_exact_core_inventory() -> None:
     handlers = _complete_handlers()
     dispatcher = CommandDispatcher(handlers)
 
-    assert len(handlers) == 22
+    assert len(handlers) == 24
     assert set(dispatcher.registered_names) == set(handlers)
     outcome = await dispatcher.dispatch(CommandIntent(name=CommandName.TOOLS))
     assert outcome == result(NoticeCommandPayload(message="tools"))
@@ -114,6 +114,7 @@ async def test_dispatcher_allows_only_exact_observations_during_operation() -> N
         CommandIntent(name=CommandName.STATUS),
         CommandIntent(name=CommandName.USAGE),
         CommandIntent(name=CommandName.CONFIG),
+        CommandIntent(name=CommandName.SEARCH, arguments=("query",)),
     ):
         outcome = await dispatcher.dispatch(intent)
         assert not isinstance(outcome, CommandError)
@@ -124,11 +125,37 @@ async def test_dispatcher_allows_only_exact_observations_during_operation() -> N
         CommandIntent(name=CommandName.DOCTOR),
         CommandIntent(name=CommandName.MCP, arguments=("restart", "server")),
         CommandIntent(name=CommandName.NEW),
+        CommandIntent(
+            name=CommandName.SEARCH,
+            arguments=("query", "thread_1"),
+        ),
     ):
         outcome = await dispatcher.dispatch(intent)
         assert isinstance(outcome, CommandError)
         assert outcome.code == "operation_busy"
 
+    operation.release()
+
+
+@pytest.mark.asyncio
+async def test_search_selection_is_observation_but_continuation_is_mutation() -> None:
+    foreground = ForegroundArbiter()
+    dispatcher = CommandDispatcher(_complete_handlers(), foreground=foreground)
+    operation = foreground.acquire_operation()
+
+    selection = await dispatcher.dispatch(
+        CommandIntent(name=CommandName.SEARCH, arguments=("quoted query",))
+    )
+    continuation = await dispatcher.dispatch(
+        CommandIntent(
+            name=CommandName.SEARCH,
+            arguments=("quoted query", "thread_1"),
+        )
+    )
+
+    assert not isinstance(selection, CommandError)
+    assert isinstance(continuation, CommandError)
+    assert continuation.code == "operation_busy"
     operation.release()
 
 

@@ -43,6 +43,7 @@ Python object，这里仍是最终不变量边界。
 | `initialize` | 协商身份并执行启动/bootstrap |
 | `application.getState` | 读取权威 Application 状态 |
 | `thread.list` | 分页读取工作区 Threads |
+| `thread.search` | 分页读取 Workspace 隔离的会话 substring match |
 | `thread.read` | 分页读取一个 Thread 及其 transcript 投影 |
 | `turn.submit` | 准入自然语言前台工作 |
 | `direct.execute` | 准入直接 shell Operation |
@@ -55,6 +56,15 @@ Python object，这里仍是最终不变量边界。
 Core 发送带严格 envelope 的 `event` notification。事件族涵盖 Operation 与 Turn
 生命周期、assistant 文本/reasoning delta、提供商重试、工具生命周期、上下文准备/压缩、
 usage、Memory 状态、interaction 和 warning。
+
+`thread.search` 刻意复用 `ThreadListResult`，因此界面无需另一套 Thread card model。
+query 在 Application SQLite 执行字面 substring match 前完成 trim 与 bound；查询受
+5,000,000 VM-op scan budget 限制，不透明 cursor 同时绑定活动 Workspace 和 query hash，
+并保留 RPC keyset pagination。`/search` 复用通用 selection continuation，但只展示最近的
+50 条匹配；存在更多结果时，prompt 会要求缩小 query。耗尽 scan budget 时返回
+`result_too_large`。`/export` 只增加严格的 `thread_export` result：path 长度为 1–1,000，
+且只有字节发生变化时才携带非空 `change_set_id`；穷尽 presenter 不读取原始文件或私有
+metadata。
 
 ## 跨语言证据
 

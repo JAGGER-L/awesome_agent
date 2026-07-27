@@ -289,6 +289,88 @@ describe("provider credential protocol", () => {
   });
 });
 
+describe("thread search and export protocol", () => {
+  it("trims and bounds search params while applying the default page size", () => {
+    expect(
+      methodSchemas["thread.search"].params.parse({ query: "  retry loop  " }),
+    ).toEqual({ query: "retry loop", limit: 50 });
+    expect(
+      methodSchemas["thread.search"].params.safeParse({ query: "   " }).success,
+    ).toBe(false);
+    expect(
+      methodSchemas["thread.search"].params.safeParse({
+        query: "x".repeat(201),
+      }).success,
+    ).toBe(false);
+    expect(
+      methodSchemas["thread.search"].params.safeParse({
+        query: "retry",
+        limit: 51,
+      }).success,
+    ).toBe(false);
+    expect(
+      methodSchemas["thread.search"].params.safeParse({
+        query: "retry",
+        cursor: "x".repeat(1_025),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires change sets exactly when an export writes bytes", () => {
+    const changed = {
+      kind: "result",
+      payload: {
+        kind: "thread_export",
+        thread_id: "thread_1",
+        path: "exports/thread.md",
+        format: "markdown",
+        write_status: "created",
+        byte_count: 128,
+        change_set_id: "change_1",
+      },
+    } as const;
+    expect(commandOutcomeSchema.safeParse(changed).success).toBe(true);
+    expect(
+      commandOutcomeSchema.safeParse({
+        ...changed,
+        payload: { ...changed.payload, path: "x".repeat(1_001) },
+      }).success,
+    ).toBe(false);
+    expect(
+      commandOutcomeSchema.safeParse({
+        ...changed,
+        payload: { ...changed.payload, change_set_id: "" },
+      }).success,
+    ).toBe(false);
+    expect(
+      commandOutcomeSchema.safeParse({
+        ...changed,
+        payload: { ...changed.payload, change_set_id: undefined },
+      }).success,
+    ).toBe(false);
+    expect(
+      commandOutcomeSchema.safeParse({
+        ...changed,
+        payload: {
+          ...changed.payload,
+          write_status: "unchanged",
+          change_set_id: "change_1",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      commandOutcomeSchema.safeParse({
+        ...changed,
+        payload: {
+          ...changed.payload,
+          write_status: "unchanged",
+          change_set_id: undefined,
+        },
+      }).success,
+    ).toBe(true);
+  });
+});
+
 describe("application Model Catalog protocol", () => {
   it("requires the catalog on every ApplicationState", () => {
     const { model_catalog: _catalog, ...withoutCatalog } = applicationState();

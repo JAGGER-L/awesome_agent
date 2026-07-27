@@ -29,12 +29,46 @@ from awesome_agent.conversation.models import (
 from awesome_agent.conversation.repository import (
     ConversationConflict,
     ThreadNotFound,
+    ThreadSearchLimitExceeded,
     TurnBusy,
     TurnNotFound,
     require_turn_transition,
 )
 from awesome_agent.core.tools import ToolActivityDraft
 from awesome_agent.storage.application_sqlite import ApplicationSQLite
+
+# SQLite invokes the handler in bounded batches, avoiding per-opcode Python calls in
+# normal operation while still making the worst-case substring scan deterministic.
+_THREAD_SEARCH_OPCODE_BUDGET = 5_000_000
+_THREAD_SEARCH_PROGRESS_GRANULARITY = 1_000
+
+
+@contextmanager
+def _bounded_thread_search(connection: sqlite3.Connection) -> Iterator[None]:
+    budget = max(1, _THREAD_SEARCH_OPCODE_BUDGET)
+    interval = min(_THREAD_SEARCH_PROGRESS_GRANULARITY, budget)
+    remaining = budget
+    exhausted = False
+
+    def progress() -> int:
+        nonlocal exhausted, remaining
+        remaining -= interval
+        if remaining <= 0:
+            exhausted = True
+            return 1
+        return 0
+
+    connection.set_progress_handler(progress, interval)
+    try:
+        yield
+    except sqlite3.OperationalError as error:
+        if exhausted:
+            raise ThreadSearchLimitExceeded(
+                "Thread search exceeded its SQLite opcode budget."
+            ) from error
+        raise
+    finally:
+        connection.set_progress_handler(None, 0)
 
 
 class SQLiteConversationRepositories:
@@ -151,6 +185,40 @@ class SQLiteConversationRepositories:
                 workspace_key,
                 cursor=cursor,
                 limit=limit,
+            )
+        )
+
+    async def search_threads_page(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        return await self._database.read(
+            lambda connection: self._search_threads_page(
+                connection,
+                workspace_key,
+                query=query,
+                cursor=cursor,
+                limit=limit,
+            )
+        )
+
+    async def thread_matches_search(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        thread_id: str,
+    ) -> bool:
+        return await self._database.read(
+            lambda connection: self._threads.matches_search(
+                workspace_key,
+                query=query,
+                thread_id=thread_id,
+                connection=connection,
             )
         )
 
@@ -272,6 +340,24 @@ class SQLiteConversationRepositories:
     ) -> ThreadListPage:
         threads, has_more = self._threads.list_page(
             workspace_key,
+            cursor=cursor,
+            limit=limit,
+            connection=connection,
+        )
+        return ThreadListPage(threads=threads, has_more=has_more)
+
+    def _search_threads_page(
+        self,
+        connection: sqlite3.Connection,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ) -> ThreadListPage:
+        threads, has_more = self._threads.search_page(
+            workspace_key,
+            query=query,
             cursor=cursor,
             limit=limit,
             connection=connection,
@@ -662,6 +748,86 @@ class SQLiteThreadRepository(_SQLiteRepository):
                 (workspace_key, f"{prefix}%", limit),
             ).fetchall()
         return tuple(_thread_from_row(row) for row in rows)
+
+    def search_page(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> tuple[tuple[Thread, ...], bool]:
+        with (
+            self._connection(connection) as active,
+            _bounded_thread_search(active),
+        ):
+            parameters: list[object] = [workspace_key, query, query]
+            cursor_clause = ""
+            if cursor is not None:
+                updated_at, thread_id = cursor
+                encoded_time = _time(updated_at)
+                cursor_clause = """
+                  AND (
+                    threads.updated_at < ?
+                    OR (threads.updated_at = ? AND threads.thread_id < ?)
+                  )
+                """
+                parameters.extend((encoded_time, encoded_time, thread_id))
+            parameters.append(limit + 1)
+            rows = active.execute(
+                f"""
+                SELECT threads.* FROM threads
+                WHERE threads.workspace_key = ?
+                  AND (
+                    instr(lower(threads.title), lower(?)) > 0
+                    OR EXISTS (
+                      SELECT 1 FROM thread_entries
+                      WHERE thread_entries.thread_id = threads.thread_id
+                        AND instr(lower(thread_entries.content), lower(?)) > 0
+                    )
+                  )
+                  {cursor_clause}
+                ORDER BY threads.updated_at DESC, threads.thread_id DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return (
+            tuple(_thread_from_row(row) for row in rows[:limit]),
+            len(rows) > limit,
+        )
+
+    def matches_search(
+        self,
+        workspace_key: str,
+        *,
+        query: str,
+        thread_id: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> bool:
+        with (
+            self._connection(connection) as active,
+            _bounded_thread_search(active),
+        ):
+            row = active.execute(
+                """
+                SELECT 1 FROM threads
+                WHERE threads.thread_id = ?
+                  AND threads.workspace_key = ?
+                  AND (
+                    instr(lower(threads.title), lower(?)) > 0
+                    OR EXISTS (
+                      SELECT 1 FROM thread_entries
+                      WHERE thread_entries.thread_id = threads.thread_id
+                        AND instr(lower(thread_entries.content), lower(?)) > 0
+                    )
+                  )
+                LIMIT 1
+                """,
+                (thread_id, workspace_key, query, query),
+            ).fetchone()
+        return row is not None
 
     def update(
         self,
