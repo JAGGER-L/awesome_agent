@@ -298,12 +298,15 @@ describe("connectSurface", () => {
     }
     connected.activateThreadRetry?.(payload.operation, replacement.generation);
 
-    await waitFor(() =>
-      connected.store.getState().active_operation?.id ===
-      payload.operation.operation_id
+    await waitFor(() => {
+      const active = connected.store.getState().active_operation;
+      return active?.id === payload.operation.operation_id &&
+        active.status === "active" &&
+        active.turn?.id === payload.operation.turn_id &&
+        active.turn.status === "active"
         ? true
-        : undefined,
-    );
+        : undefined;
+    });
     expect(connected.store.getState()).toMatchObject({
       thread_generation: 1,
       application: { current_thread_id: "thread_retry" },
