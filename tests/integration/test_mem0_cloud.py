@@ -6,7 +6,7 @@ from typing import Any, cast
 
 import pytest
 
-from awesome_agent.agent import CloudPostAnswerMemory
+from awesome_agent.agent import PostAnswerFinalizationRequest
 from awesome_agent.application.command_results import (
     CommandError,
     CommandResult,
@@ -35,6 +35,7 @@ from awesome_agent.memory import (
     DistillationStatus,
     Mem0CloudAdapter,
     Mem0Identity,
+    Mem0PostAnswerFinalizer,
     MemoryCandidate,
     MemoryScope,
 )
@@ -274,12 +275,19 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
         ),
     )
     client.fail_content = "write fails safely"
-    finalizer = CloudPostAnswerMemory(
+    memory_statuses: list[str] = []
+
+    async def project_memory_status(*, enabled: bool, status: str) -> None:
+        assert enabled
+        memory_statuses.append(status)
+
+    finalizer = Mem0PostAnswerFinalizer(
         distiller=cast(Any, Distiller(candidates)),
         adapter=adapter,
         identity=identity,
+        project_status=project_memory_status,
     )
-    first = await finalizer.finalize(
+    request = PostAnswerFinalizationRequest(
         user_text="remember stable facts",
         final_answer="done",
         selected_model=SelectedModel(
@@ -287,19 +295,13 @@ async def test_mem0_commands_recall_write_restart_remove_and_disable(
             model="deepseek/deepseek-v4-flash",
         ),
         remaining_model_calls=10,
+        remaining_provider_retries=6,
         workspace_key=workspace_key,
     )
-    await finalizer.finalize(
-        user_text="remember stable facts",
-        final_answer="done",
-        selected_model=SelectedModel(
-            provider="deepseek",
-            model="deepseek/deepseek-v4-flash",
-        ),
-        remaining_model_calls=10,
-        workspace_key=workspace_key,
-    )
-    assert first.status == "warning"
+    first = await finalizer.finalize(request)
+    await finalizer.finalize(request)
+    assert [item.code for item in first.diagnostics] == ["mem0_unavailable"]
+    assert memory_statuses == ["warning", "warning"]
     assert [call for call in client.calls if call == "add"].count("add") == 4
 
     recalled = await mem0_context_source(

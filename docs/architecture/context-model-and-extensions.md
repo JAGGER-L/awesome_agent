@@ -220,6 +220,29 @@ and represented as untrusted context. Cloud failure becomes a diagnostic; it
 does not make the whole Turn configuration invalid. Post-answer distillation
 uses a separate policy and never uploads raw transcript by implication.
 
+`memory/finalization.py` owns `Mem0PostAnswerFinalizer`, the Memory-side
+implementation of Agent's generic `PostAnswerFinalizer` port. Application wires
+it only for an enabled, complete Mem0 session; otherwise it injects Agent's
+disabled implementation. The adapter translates Mem0 identities, distillation
+statuses, and `Mem0Diagnostic` values inside the Memory boundary. It returns
+the original answer, the distiller's model-call/usage accounting, and generic
+`PostAnswerDiagnostic` values whose codes are retained and whose message is the
+fixed `Optional memory operation did not complete.`. After constructing that
+result, it attempts to project the enabled Memory status. A failed status
+projection is retained as `memory_status_projection_failed` with the fixed
+message `Optional memory status projection failed.` and does not discard the
+answer or accounting. Status-projection cancellation is not converted into a
+diagnostic: the original cancellation propagates to the Agent boundary. Agent
+sees none of the Mem0-specific types.
+
+The generic request can carry ordered tool citations, but the current Mem0
+implementation does not consume them, rewrite citation markers, or alter the
+answer. Invalid output, budget overrun, and unexpected failure become Agent
+warnings while preserving the already-generated answer. Cancellation that
+escapes the adapter preserves the prior checkpointed answer and is immediately
+re-raised by Agent without another warning projection; see
+[Application and Agent](application-and-agent.md#post-answer-finalizer-port).
+
 The Mem0 SDK currently performs synchronous credential validation in its async
 client constructor. Awesome runs that constructor in a cancellation-aware worker
 instead of blocking the event loop, then registers only an internally created
@@ -327,7 +350,7 @@ Every extension must preserve these rules:
 - Models: `modeling/`, `providers/deepseek.py`, `providers/kimi.py`
 - Skills: `extensions/skills/discovery.py`, `loader.py`
 - MCP: `extensions/mcp/catalog.py`, `manager.py`, `adapter.py`, `stdio.py`
-- Memory: `memory/`
+- Memory: `memory/finalization.py`, `memory/`
 - Tests: `tests/unit/context/`, `tests/integration/test_context_pipeline.py`,
   `tests/integration/test_skills_mcp.py`,
   `tests/structural/test_context_architecture.py`,

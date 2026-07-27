@@ -8,12 +8,16 @@ from awesome_agent.memory.models import MemoryScope
 from awesome_agent.modeling import (
     AssistantMessage,
     GatewayEvent,
+    ModelErrorCode,
+    ModelErrorInfo,
     ModelRequest,
     ModelTurn,
     ModelUsage,
+    ProviderRetrying,
     SelectedModel,
     StopReason,
     TurnCompleted,
+    TurnFailed,
 )
 
 SELECTED = SelectedModel(
@@ -23,9 +27,16 @@ SELECTED = SelectedModel(
 
 
 class FakeGateway:
-    def __init__(self, content: str, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        content: str,
+        *,
+        fail: bool = False,
+        retries: int = 0,
+    ) -> None:
         self.content = content
         self.fail = fail
+        self.retries = retries
         self.calls: list[tuple[SelectedModel, ModelRequest]] = []
 
     async def stream(
@@ -36,6 +47,13 @@ class FakeGateway:
         self.calls.append((selected, request))
         if self.fail:
             raise RuntimeError("provider request secret")
+        for retry in range(self.retries):
+            yield ProviderRetrying(
+                attempt=retry + 2,
+                maximum=self.retries + 1,
+                delay_seconds=0,
+                error_code=ModelErrorCode.TRANSIENT,
+            )
         yield TurnCompleted(
             turn=ModelTurn(
                 provider=selected.provider,
@@ -45,7 +63,7 @@ class FakeGateway:
                 usage=ModelUsage(
                     input_tokens=100,
                     output_tokens=20,
-                    provider_retries=2,
+                    provider_retries=self.retries,
                 ),
             )
         )
@@ -61,7 +79,8 @@ async def test_distiller_receives_only_current_user_text_and_final_answer() -> N
                     {"scope": "workspace", "content": "Project uses pytest."},
                 ]
             }
-        )
+        ),
+        retries=2,
     )
     distiller = MemoryDistiller(gateway)
 
@@ -69,7 +88,7 @@ async def test_distiller_receives_only_current_user_text_and_final_answer() -> N
         user_text="Remember concise answers. token=secret-value",
         final_answer="Done. The preference was applied.",
         selected_model=SELECTED,
-        remaining_model_calls=1,
+        remaining_model_calls=3,
         workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
@@ -98,6 +117,81 @@ async def test_distiller_receives_only_current_user_text_and_final_answer() -> N
     assert request.thinking_enabled is False
     assert result.model_calls == 1
     assert result.usage.provider_retries == 2
+
+
+@pytest.mark.asyncio
+async def test_completed_turn_retry_mismatch_is_a_safe_failure() -> None:
+    class MismatchedGateway:
+        async def stream(
+            self,
+            selected: SelectedModel,
+            request: ModelRequest,
+        ) -> AsyncIterator[GatewayEvent]:
+            del request
+            yield TurnCompleted(
+                turn=ModelTurn(
+                    provider=selected.provider,
+                    model=selected.model,
+                    assistant=AssistantMessage(content='{"candidates": []}'),
+                    stop_reason=StopReason.COMPLETED,
+                    usage=ModelUsage(provider_retries=1),
+                )
+            )
+
+    result = await MemoryDistiller(MismatchedGateway()).distill(
+        user_text="Remember a stable preference.",
+        final_answer="Done.",
+        selected_model=SELECTED,
+        remaining_model_calls=3,
+        remaining_provider_retries=2,
+        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+
+    assert result.status is DistillationStatus.WARNING
+    assert result.model_calls == 1
+    assert result.usage.provider_retries == 0
+    assert result.diagnostic is not None
+    assert result.diagnostic.code == "memory_distillation_failed"
+
+
+@pytest.mark.asyncio
+async def test_malformed_completion_preserves_observed_retry_charge() -> None:
+    class MalformedCompletionGateway:
+        async def stream(
+            self,
+            selected: SelectedModel,
+            request: ModelRequest,
+        ) -> AsyncIterator[GatewayEvent]:
+            del request
+            yield ProviderRetrying(
+                attempt=2,
+                maximum=3,
+                delay_seconds=0,
+                error_code=ModelErrorCode.TRANSIENT,
+            )
+            malformed = ModelTurn.model_construct(
+                provider=selected.provider,
+                model=selected.model,
+                assistant=object(),
+                stop_reason=StopReason.COMPLETED,
+                usage=ModelUsage(provider_retries=1),
+            )
+            yield TurnCompleted.model_construct(turn=malformed)
+
+    result = await MemoryDistiller(MalformedCompletionGateway()).distill(
+        user_text="Remember a stable preference.",
+        final_answer="Done.",
+        selected_model=SELECTED,
+        remaining_model_calls=3,
+        remaining_provider_retries=2,
+        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+
+    assert result.status is DistillationStatus.WARNING
+    assert result.model_calls == 1
+    assert result.usage.provider_retries == 1
+    assert result.diagnostic is not None
+    assert result.diagnostic.code == "memory_distillation_failed"
 
 
 @pytest.mark.asyncio
@@ -180,3 +274,47 @@ async def test_provider_failure_is_warning_and_preserves_call_charge() -> None:
     assert result.model_calls == 1
     assert result.candidates == ()
     assert "secret" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ending", ["failed", "exception", "protocol"])
+async def test_provider_failure_preserves_observed_retry_charge(ending: str) -> None:
+    class RetryThenFailGateway:
+        async def stream(
+            self,
+            selected: SelectedModel,
+            request: ModelRequest,
+        ) -> AsyncIterator[GatewayEvent]:
+            del selected, request
+            yield ProviderRetrying(
+                attempt=2,
+                maximum=3,
+                delay_seconds=0,
+                error_code=ModelErrorCode.TRANSIENT,
+            )
+            if ending == "failed":
+                yield TurnFailed(
+                    error=ModelErrorInfo(
+                        code=ModelErrorCode.TRANSIENT,
+                        message="safe failure",
+                        retryable=True,
+                        provider="deepseek",
+                    )
+                )
+            elif ending == "exception":
+                raise RuntimeError("private provider failure")
+
+    result = await MemoryDistiller(RetryThenFailGateway()).distill(
+        user_text="Remember a stable preference.",
+        final_answer="Done.",
+        selected_model=SELECTED,
+        remaining_model_calls=4,
+        remaining_provider_retries=3,
+        workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+
+    assert result.status is DistillationStatus.WARNING
+    assert result.model_calls == 1
+    assert result.usage.provider_retries == 1
+    assert result.diagnostic is not None
+    assert "private" not in result.model_dump_json()

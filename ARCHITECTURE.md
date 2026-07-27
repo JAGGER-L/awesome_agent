@@ -241,6 +241,14 @@ path-like input cannot trigger description-time probing. The Executor applies
 that one sequence uniformly and does not branch on concrete tool names;
 capability grants cannot override hard admission.
 
+Core's provider-neutral `Citation(id, title, url)` value follows successful
+tool data from `ToolOutput.citations` into `ToolResult.citations`. Text bounding
+does not remove that tuple. Agent then serializes the complete result into
+`AgentState.tool_results`, which preserves citations in the checkpoint without
+adding a second top-level citations channel. Conversation records, Protocol v3,
+and the TUI wire remain unchanged until Web citations and Protocol v4 land as
+one contract change; there is no interim compatibility adapter.
+
 File-changing built-ins write through the Change Journal and shared
 identity-bound filesystem primitives. Lexical containment is only admission:
 the actual mutation pins the workspace and parent directory chain, verifies
@@ -399,9 +407,23 @@ SQLite worker before releasing state leases.
 - **Does not own:** product Thread records, concrete storage wiring, or surface
   state.
 - **Primary files:** `agent/state.py`, `agent/graph.py`, `agent/nodes.py`,
-  `agent/budgets.py`.
-- **Dependencies:** provider-neutral Modeling, Core tools, and injected Memory
-  services.
+  `agent/budgets.py`, `agent/finalization.py`.
+- **Dependencies:** provider-neutral Modeling, Core tools, and injected
+  Agent-owned ports.
+
+`PostAnswerFinalizer` is the only answer-finalization port visible to Agent.
+Its strict request carries the already-generated answer, remaining model/retry
+budgets, selected model, workspace identity, and ordered citations collected
+from `tool_results`; identical repeated IDs collapse and conflicting values for
+one ID are an invariant failure; more than 128 unique citations also fails
+before the finalizer runs. A valid result may replace the answer with a
+strip-nonblank value and reports at most one primary model call, its bounded
+usage, and generic diagnostics. Active-time exhaustion supplies zero remaining
+model calls without skipping a no-model finalizer. Agent revalidates the result
+and budget before atomically applying the answer and accounting. Failure emits
+a warning and preserves the existing answer and usage. Cancellation preserves
+the prior checkpointed answer and immediately re-raises the original
+cancellation without another Agent warning projection.
 
 ### Context Management
 
@@ -534,10 +556,13 @@ publish a sanitized `ERROR` state without exposing a valid subset.
   `MEMORY.md`) and optional Mem0 Cloud recall/distilled writes.
 - **Does not own:** policy, trust, raw transcript upload, or provider routing.
 - **Primary files:** `memory/local_file.py`, `memory/service.py`,
-  `memory/mem0_cloud.py`, `memory/distiller.py`.
+  `memory/mem0_cloud.py`, `memory/distiller.py`, `memory/finalization.py`.
 
 Both memory layers are independently enabled and default off. Mem0 Cloud is the
-only external memory adapter currently supported.
+only external memory adapter currently supported. `Mem0PostAnswerFinalizer`
+lives here, translates Mem0-specific statuses and diagnostics into the generic
+Agent contract, and currently returns the generated answer unchanged. Agent
+does not import Memory or know Mem0 types.
 
 ### Protocol and Ink TUI
 
@@ -631,14 +656,14 @@ is the composition root and may depend on all concrete owners it wires.
 
 | Importing package | May import these Awesome package roots |
 | --- | --- |
-| `agent` | `agent`, `core`, `memory`, `modeling` |
+| `agent` | `agent`, `core`, `modeling` |
 | `application` | `agent`, `application`, `config`, `context`, `conversation`, `core`, `extensions`, `memory`, `modeling`, `paths`, `providers`, `safety`, `storage`, `version` |
 | `config` | `config`, `paths` |
 | `context` | `context`, `conversation`, `core`, `memory`, `modeling` |
 | `conversation` | `config`, `conversation` |
 | `core` | `core`, `safety` |
 | `extensions` | `context`, `core`, `extensions` |
-| `memory` | `config`, `core`, `memory`, `modeling`, `paths`, `safety` |
+| `memory` | `agent`, `config`, `core`, `memory`, `modeling`, `paths`, `safety` |
 | `modeling` | `config`, `modeling` |
 | `protocol` | `application`, `core`, `paths`, `protocol`, `version` |
 | `providers` | `config`, `modeling`, `providers` |
@@ -648,6 +673,8 @@ is the composition root and may depend on all concrete owners it wires.
 `tests/structural/test_dependency_architecture.py` is the executable source for
 this exact adjacency table and for external-framework ownership. The TUI is a
 separate TypeScript process and reaches Python only through Protocol v3.
+The `memory` -> `agent` row is intentionally narrower than its package-level
+appearance: only `memory/finalization.py` may import `agent/finalization.py`.
 
 Concrete providers and storage adapters are wired in
 `application/composition.py`. The Agent imports provider-neutral contracts, and
@@ -673,8 +700,9 @@ the protocol imports the Application facade rather than individual subsystems.
 
 Token deltas, spinners, raw provider payloads, unbounded shell output, and
 credentials are not stored as product history. Tool observations required for
-an unfinished Turn remain in the LangGraph checkpoint; user-facing activity
-history stores bounded summaries.
+an unfinished Turn remain in the LangGraph checkpoint, including any citations
+inside serialized `tool_results`; citations are not a separate graph channel.
+User-facing activity history stores bounded summaries.
 
 ## Error, Cancellation, and Recovery
 
@@ -702,6 +730,10 @@ history stores bounded summaries.
   replay.
 - Context compression, message repair, budget exhaustion, and finalization are
   Agent invariants rather than optional middleware.
+- Optional post-answer finalization is isolated behind the Agent-owned port. A
+  cancelled, failed, invalid, or over-budget implementation cannot overwrite
+  the already-generated answer; cancellation still propagates, while a valid
+  result is charged before completion.
 
 ## Extension Points
 

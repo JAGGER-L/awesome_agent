@@ -6,8 +6,8 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "8802547dc5caedad60a12e4677038baf61462b111ca607051a7a026725f70110",
-      "chinese_sha256": "acd20164c401bf1c3eeb7ae21a8b2c87e9565357845a34c5fc8a035575b7ec9a"
+      "english_sha256": "0bbb118a0231fe413c69f4279b7bb725fc90722bb9677c2196622b8ffe471285",
+      "chinese_sha256": "a49162fa62b1babbe15b8e75148a145bc73434ab4e065670fb7c99ff2d72daf5"
     },
     {
       "english_source": "README.md",
@@ -30,14 +30,14 @@
     {
       "english_source": "docs/architecture/application-and-agent.md",
       "chinese_source": "docs/architecture/application-and-agent.zh-CN.md",
-      "english_sha256": "3ebe287eeb71f7c5ed74e3f3e3e37c7059dbfee98bfbd76839c228afafc8de0f",
-      "chinese_sha256": "fc1a3647f18e169963a7a66b990cbbfabf2d5be55825bcd59724b0797d7ebce6"
+      "english_sha256": "89eefbaf3a719b3982dc83ad5e5629625f06942e9b9d3141ec01c14f90ec57da",
+      "chinese_sha256": "93a74cae17272362dea912e7d1366c56bc4a12525982ac832c8b809f995d9da0"
     },
     {
       "english_source": "docs/architecture/context-model-and-extensions.md",
       "chinese_source": "docs/architecture/context-model-and-extensions.zh-CN.md",
-      "english_sha256": "005240a0a1f639d75aa88d507b176b97a484aa40dc1bcf291e7ecd9dcf1dfec5",
-      "chinese_sha256": "be8175ae7e1aa676bb54d66417739a704471faa90bbffa5652eae54bba158cec"
+      "english_sha256": "98ae9a5b28baf4853205d3b6268491b9ab0e1a6ba5a4c4fadb6e4f4c404414b2",
+      "chinese_sha256": "0416656301fed2831a6b59437d40da9f157a7dda6a78db52745b4f4ad7b3f209"
     },
     {
       "english_source": "docs/architecture/protocol-and-tui.md",
@@ -66,8 +66,8 @@
     {
       "english_source": "docs/architecture/tools-and-changes.md",
       "chinese_source": "docs/architecture/tools-and-changes.zh-CN.md",
-      "english_sha256": "ee56ee9cdbcbbb9654c57d01eb8c9b971abed9c4b47b0be3680b2ceeec26ee99",
-      "chinese_sha256": "6b3d2cc06102ec43bdf6b2cc8fe4728542dffe1a3fd2ffa86717e3341fec0593"
+      "english_sha256": "ae5107f16e976f6cd583430f8120b247fe0a357fce196dff458440adb192fe48",
+      "chinese_sha256": "068f0d590cf7daf08d56dd8c16365209c4419355f4b77c95a9a607ac3d4080bc"
     },
     {
       "english_source": "docs/concepts/README.md",

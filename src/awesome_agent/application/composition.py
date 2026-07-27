@@ -18,9 +18,8 @@ from pydantic import JsonValue
 
 from awesome_agent.agent import (
     AgentRuntimeContext,
-    CloudPostAnswerMemory,
-    DisabledPostAnswerMemory,
-    PostAnswerMemory,
+    DisabledPostAnswerFinalizer,
+    PostAnswerFinalizer,
     TurnBudget,
     compile_agent_graph,
 )
@@ -203,6 +202,7 @@ from awesome_agent.memory import (
     Mem0CloudError,
     Mem0Diagnostic,
     Mem0Identity,
+    Mem0PostAnswerFinalizer,
     MemoryDistiller,
     managed_mem0_client,
     refresh_local_memory_tools,
@@ -2308,16 +2308,19 @@ class _LocalApplicationBackend:
                 ) -> None:
                     await runtime.conversation.store_context_manifest(turn.id, manifest)
 
-                post_answer_memory: PostAnswerMemory = DisabledPostAnswerMemory()
+                post_answer_finalizer: PostAnswerFinalizer = (
+                    DisabledPostAnswerFinalizer()
+                )
                 if (
                     runtime.mem0_session.enabled
                     and runtime.mem0_session.adapter is not None
                     and runtime.mem0_session.identity is not None
                 ):
-                    post_answer_memory = CloudPostAnswerMemory(
+                    post_answer_finalizer = Mem0PostAnswerFinalizer(
                         distiller=MemoryDistiller(gateway_router),
                         adapter=runtime.mem0_session.adapter,
                         identity=runtime.mem0_session.identity,
+                        project_status=projector.project_memory_status,
                     )
                 return AgentRuntimeContext(
                     gateway=gateway_factory(
@@ -2341,7 +2344,7 @@ class _LocalApplicationBackend:
                     compressor=context_service,
                     current_user_text=await context_service.runtime_current_input(turn),
                     context_snapshot_recorder=record_context_snapshot,
-                    post_answer_memory=post_answer_memory,
+                    post_answer_finalizer=post_answer_finalizer,
                 )
 
             turns = TurnCoordinator(

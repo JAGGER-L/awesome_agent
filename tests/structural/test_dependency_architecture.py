@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 ALLOWED_INTERNAL_IMPORTS = {
-    "agent": {"agent", "core", "memory", "modeling"},
+    "agent": {"agent", "core", "modeling"},
     "application": {
         "agent",
         "application",
@@ -26,7 +26,15 @@ ALLOWED_INTERNAL_IMPORTS = {
     "conversation": {"config", "conversation"},
     "core": {"core", "safety"},
     "extensions": {"context", "core", "extensions"},
-    "memory": {"config", "core", "memory", "modeling", "paths", "safety"},
+    "memory": {
+        "agent",
+        "config",
+        "core",
+        "memory",
+        "modeling",
+        "paths",
+        "safety",
+    },
     "modeling": {"config", "modeling"},
     "protocol": {"application", "core", "paths", "protocol", "version"},
     "providers": {"config", "modeling", "providers"},

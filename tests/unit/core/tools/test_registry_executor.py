@@ -13,6 +13,7 @@ from pydantic import (
     model_validator,
 )
 
+from awesome_agent.core.citations import Citation
 from awesome_agent.core.events import (
     CollectingEventSink,
     EventEmitter,
@@ -1707,6 +1708,93 @@ async def test_executor_emits_success_events(tmp_path: Path) -> None:
     assert completed.payload.outcome == "Completed"  # type: ignore[union-attr]
     assert completed.payload.summary == "Completed"  # type: ignore[union-attr]
     assert completed.payload.duration_ms == 125  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_executor_preserves_citations_when_content_is_truncated(
+    tmp_path: Path,
+) -> None:
+    citations = (
+        Citation(
+            id="S1",
+            title="Primary source",
+            url="https://example.com/source#section",
+        ),
+    )
+
+    async def cited_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        return ToolOutput(content="abcdef", citations=citations)
+
+    context, _, _ = execution_context(tmp_path)
+    result = await ToolExecutor(
+        echo_registry(cited_handler),
+        max_content_chars=3,
+    ).execute(
+        ToolRequest(call_id="call_cited", tool_name="echo", arguments={"text": "ok"}),
+        context=context,
+    )
+
+    assert result.content == "abc"
+    assert result.citations == citations
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_kind", ["container", "nested", "constructed"])
+async def test_executor_rejects_malformed_nested_citations(
+    tmp_path: Path,
+    invalid_kind: str,
+) -> None:
+    async def malformed_handler(
+        arguments: BaseModel,
+        context: ToolExecutionContext,
+    ) -> ToolOutput:
+        del arguments, context
+        if invalid_kind == "container":
+            return ToolOutput.model_construct(content="safe", citations=[])
+        if invalid_kind == "nested":
+            return ToolOutput.model_construct(
+                content="safe",
+                citations=(
+                    {
+                        "id": "S1",
+                        "title": "Source",
+                        "url": "https://example.com",
+                    },
+                ),
+            )
+        return ToolOutput.model_construct(
+            content="safe",
+            citations=(
+                Citation.model_construct(
+                    id="S01",
+                    title="Source",
+                    url="http://example.com",
+                ),
+            ),
+        )
+
+    context, sink, writer = execution_context(tmp_path)
+
+    with pytest.raises(ToolInvariantError, match="Unexpected tool handler failure"):
+        await ToolExecutor(echo_registry(malformed_handler)).execute(
+            ToolRequest(
+                call_id="call_malformed_citation",
+                tool_name="echo",
+                arguments={"text": "value"},
+            ),
+            context=context,
+        )
+
+    assert [event.event_type for event in sink.events] == [
+        EventType.TOOL_STARTED,
+        EventType.TOOL_FAILED,
+    ]
+    [activity] = writer.activities.values()
+    assert activity.error_code == ToolErrorCode.EXECUTION_FAILED
 
 
 @pytest.mark.asyncio

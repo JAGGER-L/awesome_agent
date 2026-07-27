@@ -5,6 +5,8 @@ from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from awesome_agent.core.citations import Citation
+
 TOOL_NAME_PATTERN = (
     r"^(?:[a-z][a-z0-9_]*|"
     r"mcp\.[a-z][a-z0-9_-]*\.[a-z][a-z0-9_-]*|"
@@ -136,11 +138,14 @@ class ToolResult(BaseModel):
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     error: ToolError | None = None
     presentation: ToolPresentation | None = None
+    citations: tuple[Citation, ...] = Field(default=(), max_length=128)
 
     @model_validator(mode="after")
     def error_matches_status(self) -> ToolResult:
         if (self.status is ToolStatus.ERROR) != (self.error is not None):
             raise ValueError("error must be present exactly when status is error")
+        if self.status is ToolStatus.ERROR and self.citations:
+            raise ValueError("error tool results must not include citations")
         return self
 
 
@@ -150,3 +155,4 @@ class ToolOutput(BaseModel):
     content: str
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
     presentation: ToolPresentation | None = None
+    citations: tuple[Citation, ...] = Field(default=(), max_length=128)

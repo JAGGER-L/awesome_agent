@@ -7,6 +7,7 @@ from pathlib import Path
 MEMORY_MODULES = {
     "__init__.py",
     "distiller.py",
+    "finalization.py",
     "identity.py",
     "local_file.py",
     "mem0_cloud.py",
@@ -54,8 +55,24 @@ def test_cloud_dependencies_have_explicit_owners() -> None:
         )
     }
 
-    assert modeling_importers == {"distiller.py"}
+    assert modeling_importers == {"distiller.py", "finalization.py"}
     assert sdk_importers == {"mem0_cloud.py"}
+
+
+def test_agent_finalizer_port_is_the_only_memory_to_agent_dependency() -> None:
+    agent_imports = {
+        path.name: {
+            imported
+            for imported in _imports(path)
+            if imported == "awesome_agent.agent"
+            or imported.startswith("awesome_agent.agent.")
+        }
+        for path in Path("src/awesome_agent/memory").glob("*.py")
+    }
+
+    assert {name: imports for name, imports in agent_imports.items() if imports} == {
+        "finalization.py": {"awesome_agent.agent.finalization"}
+    }
 
 
 def test_mem0_cloud_is_one_optional_adapter() -> None:

@@ -50,6 +50,26 @@ The built-in baseline is:
 The registry is extensible; eight is not a fixed maximum. MCP namespaces are
 replaced atomically with names such as `mcp.<server>.<tool>`.
 
+## Citation transport inside Core and Agent
+
+`core/citations.py` defines the minimal provider-neutral, immutable `Citation`
+value: `id`, `title`, and `url`. The strict contract rejects unknown fields;
+the ID has the bounded `S1` through `S999999` shape, the nonblank single-line
+title is at most 500 characters, and the absolute HTTPS URL is at most 8,000
+characters with no whitespace, control characters, or user information.
+`ToolOutput.citations` and `ToolResult.citations` are tuples that default to
+empty. On a successful handler return, the Executor strictly reconstructs each
+citation and the output, then copies the citations into the normalized result.
+Bounding or truncating the textual `content` does not discard those citations.
+
+Agent serializes the complete `ToolResult` into `AgentState.tool_results`, so
+the same citation values survive in the LangGraph checkpoint without a second,
+top-level `AgentState` citation channel. This is an internal value path today:
+Conversation records, Protocol v3, and the TUI wire are unchanged. The public
+citation wire is deferred to the atomic Protocol v4 Web-citation change; there
+is no interim compatibility adapter. This value contract alone does not assign
+source IDs, validate citation markers in model prose, or render a Sources UI.
+
 ## Executor pipeline
 
 ```text
@@ -314,7 +334,8 @@ journal as a source-control replacement.
 
 ## Source and test map
 
-- Contracts and registry: `core/tools/contracts.py`, `registry.py`
+- Contracts and registry: `core/citations.py`, `core/tools/contracts.py`,
+  `registry.py`
 - Policy and permissions: `core/tools/policy.py`, `permissions.py`,
   `command_policy.py`
 - Executor: `core/tools/executor.py`

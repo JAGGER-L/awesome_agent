@@ -4,6 +4,7 @@ from awesome_agent.memory.distiller import (
     DistillerGateway,
     MemoryDistiller,
 )
+from awesome_agent.memory.finalization import Mem0PostAnswerFinalizer
 from awesome_agent.memory.identity import (
     Mem0Identity,
     ensure_mem0_user_id,
@@ -74,6 +75,7 @@ __all__ = [
     "Mem0CloudError",
     "Mem0Diagnostic",
     "Mem0Identity",
+    "Mem0PostAnswerFinalizer",
     "MemoryCandidate",
     "MemoryDistiller",
     "MemoryDocument",

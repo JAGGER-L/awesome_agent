@@ -160,6 +160,11 @@ execute_one_tool
 - 模型/工具/重试/压缩/活动时间计数器；
 - usage、恢复问题、最终回答和终止原因。
 
+`tool_results` 存储每个完整序列化的 `ToolResult`，包括其中由 Core 定义的最小
+`Citation` tuple。Graph 不会把这些值再次聚合为独立的顶层 citations 字段：保留 result
+已经足以支持 checkpoint 往返，并能避免第二个事实源。Conversation、Protocol v3 与 TUI
+投影仍位于这条内部契约之外，直到 citation wire 随 Web 原子升级到 Protocol v4。
+
 新增 channel 会改变 checkpoint 兼容性和恢复校验。这里不是放置任意 UI 或产品状态
 的便捷容器。
 
@@ -215,6 +220,29 @@ Application accepts Turn
 Application service 负责访问 Conversation 和工作区快照；Agent 不知道具体的 SQLite
 仓库或文件系统发现逻辑。
 
+## 回答后 Finalizer 端口
+
+Agent 拥有唯一的提供商中立 `PostAnswerFinalizer` 端口，以及严格、不可变的
+`PostAnswerFinalizationRequest` 和 `PostAnswerFinalizationResult` 值。Request 包含用户
+文本、已经生成的回答、所选模型、工作区标识、剩余模型/retry 预算，以及从 `tool_results`
+按顺序收集的 citations。收集过程保留首次出现顺序、折叠 ID 与值均相同的重复项，并把同一
+ID 对应不同值视为不变量失败。Turn 中唯一 citation 超过 128 条同样属于聚合不变量失败，
+并发生在 finalizer 运行前。Request 携带这个有界 tuple，而不会增加 `AgentState` channel。
+
+Result 包含去除首尾空白后仍非空的回答、零或一次主要模型调用、有界 `ModelUsage`，以及
+最多 32 条通用 `PostAnswerDiagnostic`。只有报告一次模型调用时，usage 才能非零。Agent
+会严格重建返回值；若 provider retry 超过剩余 retry 预算，或主要调用加 retry 超过剩余
+model-call 预算，则拒绝结果。Active-time 耗尽会把 request 的剩余模型调用强制设为零，
+但 finalizer 仍会运行，使不调用模型的实现可以完成。有效结果会替换回答、计入一次主要
+调用及其 provider retry、合并 usage，并投影每条 diagnostic 的原始 code 与 message。
+
+`DisabledPostAnswerFinalizer` 原样返回现有回答。Application 也可以注入
+`memory.Mem0PostAnswerFinalizer`；Agent 不导入 Memory，也不知道 Mem0 identity、adapter、
+status 或 diagnostic。若注入的 finalizer 抛出异常、返回无效值或超出预算，Agent 会发出
+`answer_finalization_failed`，并保留已经生成的回答及原有 usage。取消时 Agent 不投影
+warning；它会保留此前 checkpoint 中的回答，并立即把调用方的原始取消重新抛给 Application
+生命周期。该路径不是正常 completion。可选 finalization 不能把回答变成空值或部分更新结果。
+
 ## 完成与取消
 
 图正常完成时，Application 校验返回的状态、追加 assistant 回答、记录有界 usage，
@@ -249,8 +277,8 @@ lineage 与 compare-and-swap 使其收敛，而不是实现第二套图。详见
 
 ## 依赖规则
 
-Agent 只能导入 Agent、Core、Memory 和 Modeling 包。它不能导入 Application、
-Storage、Protocol、providers 或 TUI。Application 是 Python 顶层组装层，可以依赖
+Agent 只能导入 Agent、Core 和 Modeling 包。它不能导入 Application、Memory、Storage、
+Protocol、providers 或 TUI。Application 是 Python 顶层组装层，可以依赖
 当前适配器。`tests/structural/test_dependency_architecture.py` 和
 `tests/structural/test_product_architecture.py` 会强制这些方向，并确保只有一个
 `StateGraph` 所有者。
@@ -271,7 +299,8 @@ Storage、Protocol、providers 或 TUI。Application 是 Python 顶层组装层�
   `application/diagnostics.py`
 - 准入：`application/foreground.py`、`application/operations.py`
 - Turn 与恢复：`application/turns.py`
-- 图与状态：`agent/graph.py`、`agent/state.py`、`agent/nodes.py`
+- 图、状态与 finalizer 端口：`agent/graph.py`、`agent/state.py`、`agent/nodes.py`、
+  `agent/finalization.py`
 - 预算：`agent/budgets.py`
 - 单元测试：`tests/unit/application/`、`tests/unit/agent/`
 - 集成测试：`tests/integration/test_agent_turn.py`、

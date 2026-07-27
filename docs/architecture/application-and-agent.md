@@ -184,6 +184,13 @@ The graph operates on `AgentState`, a strict checkpoint contract containing:
 - model/tool/retry/compression/active-time counters;
 - usage, recovery issue, final answer, and termination reason.
 
+`tool_results` stores each complete serialized `ToolResult`, including its
+tuple of minimal Core `Citation` values. The graph does not aggregate those
+values into a separate top-level citations field: preserving the result is
+sufficient for checkpoint round trips and avoids a second source of truth.
+Conversation, Protocol v3, and TUI projection remain outside this internal
+contract until the citation wire moves atomically to Protocol v4 with Web.
+
 Adding a channel changes checkpoint compatibility and recovery validation. It
 is not a convenient place for arbitrary UI or product state.
 
@@ -248,6 +255,40 @@ Application accepts Turn
 The Application service owns access to Conversation and workspace snapshots;
 Agent remains unaware of concrete SQLite repositories or filesystem discovery.
 
+## Post-answer finalizer port
+
+Agent owns one provider-neutral `PostAnswerFinalizer` port and its strict,
+immutable `PostAnswerFinalizationRequest` and `PostAnswerFinalizationResult`
+values. The request contains the user text, already-generated answer, selected
+model, workspace identity, remaining model/retry budgets, and the ordered
+citations collected from `tool_results`. Collection preserves first appearance,
+collapses an identical repeated ID, and treats the same ID with different
+values as an invariant failure. More than 128 unique Turn citations is likewise
+an aggregation invariant failure before the finalizer runs. The request carries
+that bounded tuple without adding an `AgentState` channel.
+
+The result contains an answer whose stripped value is nonblank, zero or one
+primary model call, bounded `ModelUsage`, and at most 32 generic
+`PostAnswerDiagnostic` values. Nonzero usage is valid only with one reported
+model call. Agent strictly rebuilds the returned value and rejects it if
+provider retries exceed the remaining retry budget or if the primary call plus
+retries exceed the remaining model-call budget. Active-time exhaustion forces
+the request's remaining model calls to zero, but the finalizer is still invoked
+so a no-model implementation can complete. A valid result replaces the answer,
+charges one primary call plus its provider retries, merges its usage, and
+projects each diagnostic's exact code and message.
+
+`DisabledPostAnswerFinalizer` returns the existing answer unchanged.
+Application may instead inject `memory.Mem0PostAnswerFinalizer`; Agent neither
+imports Memory nor knows Mem0 identities, adapters, statuses, or diagnostics.
+If the injected finalizer raises, returns an invalid value, or exceeds its
+budget, Agent emits `answer_finalization_failed` and keeps the already-generated
+answer and its existing usage. Cancellation does not project a warning from
+Agent: it preserves the prior checkpointed answer and immediately re-raises the
+caller's original cancellation to the Application lifecycle. It is not normal
+completion. Optional finalization cannot turn the answer into an empty or
+partially updated result.
+
 ## Completion and cancellation
 
 On normal graph completion, Application validates the returned state, appends
@@ -293,8 +334,8 @@ second graph implementation. Details are in
 
 ## Dependency rules
 
-Agent may import only Agent, Core, Memory, and Modeling packages. It cannot
-import Application, Storage, Protocol, providers, or the TUI. Application is
+Agent may import only Agent, Core, and Modeling packages. It cannot import
+Application, Memory, Storage, Protocol, providers, or the TUI. Application is
 the top Python composition layer and may depend on current adapters.
 `tests/structural/test_dependency_architecture.py` and
 `tests/structural/test_product_architecture.py` enforce these directions and
@@ -319,7 +360,8 @@ the single `StateGraph` owner.
   `application/diagnostics.py`
 - Admission: `application/foreground.py`, `application/operations.py`
 - Turns and recovery: `application/turns.py`
-- Graph and state: `agent/graph.py`, `agent/state.py`, `agent/nodes.py`
+- Graph, state, and finalizer port: `agent/graph.py`, `agent/state.py`,
+  `agent/nodes.py`, `agent/finalization.py`
 - Budgets: `agent/budgets.py`
 - Unit tests: `tests/unit/application/`, `tests/unit/agent/`
 - Integration: `tests/integration/test_agent_turn.py`,

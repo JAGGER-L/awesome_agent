@@ -1,3 +1,4 @@
+from awesome_agent.core.citations import Citation
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
     ToolActivityDraft,
@@ -39,6 +40,7 @@ from awesome_agent.core.tools.registry import (
 )
 
 __all__ = [
+    "Citation",
     "DuplicateToolName",
     "ExpectedToolFailure",
     "PermissionMode",

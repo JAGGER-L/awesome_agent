@@ -184,6 +184,22 @@ Mem0 Cloud 是可选适配器，也是目前唯一的外部 memory 提供商。R
 不会导致整个 Turn 配置无效。回答后的 distillation 使用独立策略，绝不会默认上传原始
 transcript。
 
+`memory/finalization.py` 拥有 `Mem0PostAnswerFinalizer`，即 Agent 通用
+`PostAnswerFinalizer` 端口在 Memory 边界内的实现。Application 只会为已启用且完整的 Mem0
+session 装配它；否则注入 Agent 的 disabled 实现。该 adapter 在 Memory 边界内转换 Mem0
+identity、distillation status 与 `Mem0Diagnostic`。它返回原回答、distiller 的 model-call/
+usage 计费，以及通用 `PostAnswerDiagnostic`：保留原 code，message 固定为
+`Optional memory operation did not complete.`。构建该 result 后，它会尝试投影已启用的
+Memory status。Status 投影失败时会保留为 `memory_status_projection_failed`，固定 message
+为 `Optional memory status projection failed.`，回答和计费不会因此丢失。Status 投影取消
+不会转换为 diagnostic；原始取消会传播到 Agent 边界。Agent 看不到任何 Mem0 特定类型。
+
+通用 request 可以携带有序工具 citations，但当前 Mem0 实现不会消费它们、重写 citation
+marker 或改变回答。无效输出、预算超限和意外失败会成为 Agent warning，同时保留已经生成
+的回答。逃出 adapter 的取消会保留此前 checkpoint 中的回答，不触发另一条 Agent warning，
+而是立即重新抛出；详见
+[Application 与 Agent](application-and-agent.zh-CN.md#回答后-finalizer-端口)。
+
 Mem0 SDK 当前会在异步 client 构造函数中执行同步 credential validation。Awesome 在支持
 取消的 worker 中运行该构造函数，避免阻塞事件循环，并且只把内部创建的 client 注册到
 runtime 退出栈；注入 client 只借用。如果 SDK 构造函数超过有界取消清理期限，Python 无法
@@ -273,7 +289,7 @@ Turn 中重连或重放。取消会执行有界连接清理，并继续传播取
 - 模型：`modeling/`、`providers/deepseek.py`、`providers/kimi.py`
 - Skills：`extensions/skills/discovery.py`、`loader.py`
 - MCP：`extensions/mcp/catalog.py`、`manager.py`、`adapter.py`、`stdio.py`
-- Memory：`memory/`
+- Memory：`memory/finalization.py`、`memory/`
 - 测试：`tests/unit/context/`、`tests/integration/test_context_pipeline.py`、
   `tests/integration/test_skills_mcp.py`、
   `tests/structural/test_context_architecture.py`、

@@ -224,6 +224,13 @@ Description 只在 hard admission 后运行，使被拒绝的路径类输入不�
 probe。Executor 对所有工具统一应用这一条顺序，不按具体工具名分支；capability grant
 不能覆盖 hard admission。
 
+Core 中提供商中立的 `Citation(id, title, url)` 值会沿成功工具数据从
+`ToolOutput.citations` 进入 `ToolResult.citations`；文本设限不会移除这个 tuple。Agent
+随后把完整 result 序列化到 `AgentState.tool_results`，从而在 checkpoint 中保留 citations，
+而不新增第二个顶层 citations channel。Conversation record、Protocol v3 与 TUI wire 均保持
+不变，直到 Web citations 与 Protocol v4 作为一次契约变更共同落地；期间不提供 compatibility
+adapter。
+
 改变文件的 built-in 会通过 Change Journal 和共享的 identity-bound filesystem primitive
 写入。词法包含只负责准入：实际 mutation 会固定 workspace 与 parent directory chain，
 校验已打开对象的 identity，并拒绝无法证明只指向一个 workspace object 的 link/reparse
@@ -349,8 +356,17 @@ resource，再关闭 checkpoint saver 和 Application SQLite worker，最后释�
   计数、预算和终结。
 - **不负责：** 产品 Thread record、具体存储装配或界面状态。
 - **主要文件：** `agent/state.py`、`agent/graph.py`、`agent/nodes.py`、
-  `agent/budgets.py`。
-- **依赖：** 提供商中立 Modeling、Core tool 和注入的 Memory service。
+  `agent/budgets.py`、`agent/finalization.py`。
+- **依赖：** 提供商中立 Modeling、Core tool 与注入的 Agent-owned port。
+
+`PostAnswerFinalizer` 是 Agent 可见的唯一回答终结端口。它的严格 request 携带已经生成的
+回答、剩余模型/retry 预算、所选模型、工作区标识，以及从 `tool_results` 按顺序收集的
+citations；ID 与值均相同的重复项会折叠，同一 ID 对应冲突值则是不变量失败。超过 128 条
+唯一 citation 也会在 finalizer 运行前失败。有效 result 可以用 strip 后非空的值
+替换回答，并报告最多一次主要模型调用、对应的有界 usage 与通用 diagnostics。Active-time
+耗尽会提供零剩余模型调用，但不会跳过无需模型的 finalizer。Agent 会先重新校验 result 和
+预算，再原子应用回答与计费。失败会发出 warning，并保留现有回答与 usage；取消会保留
+此前 checkpoint 中的回答，不投影另一条 Agent warning，并立即重新抛出原始取消。
 
 ### 上下文管理
 
@@ -461,9 +477,11 @@ client、使候选 generation 失效、移除该 server namespace，并发布脱
   distilled write。
 - **不负责：** policy、trust、raw transcript upload 或 provider routing。
 - **主要文件：** `memory/local_file.py`、`memory/service.py`、
-  `memory/mem0_cloud.py`、`memory/distiller.py`。
+  `memory/mem0_cloud.py`、`memory/distiller.py`、`memory/finalization.py`。
 
 两层 memory 均独立启用且默认关闭。Mem0 Cloud 是当前唯一受支持的外部 memory adapter。
+`Mem0PostAnswerFinalizer` 位于该边界内，把 Mem0 特定 status 与 diagnostic 转换为通用 Agent
+契约，并且当前原样返回已经生成的回答。Agent 不导入 Memory，也不知道 Mem0 类型。
 
 ### Protocol 与 Ink TUI
 
@@ -539,14 +557,14 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 
 | 导入方 package | 可以导入的 Awesome package root |
 | --- | --- |
-| `agent` | `agent`、`core`、`memory`、`modeling` |
+| `agent` | `agent`、`core`、`modeling` |
 | `application` | `agent`、`application`、`config`、`context`、`conversation`、`core`、`extensions`、`memory`、`modeling`、`paths`、`providers`、`safety`、`storage`、`version` |
 | `config` | `config`、`paths` |
 | `context` | `context`、`conversation`、`core`、`memory`、`modeling` |
 | `conversation` | `config`、`conversation` |
 | `core` | `core`、`safety` |
 | `extensions` | `context`、`core`、`extensions` |
-| `memory` | `config`、`core`、`memory`、`modeling`、`paths`、`safety` |
+| `memory` | `agent`、`config`、`core`、`memory`、`modeling`、`paths`、`safety` |
 | `modeling` | `config`、`modeling` |
 | `protocol` | `application`、`core`、`paths`、`protocol`、`version` |
 | `providers` | `config`、`modeling`、`providers` |
@@ -555,6 +573,8 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 
 `tests/structural/test_dependency_architecture.py` 是该精确 adjacency table 和外部 framework
 所有权的可执行来源。TUI 是独立 TypeScript 进程，只通过 Protocol v3 访问 Python。
+`memory` -> `agent` 这一行刻意采用比 package 级表象更窄的约束：仅允许
+`memory/finalization.py` 导入 `agent/finalization.py`。
 
 具体 provider 与 storage adapter 在 `application/composition.py` 中装配。Agent 导入
 提供商中立契约，protocol 导入 Application facade，而不是各个子系统。
@@ -578,8 +598,9 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | 工作区文件 | 用户和工具 | workspace | 主要项目状态 |
 
 Token delta、spinner、原始 provider payload、无界 shell output 和 credential 不会作为产品
-历史保存。未完成 Turn 所需的 tool observation 保留在 LangGraph checkpoint；面向用户的
-activity history 存储有界 summary。
+历史保存。未完成 Turn 所需的 tool observation 会保留在 LangGraph checkpoint 中，其中包括
+序列化 `tool_results` 内的 citations；citations 不是独立 graph channel。面向用户的 activity
+history 存储有界 summary。
 
 ## 错误、取消与恢复
 
@@ -601,6 +622,8 @@ activity history 存储有界 summary。
 - 启动恢复只根据产品记录和 checkpoint 中的证据行动。结果不确定的外部副作用需要用户
   决策，而不是自动重放。
 - 上下文压缩、消息修复、预算耗尽和终结是 Agent 不变量，不是可选 middleware。
+- 可选的回答后 finalization 隔离在 Agent-owned port 后。实现被取消、失败、无效或超预算时
+  不能覆盖已经生成的回答；取消仍会传播，有效 result 则会在 completion 前计费。
 
 ## 扩展点
 

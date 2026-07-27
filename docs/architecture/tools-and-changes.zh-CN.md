@@ -42,6 +42,22 @@ Built-in 基线如下：
 Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式替换，名称形如
 `mcp.<server>.<tool>`。
 
+## Core 与 Agent 内部的引用传递
+
+`core/citations.py` 定义最小、提供商中立且不可变的 `Citation` 值：`id`、`title` 与
+`url`。严格契约会拒绝未知字段；ID 必须是有界的 `S1` 至 `S999999` 形状；非空单行 title
+最多 500 个字符；绝对 HTTPS URL 最多 8,000 个字符，且不得包含空白、控制字符或用户
+信息。`ToolOutput.citations` 和 `ToolResult.citations` 都是默认空 tuple。Handler 成功返回
+后，Executor 会严格重建每条 citation 与 output，再把 citations 原样复制到规范化 result。
+对文本 `content` 设限或截断不会丢弃这些 citations。
+
+Agent 会把完整 `ToolResult` 序列化到 `AgentState.tool_results`，因此相同的 citation 值会
+保留在 LangGraph checkpoint 中，而不需要第二个顶层 `AgentState` citation channel。当前
+这只是一条内部值路径：Conversation record、Protocol v3 与 TUI wire 均不改变。公开
+citation wire 延后到 Web citation 与 Protocol v4 的原子变更，不提供临时 compatibility
+adapter。仅靠这项值契约不会分配 source ID、校验模型正文中的 citation marker，也不会
+渲染 Sources UI。
+
 ## Executor 流水线
 
 ```text
@@ -264,7 +280,7 @@ load and validate blobs
 
 ## 源代码与测试索引
 
-- 契约与 registry：`core/tools/contracts.py`、`registry.py`
+- 契约与 registry：`core/citations.py`、`core/tools/contracts.py`、`registry.py`
 - Policy 与权限：`core/tools/policy.py`、`permissions.py`、`command_policy.py`
 - Executor：`core/tools/executor.py`
 - Built-ins：`core/tools/builtins/`

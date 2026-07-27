@@ -9,6 +9,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, JsonValue, ValidationError
 
 from awesome_agent.core.cancellation import finish_cancellation_safe
+from awesome_agent.core.citations import Citation
 from awesome_agent.core.events import EventType, ToolResultPayload, ToolStartedPayload
 from awesome_agent.core.tools.context import ToolExecutionContext
 from awesome_agent.core.tools.contracts import (
@@ -340,11 +341,35 @@ class ToolExecutor:
                     },
                     strict=True,
                 )
+            output_citations = output_result.citations
+            if not isinstance(output_citations, tuple):
+                self._close_awaitable(output_citations)
+                raise ToolInvariantError(
+                    "Tool handler returned an invalid citation contract."
+                )
+            citations: list[Citation] = []
+            for citation in output_citations:
+                if not isinstance(citation, Citation):
+                    self._close_awaitable(citation)
+                    raise ToolInvariantError(
+                        "Tool handler returned an invalid citation contract."
+                    )
+                citations.append(
+                    Citation.model_validate(
+                        {
+                            "id": citation.id,
+                            "title": citation.title,
+                            "url": citation.url,
+                        },
+                        strict=True,
+                    )
+                )
             output = ToolOutput.model_validate(
                 {
                     "content": output_result.content,
                     "metadata": output_result.metadata,
                     "presentation": output_presentation,
+                    "citations": tuple(citations),
                 },
                 strict=True,
             )
@@ -420,6 +445,7 @@ class ToolExecutor:
             content=output.content[: self._max_content_chars],
             metadata=output.metadata,
             presentation=presentation,
+            citations=output.citations,
         )
         return result
 
