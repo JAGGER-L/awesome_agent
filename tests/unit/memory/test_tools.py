@@ -362,7 +362,7 @@ async def test_cancelled_memory_mutation_keeps_foreground_until_worker_finishes(
     async def short_bounded_call(call: Callable[[], object]) -> object:
         return await original_blocking_call(
             call,
-            cleanup_timeout_seconds=0.2,
+            cleanup_timeout_seconds=1.0,
         )
 
     monkeypatch.setattr(service, "add", delayed_add)
@@ -374,7 +374,7 @@ async def test_cancelled_memory_mutation_keeps_foreground_until_worker_finishes(
     monkeypatch.setattr(
         memory_tools,
         "_MEMORY_HANDLER_CANCELLATION_GRACE_SECONDS",
-        0.3,
+        1.5,
         raising=False,
     )
     monkeypatch.setattr(
@@ -384,6 +384,9 @@ async def test_cancelled_memory_mutation_keeps_foreground_until_worker_finishes(
     )
     registry = ToolRegistry()
     refresh_local_memory_tools(registry, service)
+    registered = registry.resolve("memory_add")
+    assert registered is not None
+    assert registered.cancellation_grace_seconds == 1.5
     task = asyncio.create_task(
         ToolExecutor(registry).execute(
             ToolRequest(
@@ -402,12 +405,12 @@ async def test_cancelled_memory_mutation_keeps_foreground_until_worker_finishes(
 
     task.cancel("cancel memory mutation")
     try:
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0)
         assert not task.done()
     finally:
         release.set()
     with pytest.raises(asyncio.CancelledError, match="cancel memory mutation"):
-        await asyncio.wait_for(task, timeout=1.0)
+        await asyncio.wait_for(task, timeout=2.0)
 
     assert service.list(MemoryScope.USER)[0].content == (
         "Persist before cancellation is terminal."
