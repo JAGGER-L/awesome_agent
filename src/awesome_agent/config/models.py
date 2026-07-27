@@ -35,8 +35,20 @@ class CredentialSelectionConfig(BaseModel):
     deepseek: CredentialSource | None = Field(default=None, strict=False)
     kimi: CredentialSource | None = Field(default=None, strict=False)
     mem0: CredentialSource | None = Field(default=None, strict=False)
+    tavily: CredentialSource = Field(
+        default=CredentialSource.ENVIRONMENT,
+        strict=False,
+    )
+    web_proxy: CredentialSource | None = Field(default=None, strict=False)
 
-    @field_validator("deepseek", "kimi", "mem0", mode="before")
+    @field_validator(
+        "deepseek",
+        "kimi",
+        "mem0",
+        "tavily",
+        "web_proxy",
+        mode="before",
+    )
     @classmethod
     def validate_credential_source_type(
         cls,
@@ -44,6 +56,13 @@ class CredentialSelectionConfig(BaseModel):
     ) -> object:
         if value is not None and not isinstance(value, str):
             raise ValueError("credential source must be a string or null")
+        return value
+
+    @field_validator("tavily")
+    @classmethod
+    def validate_tavily_source(cls, value: CredentialSource) -> CredentialSource:
+        if value is not CredentialSource.ENVIRONMENT:
+            raise ValueError("tavily credentials must use the environment source")
         return value
 
 
@@ -79,6 +98,10 @@ class BudgetConfig(BaseModel):
     total_context_tokens: int = Field(default=262_144, ge=1)
 
 
+class UserBudgetConfig(BudgetConfig):
+    web_requests: int = Field(default=8, ge=0, le=8)
+
+
 class ProjectBudgetConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -92,6 +115,25 @@ class ProjectBudgetConfig(BaseModel):
         le=21_600,
     )
     total_context_tokens: int | None = Field(default=None, ge=1)
+    web_requests: int | None = Field(default=None, ge=0, le=8)
+
+
+class WebConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    enabled: bool = False
+    provider: Literal["tavily"] = "tavily"
+    blocked_domains: tuple[str, ...] = Field(default=(), strict=False, max_length=128)
+
+    @field_validator("blocked_domains")
+    @classmethod
+    def validate_blocked_domains(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("blocked domains must be unique")
+        for domain in value:
+            if domain != domain.strip().lower() or not _valid_domain(domain):
+                raise ValueError("blocked domain must be a normalized ASCII hostname")
+        return value
 
 
 class MemoryConfig(BaseModel):
@@ -170,12 +212,13 @@ class UserMcpServerConfig(McpServerDeclaration):
 class UserConfigDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     providers: ProviderConfig = Field(default_factory=ProviderConfig)
     credentials: CredentialSelectionConfig = Field(
         default_factory=CredentialSelectionConfig
     )
-    budgets: BudgetConfig = Field(default_factory=BudgetConfig)
+    budgets: UserBudgetConfig = Field(default_factory=UserBudgetConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
     mcp_servers: tuple[UserMcpServerConfig, ...] = Field(default=(), strict=False)
@@ -255,12 +298,12 @@ class ApplicationConfig(BaseModel):
 
     providers: ProviderConfig
     budgets: BudgetConfig
+    web_requests: int = Field(default=8, ge=0, le=8)
+    web: WebConfig = Field(default_factory=WebConfig)
     memory: MemoryConfig
     user_skills: tuple[SkillSourceConfig, ...] = Field(default=(), strict=False)
     workspace_skills: tuple[SkillSourceConfig, ...] = Field(default=(), strict=False)
-    user_mcp_servers: tuple[UserMcpServerConfig, ...] = Field(
-        default=(), strict=False
-    )
+    user_mcp_servers: tuple[UserMcpServerConfig, ...] = Field(default=(), strict=False)
     workspace_mcp_servers: tuple[McpServerDeclaration, ...] = Field(
         default=(), strict=False
     )
@@ -275,3 +318,20 @@ class TurnConfig(BaseModel):
     thinking_enabled: bool = True
     skill_mode: str = "auto"
     budgets: BudgetConfig
+
+
+def _valid_domain(value: str) -> bool:
+    if not value or len(value) > 253 or value.startswith(".") or value.endswith("."):
+        return False
+    labels = value.split(".")
+    return all(
+        label
+        and len(label) <= 63
+        and label[0].isalnum()
+        and label[-1].isalnum()
+        and all(
+            character.isascii() and (character.isalnum() or character == "-")
+            for character in label
+        )
+        for label in labels
+    )

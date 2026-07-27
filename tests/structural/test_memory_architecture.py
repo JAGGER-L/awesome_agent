@@ -85,7 +85,9 @@ def test_mem0_cloud_is_one_optional_adapter() -> None:
 
 def test_cloud_metadata_and_credentials_have_one_safe_authority() -> None:
     adapter = Path("src/awesome_agent/memory/mem0_cloud.py").read_text(encoding="utf-8")
-    loader = Path("src/awesome_agent/config/loader.py").read_text(encoding="utf-8")
+    credential_catalog = Path(
+        "src/awesome_agent/config/credential_catalog.py"
+    ).read_text(encoding="utf-8")
     workspace_config = (
         Path("src/awesome_agent/config/models.py")
         .read_text(encoding="utf-8")
@@ -105,7 +107,7 @@ def test_cloud_metadata_and_credentials_have_one_safe_authority() -> None:
         '"git_remote"',
     ):
         assert private_field not in adapter
-    assert '"MEM0_API_KEY"' in loader
+    assert '"MEM0_API_KEY"' in credential_catalog
     assert "mem0_api_key" not in workspace_config
     assert "mem0_cloud" not in workspace_config
 

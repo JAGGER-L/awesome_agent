@@ -110,7 +110,7 @@ must not be resolvable, disable its name in configuration or remove it from the
 relevant user source.
 
 ```yaml
-version: 1
+version: 2
 skills:
   disabled:
     - review-api

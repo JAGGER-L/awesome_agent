@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import yaml
-from pydantic import BaseModel, SecretStr, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+)
 from yaml.nodes import MappingNode
 
+from awesome_agent.config.credential_catalog import credential_descriptor
 from awesome_agent.config.credentials import (
     ProviderCredentialStatus,
     ProviderCredentialStatuses,
@@ -18,9 +26,15 @@ from awesome_agent.config.credentials import (
     resolve_provider_credential_statuses,
 )
 from awesome_agent.config.models import (
+    BudgetConfig,
+    CredentialSelectionConfig,
     CredentialSource,
+    MemoryConfig,
+    ProviderConfig,
     SecretStatus,
+    SkillConfig,
     UserConfigDocument,
+    UserMcpServerConfig,
     WorkspaceConfigDocument,
 )
 from awesome_agent.core.safe_files import (
@@ -34,11 +48,43 @@ from awesome_agent.paths import AwesomePaths
 
 WORKSPACE_CONFIG_MAX_BYTES = 1024 * 1024
 
-_SECRET_NAMES = (
-    "DEEPSEEK_API_KEY",
-    "MOONSHOT_API_KEY",
-    "MEM0_API_KEY",
-)
+
+class _UserCredentialSelectionV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    deepseek: CredentialSource | None = Field(default=None, strict=False)
+    kimi: CredentialSource | None = Field(default=None, strict=False)
+    mem0: CredentialSource | None = Field(default=None, strict=False)
+
+    @field_validator("deepseek", "kimi", "mem0", mode="before")
+    @classmethod
+    def validate_credential_source_type(cls, value: object) -> object:
+        if value is not None and not isinstance(value, str):
+            raise ValueError("credential source must be a string or null")
+        return value
+
+
+class _UserConfigDocumentV1(BaseModel):
+    """Closed legacy schema used only as the input to the v1 -> v2 migration."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    version: Literal[1] = 1
+    providers: ProviderConfig = Field(default_factory=ProviderConfig)
+    credentials: _UserCredentialSelectionV1 = Field(
+        default_factory=_UserCredentialSelectionV1
+    )
+    budgets: BudgetConfig = Field(default_factory=BudgetConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    skills: SkillConfig = Field(default_factory=SkillConfig)
+    mcp_servers: tuple[UserMcpServerConfig, ...] = Field(default=(), strict=False)
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def validate_version_type(cls, value: object) -> object:
+        if type(value) is not int:
+            raise ValueError("version must be an integer")
+        return value
 
 
 class ConfigurationInvalid(ValueError):
@@ -60,6 +106,8 @@ class SecretValues:
     deepseek_api_key: SecretStr | None = None
     moonshot_api_key: SecretStr | None = None
     mem0_api_key: SecretStr | None = None
+    tavily_api_key: SecretStr | None = None
+    web_proxy_url: SecretStr | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,11 +168,7 @@ def load_config_sources(
     environ: Mapping[str, str] | None = None,
 ) -> LoadedConfigSources:
     sources = config_source_paths(paths=paths, workspace=workspace)
-    user = _read_yaml_document(
-        sources.user_config,
-        UserConfigDocument,
-        source_label="user config",
-    )
+    user = read_user_config_document(sources.user_config)
     workspace_document: WorkspaceConfigDocument | None = None
     if workspace_trusted:
         workspace_document = _read_workspace_yaml_document(
@@ -146,7 +190,12 @@ def load_config_sources(
         user.credentials,
         from_file=from_file,
     )
-    secrets = _load_secrets(from_file, environment, provider_credentials)
+    secrets = _load_secrets(
+        from_file,
+        environment,
+        provider_credentials,
+        user.credentials,
+    )
     status = SecretStatus(
         deepseek_api_key=secrets.deepseek_api_key is not None,
         moonshot_api_key=secrets.moonshot_api_key is not None,
@@ -166,6 +215,7 @@ def _read_yaml_document[DocumentT: BaseModel](
     model: type[DocumentT],
     *,
     source_label: str,
+    transform: Callable[[dict[str, object]], dict[str, object]] | None = None,
 ) -> DocumentT:
     if not path.is_file():
         return model()
@@ -176,7 +226,12 @@ def _read_yaml_document[DocumentT: BaseModel](
             "configuration_invalid",
             f"{source_label} could not be parsed.",
         ) from error
-    return _parse_yaml_document(text, model, source_label=source_label)
+    return _parse_yaml_document(
+        text,
+        model,
+        source_label=source_label,
+        transform=transform,
+    )
 
 
 def _read_workspace_yaml_document[DocumentT: BaseModel](
@@ -225,6 +280,7 @@ def _parse_yaml_document[DocumentT: BaseModel](
     model: type[DocumentT],
     *,
     source_label: str,
+    transform: Callable[[dict[str, object]], dict[str, object]] | None = None,
 ) -> DocumentT:
     try:
         loaded = yaml.load(text, Loader=_UniqueKeyLoader)
@@ -246,7 +302,10 @@ def _parse_yaml_document[DocumentT: BaseModel](
             f"{source_label} must contain a mapping.",
         )
     try:
-        return model.model_validate(cast(dict[str, object], loaded))
+        document = cast(dict[str, object], loaded)
+        if transform is not None:
+            document = transform(document)
+        return model.model_validate(document)
     except ValidationError as error:
         raise ConfigurationInvalid(
             "configuration_invalid",
@@ -255,13 +314,19 @@ def _parse_yaml_document[DocumentT: BaseModel](
 
 
 def read_user_config_document(path: Path) -> UserConfigDocument:
-    return _read_yaml_document(path, UserConfigDocument, source_label="user config")
+    return _read_yaml_document(
+        path,
+        UserConfigDocument,
+        source_label="user config",
+        transform=_upgrade_user_config,
+    )
 
 
 def _load_secrets(
     from_file: Mapping[str, str | None],
     environ: Mapping[str, str],
     statuses: ProviderCredentialStatuses,
+    selections: CredentialSelectionConfig,
 ) -> SecretValues:
     def value(name: str, status: ProviderCredentialStatus) -> SecretStr | None:
         raw: str | None = None
@@ -274,8 +339,77 @@ def _load_secrets(
             return None
         return SecretStr(raw)
 
+    def selected_value(
+        credential_id: Literal["tavily", "web_proxy"],
+        selected: CredentialSource | None,
+    ) -> SecretStr | None:
+        name = credential_descriptor(credential_id).environment_variable
+        raw: str | None = None
+        if selected is CredentialSource.ENVIRONMENT:
+            raw = environ.get(name)
+        elif selected is CredentialSource.AWESOME:
+            candidate = from_file.get(name)
+            raw = candidate if isinstance(candidate, str) else None
+        elif selected is None:
+            candidate = environ.get(name)
+            if candidate and candidate.strip():
+                raw = candidate
+            else:
+                stored = from_file.get(name)
+                raw = stored if isinstance(stored, str) else None
+        if raw is None or not raw.strip():
+            return None
+        return SecretStr(raw)
+
     return SecretValues(
-        deepseek_api_key=value(_SECRET_NAMES[0], statuses.deepseek),
-        moonshot_api_key=value(_SECRET_NAMES[1], statuses.kimi),
-        mem0_api_key=value(_SECRET_NAMES[2], statuses.mem0),
+        deepseek_api_key=value(
+            credential_descriptor("deepseek").environment_variable,
+            statuses.deepseek,
+        ),
+        moonshot_api_key=value(
+            credential_descriptor("kimi").environment_variable,
+            statuses.kimi,
+        ),
+        mem0_api_key=value(
+            credential_descriptor("mem0").environment_variable,
+            statuses.mem0,
+        ),
+        tavily_api_key=selected_value("tavily", selections.tavily),
+        web_proxy_url=selected_value("web_proxy", selections.web_proxy),
     )
+
+
+def _upgrade_user_config(document: dict[str, object]) -> dict[str, object]:
+    version = document.get("version", 1)
+    if type(version) is not int or version != 1:
+        return document
+    legacy = _UserConfigDocumentV1.model_validate(document)
+    upgraded = legacy.model_dump(mode="python")
+    upgraded["version"] = 2
+    credentials = upgraded.get("credentials")
+    if credentials is None:
+        upgraded["credentials"] = {
+            "tavily": CredentialSource.ENVIRONMENT.value,
+            "web_proxy": None,
+        }
+    elif isinstance(credentials, dict):
+        updated_credentials = dict(credentials)
+        updated_credentials.setdefault("tavily", CredentialSource.ENVIRONMENT.value)
+        updated_credentials.setdefault("web_proxy", None)
+        upgraded["credentials"] = updated_credentials
+    budgets = upgraded.get("budgets")
+    if budgets is None:
+        upgraded["budgets"] = {"web_requests": 8}
+    elif isinstance(budgets, dict):
+        updated_budgets = dict(budgets)
+        updated_budgets.setdefault("web_requests", 8)
+        upgraded["budgets"] = updated_budgets
+    upgraded.setdefault(
+        "web",
+        {
+            "enabled": False,
+            "provider": "tavily",
+            "blocked_domains": [],
+        },
+    )
+    return upgraded

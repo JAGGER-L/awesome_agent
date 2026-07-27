@@ -148,12 +148,14 @@ and produces no warning.
 ### Configuration is invalid
 
 Inspect `<AWESOME_HOME>/config.yaml` and, after trust,
-`<workspace>/.awesome/config.yaml`. Each must be a YAML mapping with
-`version: 1`. Duplicate keys, unknown keys, unsupported model IDs, invalid
+`<workspace>/.awesome/config.yaml`. User configuration uses `version: 2` and
+Workspace configuration uses `version: 1`; user version 1 remains readable and
+is upgraded on the next supported write. Duplicate keys, unknown keys, unsupported model IDs, invalid
 names, and out-of-range budgets are errors.
 
-Temporarily reducing the document to `version: 1` can isolate which optional
-section is invalid, but preserve a backup outside the repository before manual
+Temporarily reducing User configuration to `version: 2`, or Workspace
+configuration to `version: 1`, can isolate which optional section is invalid,
+but preserve a backup outside the repository before manual
 editing. Do not move credentials into Workspace configuration. Restart Awesome
 after a manual fix and run `/config`.
 

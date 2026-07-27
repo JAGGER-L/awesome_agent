@@ -83,7 +83,7 @@ See the exact grammar in the [command reference](../reference/commands.md).
 User configuration controls both backends:
 
 ```yaml
-version: 1
+version: 2
 memory:
   local_file_memory: true
   mem0_cloud: false

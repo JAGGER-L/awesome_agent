@@ -96,7 +96,7 @@ Read `references/checklist.md` only when the change exposes an HTTP endpoint.
 user 来源中移除。
 
 ```yaml
-version: 1
+version: 2
 skills:
   disabled:
     - review-api

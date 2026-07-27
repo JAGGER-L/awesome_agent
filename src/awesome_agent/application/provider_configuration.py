@@ -44,6 +44,7 @@ from awesome_agent.config import (
     UserConfigDocument,
     UserConfigWriter,
     UserSecretStore,
+    credential_descriptor,
     provider_environment_variable,
 )
 from awesome_agent.config.model_transaction import (
@@ -58,21 +59,6 @@ from awesome_agent.core.cancellation import (
     finish_cancellation_safe,
     run_cancellation_safe_blocking_call,
 )
-
-_PROVIDER_LABELS: dict[ProviderName, str] = {
-    "deepseek": "DeepSeek",
-    "kimi": "Kimi",
-}
-_SERVICE_LABELS: dict[CredentialService, str] = {
-    "deepseek": "DeepSeek",
-    "kimi": "Kimi",
-    "mem0": "Mem0 Cloud",
-}
-_SERVICE_HELP_URLS: dict[CredentialService, str] = {
-    "deepseek": "https://platform.deepseek.com/api_keys",
-    "kimi": "https://platform.moonshot.cn/console/api-keys",
-    "mem0": "https://app.mem0.ai/dashboard/api-keys",
-}
 
 type ProviderConfigurationSnapshot = tuple[LoadedConfigSources, ApplicationConfig]
 type PersistedModelConfiguration = tuple[
@@ -439,7 +425,7 @@ class ProviderConfigurationService:
         if len(arguments) == 1:
             return interaction(
                 CommandSelection(
-                    prompt=f"{_SERVICE_LABELS[service]} credential source",
+                    prompt=f"{_service_label(service)} credential source",
                     options=(
                         CommandOption(
                             value="environment",
@@ -479,7 +465,7 @@ class ProviderConfigurationService:
             await self._select_source(service, CredentialSource.ENVIRONMENT)
             return result(
                 NoticeCommandPayload(
-                    message=f"{_SERVICE_LABELS[service]} now uses Environment."
+                    message=f"{_service_label(service)} now uses Environment."
                 )
             )
         if source != CredentialSource.AWESOME.value:
@@ -489,7 +475,7 @@ class ProviderConfigurationService:
                 return self._secret_prompt(service, action="add")
             return interaction(
                 CommandSelection(
-                    prompt=f"{_SERVICE_LABELS[service]} Awesome API key",
+                    prompt=f"{_service_label(service)} Awesome API key",
                     options=(
                         CommandOption(value="use", label="Use this API key"),
                         CommandOption(value="replace", label="Replace API key"),
@@ -505,7 +491,7 @@ class ProviderConfigurationService:
             await self._select_source(service, CredentialSource.AWESOME)
             return result(
                 NoticeCommandPayload(
-                    message=f"{_SERVICE_LABELS[service]} now uses Awesome API key."
+                    message=f"{_service_label(service)} now uses Awesome API key."
                 )
             )
         if len(arguments) == 3 and action == "replace":
@@ -514,7 +500,7 @@ class ProviderConfigurationService:
             return interaction(
                 CommandSelection(
                     prompt=(
-                        f"Delete {_SERVICE_LABELS[service]} API key? "
+                        f"Delete {_service_label(service)} API key? "
                         "This does not revoke it at the Provider."
                     ),
                     options=(
@@ -554,7 +540,7 @@ class ProviderConfigurationService:
             )
             return interaction(
                 CommandSelection(
-                    prompt=f"Select {_PROVIDER_LABELS[provider]} Model",
+                    prompt=f"Select {_service_label(provider)} Model",
                     options=tuple(
                         CommandOption(
                             value=model,
@@ -573,7 +559,7 @@ class ProviderConfigurationService:
         if not status.configured:
             return _error(
                 "provider_not_configured",
-                f"{_PROVIDER_LABELS[provider]} is not configured.",
+                f"{_service_label(provider)} is not configured.",
             )
         blocked = self._mutation_blocked()
         if blocked is not None:
@@ -819,7 +805,7 @@ class ProviderConfigurationService:
             options.append(
                 CommandOption(
                     value=service,
-                    label=_SERVICE_LABELS[service],
+                    label=_service_label(service),
                     description=(
                         "Not configured"
                         if active is None
@@ -1316,9 +1302,9 @@ class ProviderConfigurationService:
             CommandSecretPrompt(
                 provider=provider,
                 action=action,
-                label=f"{_SERVICE_LABELS[provider]} API Key",
+                label=f"{_service_label(provider)} API Key",
                 environment_variable=provider_environment_variable(provider),
-                help_url=_SERVICE_HELP_URLS[provider],
+                help_url=_service_help_url(provider),
             ),
         )
 
@@ -1335,6 +1321,17 @@ def _service(value: str) -> CredentialService | None:
     if value in {"deepseek", "kimi", "mem0"}:
         return cast(CredentialService, value)
     return None
+
+
+def _service_label(service: CredentialService) -> str:
+    return credential_descriptor(service).label
+
+
+def _service_help_url(service: CredentialService) -> str:
+    help_url = credential_descriptor(service).help_url
+    if help_url is None:
+        raise RuntimeError("Credential catalog is missing its help URL.")
+    return help_url
 
 
 def _status(

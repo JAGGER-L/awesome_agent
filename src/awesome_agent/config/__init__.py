@@ -1,3 +1,11 @@
+from awesome_agent.config.credential_catalog import (
+    CREDENTIAL_CATALOG,
+    CREDENTIAL_DESCRIPTORS,
+    CredentialDescriptor,
+    CredentialId,
+    awesome_secret_names,
+    credential_descriptor,
+)
 from awesome_agent.config.credential_transaction import (
     ProviderCredentialTransactionError,
     ProviderCredentialTransactionJournal,
@@ -45,8 +53,10 @@ from awesome_agent.config.models import (
     StartupOverrides,
     ThreadConfigState,
     TurnConfig,
+    UserBudgetConfig,
     UserConfigDocument,
     UserMcpServerConfig,
+    WebConfig,
     WorkspaceConfigDocument,
 )
 from awesome_agent.config.resolver import (
@@ -57,12 +67,16 @@ from awesome_agent.config.resolver import (
 from awesome_agent.config.writer import UserConfigWriter
 
 __all__ = [
+    "CREDENTIAL_CATALOG",
+    "CREDENTIAL_DESCRIPTORS",
     "SUPPORTED_MODEL_IDS",
     "ApplicationConfig",
     "BudgetConfig",
     "ConfigSourcePaths",
     "ConfigurationInvalid",
     "ConfigurationResolutionError",
+    "CredentialDescriptor",
+    "CredentialId",
     "CredentialSelectionConfig",
     "CredentialService",
     "CredentialSource",
@@ -89,13 +103,17 @@ __all__ = [
     "StartupOverrides",
     "ThreadConfigState",
     "TurnConfig",
+    "UserBudgetConfig",
     "UserConfigDocument",
     "UserConfigWriter",
     "UserMcpServerConfig",
     "UserSecretStore",
     "UserSecretStoreError",
+    "WebConfig",
     "WorkspaceConfigDocument",
+    "awesome_secret_names",
     "config_source_paths",
+    "credential_descriptor",
     "load_config_sources",
     "missing_provider_credential_statuses",
     "provider_environment_variable",

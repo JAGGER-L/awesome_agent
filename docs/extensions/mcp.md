@@ -15,7 +15,7 @@ access.
 Add a server to `<AWESOME_HOME>/config.yaml`:
 
 ```yaml
-version: 1
+version: 2
 mcp_servers:
   - id: issue-tracker
     command: python

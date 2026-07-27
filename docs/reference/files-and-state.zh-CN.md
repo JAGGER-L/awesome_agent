@@ -74,14 +74,16 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 
 ### `<HOME>/config.yaml`
 
-严格的 User 配置 schema 版本 `1`：Provider 默认值、凭据来源选择、预算、Memory 开关、
-禁用的 Skills 和 User MCP 声明。它不包含秘密值。见[配置](configuration.zh-CN.md)。
+严格的 User 配置 schema 版本 `2`：Provider 默认值、凭据来源选择、预算、Web 设置、
+Memory 开关、禁用的 Skills 和 User MCP 声明。版本 `1` 仍可读取，并由第一次受支持的写操作
+原子升级。该文档不包含秘密值。见[配置](configuration.zh-CN.md)。
 
 ### `<HOME>/.env`
 
-由 Awesome 管理的 `DEEPSEEK_API_KEY`、`MOONSHOT_API_KEY` 和 `MEM0_API_KEY` 凭据存储。
-`/auth` 通过同目录 temporary file 写入、flush，然后以原子方式替换目标。在 POSIX 上，
-Awesome 创建目录时只允许 owner 访问，创建文件时只允许 owner 读写。
+由 Awesome 管理的 `DEEPSEEK_API_KEY`、`MOONSHOT_API_KEY`、`MEM0_API_KEY`，以及可选的
+`AWESOME_WEB_PROXY_URL` 凭据存储。`/auth` 只管理前三项；受支持的 writer 通过同目录
+temporary file 写入、flush，然后以原子方式替换目标。在 POSIX 上，Awesome 创建目录时
+只允许 owner 访问，创建文件时只允许 owner 读写。
 
 这不是通用 dotenv 契约。任意条目不会被当作配置，值也不会自动转发给 MCP 服务器。绝不要
 提交该文件或把它复制进 Workspace。

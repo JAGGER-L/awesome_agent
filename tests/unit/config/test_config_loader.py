@@ -53,9 +53,15 @@ def test_config_sources_are_exact_and_missing_files_are_not_created(
     assert sources.user_env == home / ".env"
     assert sources.workspace_config == workspace / ".awesome" / "config.yaml"
     assert loaded.user.model_dump(mode="json") == {
-        "version": 1,
+        "version": 2,
         "providers": {"default_model": None, "kimi_region": "cn"},
-        "credentials": {"deepseek": None, "kimi": None, "mem0": None},
+        "credentials": {
+            "deepseek": None,
+            "kimi": None,
+            "mem0": None,
+            "tavily": "environment",
+            "web_proxy": None,
+        },
         "budgets": {
             "model_calls": 32,
             "tool_calls": 64,
@@ -63,6 +69,12 @@ def test_config_sources_are_exact_and_missing_files_are_not_created(
             "compressions": 2,
             "active_execution_seconds": 1800,
             "total_context_tokens": 262144,
+            "web_requests": 8,
+        },
+        "web": {
+            "enabled": False,
+            "provider": "tavily",
+            "blocked_domains": [],
         },
         "memory": {
             "local_file_memory": False,
@@ -119,6 +131,8 @@ def test_user_yaml_fails_closed(
         "MEM0_API_KEY: secret\n",
         "memory:\n  mem0_cloud: true\n",
         "providers:\n  default_model: deepseek/deepseek-v4-flash\n",
+        "credentials:\n  tavily: environment\n",
+        "web:\n  enabled: true\n",
         "mcp_servers:\n  - id: server\n    command: python\n    enabled: true\n",
     ],
 )
@@ -259,14 +273,113 @@ def test_native_yaml_scalars_enums_and_lists_remain_supported(tmp_path: Path) ->
     )
 
     assert loaded.user.providers.kimi_region.value == "global"
+    assert loaded.user.version == 2
     assert loaded.user.credentials.kimi is not None
+    assert loaded.user.credentials.tavily.value == "environment"
+    assert loaded.user.credentials.web_proxy is None
     assert loaded.user.budgets.model_calls == 4
+    assert loaded.user.budgets.web_requests == 8
+    assert loaded.user.web.enabled is False
     assert loaded.user.memory.local_file_memory is False
     assert loaded.user.skills.disabled == ("legacy-review",)
     assert loaded.user.mcp_servers[0].args == ("-m", "server")
     assert loaded.workspace is not None
     assert loaded.workspace.budgets.model_calls == 3
     assert loaded.workspace.mcp_servers[0].env == ("WORKSPACE_SERVER_TOKEN",)
+
+
+def test_user_v1_is_upgraded_in_memory_without_rewriting_source(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    source = (
+        "version: 1\n"
+        "credentials:\n  deepseek: environment\n"
+        "budgets:\n  model_calls: 12\n"
+    )
+    path = home / "config.yaml"
+    path.write_text(source, encoding="utf-8")
+
+    loaded = load_config_sources(
+        paths=AwesomePaths.from_home(home),
+        workspace=tmp_path / "workspace",
+        workspace_trusted=False,
+        environ={"DEEPSEEK_API_KEY": "configured"},
+    )
+
+    assert loaded.user.version == 2
+    assert loaded.user.credentials.deepseek is not None
+    assert loaded.user.credentials.tavily.value == "environment"
+    assert loaded.user.credentials.web_proxy is None
+    assert loaded.user.budgets.model_calls == 12
+    assert loaded.user.budgets.web_requests == 8
+    assert loaded.user.web.enabled is False
+    assert path.read_text(encoding="utf-8") == source
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "version: 1\nweb:\n  enabled: true\n",
+        "version: 1\ncredentials:\n  tavily: environment\n",
+        "version: 1\nbudgets:\n  web_requests: 1\n",
+    ],
+)
+def test_user_v1_rejects_v2_only_fields(tmp_path: Path, content: str) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(content, encoding="utf-8")
+
+    with pytest.raises(ConfigurationInvalid):
+        load_config_sources(
+            paths=AwesomePaths.from_home(home),
+            workspace=tmp_path / "workspace",
+            workspace_trusted=False,
+            environ={},
+        )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "version: 2\ncredentials:\n  tavily: awesome\n",
+        "version: 2\nweb:\n  provider: other\n",
+        "version: 2\nweb:\n  blocked_domains: [Example.COM]\n",
+        "version: 2\nbudgets:\n  web_requests: 9\n",
+    ],
+)
+def test_user_v2_web_contract_is_strict(tmp_path: Path, content: str) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(content, encoding="utf-8")
+
+    with pytest.raises(ConfigurationInvalid):
+        load_config_sources(
+            paths=AwesomePaths.from_home(home),
+            workspace=tmp_path / "workspace",
+            workspace_trusted=False,
+            environ={},
+        )
+
+
+def test_workspace_v1_can_only_lower_web_request_budget(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    config = workspace / ".awesome" / "config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "version: 1\nbudgets:\n  web_requests: 3\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_config_sources(
+        paths=AwesomePaths.from_home(tmp_path / "home"),
+        workspace=workspace,
+        workspace_trusted=True,
+        environ={},
+    )
+
+    assert loaded.workspace is not None
+    assert loaded.workspace.version == 1
+    assert loaded.workspace.budgets.web_requests == 3
 
 
 @pytest.mark.parametrize(
@@ -427,7 +540,8 @@ def test_process_environment_overrides_user_dotenv_without_leaking_values(
     (home / ".env").write_text(
         "DEEPSEEK_API_KEY=from-file\n"
         "MOONSHOT_API_KEY=moonshot-file\n"
-        "MEM0_API_KEY=mem0-file\n",
+        "MEM0_API_KEY=mem0-file\n"
+        "AWESOME_WEB_PROXY_URL=https://proxy-file.example\n",
         encoding="utf-8",
     )
 
@@ -435,13 +549,22 @@ def test_process_environment_overrides_user_dotenv_without_leaking_values(
         paths=AwesomePaths.from_home(home),
         workspace=tmp_path / "workspace",
         workspace_trusted=False,
-        environ={"DEEPSEEK_API_KEY": "from-process"},
+        environ={
+            "DEEPSEEK_API_KEY": "from-process",
+            "TAVILY_API_KEY": "tavily-process",
+        },
     )
 
     assert loaded.secrets.deepseek_api_key is not None
     assert loaded.secrets.deepseek_api_key.get_secret_value() == "from-process"
     assert loaded.secrets.moonshot_api_key is not None
     assert loaded.secrets.mem0_api_key is not None
+    assert loaded.secrets.tavily_api_key is not None
+    assert loaded.secrets.tavily_api_key.get_secret_value() == "tavily-process"
+    assert loaded.secrets.web_proxy_url is not None
+    assert (
+        loaded.secrets.web_proxy_url.get_secret_value() == "https://proxy-file.example"
+    )
     assert loaded.secret_status.model_dump(mode="json") == {
         "deepseek_api_key": True,
         "moonshot_api_key": True,
@@ -451,6 +574,8 @@ def test_process_environment_overrides_user_dotenv_without_leaking_values(
     assert "from-process" not in rendered
     assert "moonshot-file" not in rendered
     assert "mem0-file" not in rendered
+    assert "tavily-process" not in rendered
+    assert "proxy-file.example" not in rendered
     assert not hasattr(loaded.secrets, "model_dump")
 
     assert loaded.provider_credentials.model_dump(mode="json") == {

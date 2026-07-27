@@ -11,8 +11,9 @@ Awesome 使用两份经过 schema 验证的 YAML 文档、少量进程环境变�
 | Workspace 配置 | `<workspace>/.awesome/config.yaml` | Repository | 仅在 Workspace 获得信任后 | 否 |
 | Thread 状态 | `application.db` | Awesome | 选择 Thread 和每个 Turn 时 | 否 |
 
-两份 YAML 文档都使用 schema 版本 `1`。未知字段、重复 mapping key、错误的原生 YAML
-标量类型以及超出范围的值，都会使整份文档无效。验证不会转换加引号的数字或布尔值：
+User 配置使用 schema 版本 `2`；Workspace 配置仍使用版本 `1`。读取 User version-1 文档时
+只在内存中升级，第一次受支持的配置写操作会再将其原子写为 version 2。未知字段、重复
+mapping key、错误的原生 YAML 标量类型以及超出范围的值，都会使整份文档无效。验证不会转换加引号的数字或布尔值：
 应使用 `32` 而不是 `"32"`，使用 `false` 而不是 `"false"`。Enum 值仍使用文档规定的字符串，
 list 仍使用 YAML sequence 表示；只有明确允许的字段才能使用 `null`。
 
@@ -21,7 +22,7 @@ list 仍使用 YAML sequence 表示；只有明确允许的字段才能使用 `n
 以下是一份完整、有效的文档。显示默认值的所有字段都可以省略。
 
 ```yaml
-version: 1
+version: 2
 
 providers:
   default_model: deepseek/deepseek-v4-flash
@@ -31,6 +32,8 @@ credentials:
   deepseek: environment
   kimi: awesome
   mem0: awesome
+  tavily: environment
+  web_proxy: null
 
 budgets:
   model_calls: 32
@@ -39,6 +42,12 @@ budgets:
   compressions: 2
   active_execution_seconds: 1800
   total_context_tokens: 262144
+  web_requests: 8
+
+web:
+  enabled: false
+  provider: tavily
+  blocked_domains: []
 
 memory:
   local_file_memory: false
@@ -84,15 +93,17 @@ mcp_servers:
 
 ### `credentials`
 
-每项 service 接受 `environment`、`awesome` 或省略/`null` 选择：
+静态 credential catalog 定义五项 service：
 
 | Service | 环境变量 | `awesome` 存储 |
 | --- | --- | --- |
 | DeepSeek | `DEEPSEEK_API_KEY` | `<AWESOME_HOME>/.env` 中的 `DEEPSEEK_API_KEY` |
 | Kimi | `MOONSHOT_API_KEY` | `<AWESOME_HOME>/.env` 中的 `MOONSHOT_API_KEY` |
 | Mem0 | `MEM0_API_KEY` | `<AWESOME_HOME>/.env` 中的 `MEM0_API_KEY` |
+| Tavily | `TAVILY_API_KEY` | 不支持；该选择必须是 `environment` |
+| Web proxy | `AWESOME_WEB_PROXY_URL` | `<AWESOME_HOME>/.env` 中的 `AWESOME_WEB_PROXY_URL` |
 
-没有显式选择时，非空的进程环境值优先；只有环境值不存在时，才使用 Awesome 凭据文件。
+DeepSeek、Kimi、Mem0 和 Web proxy 接受 `environment`、`awesome` 或省略/`null`。没有显式选择时，非空的进程环境值优先；只有环境值不存在时，才使用 Awesome 凭据文件。
 显式来源绝不会回退到另一个来源。例如，选择 `environment` 而变量缺失时，即使
 `<AWESOME_HOME>/.env` 中有 key，也会报告该 Provider 未配置。这让 provenance 可见，并
 防止 operator 在不知情的情况下使用陈旧的本地秘密。
@@ -101,7 +112,7 @@ mcp_servers:
 秘密输入，并且绝不会通过 `/config` 或 protocol 状态暴露其值。DeepSeek 和 Kimi key 在
 正常保存前会经过远程验证（如果只是不可达，则有明确的 save-unverified 路径）。Mem0 key
 只接受本地格式/存储验证，不经远程检查就会保存；只有启用或调用 cloud adapter 时才会出现
-拒绝。所有权和备份指导见[文件与状态](files-and-state.zh-CN.md)。
+拒绝。`/auth` 当前管理 DeepSeek、Kimi 和 Mem0，不编辑 Tavily 或 Web proxy 条目。所有权和备份指导见[文件与状态](files-and-state.zh-CN.md)。
 
 ### `budgets`
 
@@ -113,10 +124,21 @@ mcp_servers:
 | `compressions` | 2 | 0–10 | 一个 Turn 中的上下文 compression pass |
 | `active_execution_seconds` | 1,800 | 1–21,600 | 一个 Turn 的活动前台执行时间 |
 | `total_context_tokens` | 262,144 | 任意正整数 | 在 model profile 和 input allocation 进一步降低前，请求的总上下文预算 |
+| `web_requests` | 8 | 0–8 | 一个 Turn 预留的 Web 请求上限；Workspace 只能降低它 |
 
 预算是 circuit breaker，不是目标。Turn 可能在远低于预算时完成。`total_context_tokens` 还会
 再次受已选 model profile 限制；Context Builder 会先预留 output/headroom，再分配有效输入。
 Provider 重试不会导致非幂等工具重复执行。
+
+### `web`
+
+| 字段 | 类型和值 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `false` | User 拥有的 Web enablement；Workspace 配置不能开启它。 |
+| `provider` | `tavily` | `tavily` | 静态 Web Provider 选择，与 model Provider 分离。 |
+| `blocked_domains` | 最多 128 个唯一、规范化的 ASCII hostname | `[]` | 发出 Web 请求前额外拒绝的目标。 |
+
+本次配置增量只建立闭合契约和 credential catalog；它本身不会注册 Web 工具或授予网络权限。
 
 ### `memory`
 
@@ -168,6 +190,7 @@ budgets:
   compressions: 1
   active_execution_seconds: 900
   total_context_tokens: 131072
+  web_requests: 3
 
 skills:
   disabled:
@@ -232,6 +255,8 @@ environment 解析实际 Turn。因此在这个 release 中，`AWESOME_THINKING`
 | `DEEPSEEK_API_KEY` | 所选来源为 `environment` 时使用的 DeepSeek 凭据。 |
 | `MOONSHOT_API_KEY` | 所选来源为 `environment` 时使用的 Kimi 凭据。 |
 | `MEM0_API_KEY` | 所选来源为 `environment` 时使用的 Mem0 凭据。 |
+| `TAVILY_API_KEY` | Tavily 凭据；其来源始终是 `environment`。 |
+| `AWESOME_WEB_PROXY_URL` | `credentials.web_proxy` 解析为 `environment` 时使用的显式 Web proxy。 |
 
 `AWESOME_HOME` 接受平台路径，并展开 host runtime 支持的 home marker。空值等同于未设置。
 更改它会选择一整套不同的状态/配置 universe；它不是只迁移一个 database 的安全方式。

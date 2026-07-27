@@ -89,7 +89,7 @@ Thinking and Skill are durable Thread choices changed through `/thinking` and
 A minimal user file can set a model and budgets:
 
 ```yaml
-version: 1
+version: 2
 providers:
   default_model: deepseek/deepseek-v4-flash
   kimi_region: cn
@@ -100,6 +100,11 @@ budgets:
   compressions: 2
   active_execution_seconds: 1800
   total_context_tokens: 262144
+  web_requests: 8
+web:
+  enabled: false
+  provider: tavily
+  blocked_domains: []
 ```
 
 The curated model IDs are:
@@ -134,6 +139,7 @@ version: 1
 budgets:
   model_calls: 24
   active_execution_seconds: 900
+  web_requests: 4
 skills:
   disabled: []
 mcp_servers: []
@@ -150,7 +156,7 @@ content and may be committed.
 ## Defaults and Hard Guardrails
 
 At a glance, the default total context budget is 262,144 Tokens, with 32 model
-calls, 64 tool calls, 2 Provider retries, 2 compressions, and 1,800 seconds of
+calls, 64 tool calls, 2 Provider retries, 2 compressions, 8 Web requests, and 1,800 seconds of
 active execution per Turn. Configuration remains bounded by:
 
 - model calls: 256;
@@ -158,6 +164,7 @@ active execution per Turn. Configuration remains bounded by:
 - active execution: 21,600 seconds;
 - provider retries: 6;
 - compressions: 10.
+- Web requests: 8.
 
 The selected model's real context window may lower the configured context
 total. Core also reserves output capacity and a safety margin before deriving
@@ -225,7 +232,9 @@ Thread and applied to future Turns.
 
 ## Validation and Reload Behavior
 
-Both YAML documents must be mappings with `version: 1`. Unknown keys,
+User YAML must be a mapping with `version: 2`; Workspace YAML remains
+`version: 1`. User version 1 is read compatibly in memory and the first
+supported write upgrades it atomically. Unknown keys,
 duplicate keys, malformed YAML, invalid names, unsupported models, and
 out-of-range budgets are errors. Core does not infer renamed fields.
 

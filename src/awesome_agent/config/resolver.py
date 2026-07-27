@@ -15,6 +15,7 @@ from awesome_agent.config.models import (
     StartupOverrides,
     ThreadConfigState,
     TurnConfig,
+    UserBudgetConfig,
 )
 
 _PROVIDER_DEFAULTS = {
@@ -39,6 +40,11 @@ def resolve_application_config(sources: LoadedConfigSources) -> ApplicationConfi
     return ApplicationConfig(
         providers=user.providers,
         budgets=budgets,
+        web_requests=_minimum(
+            user.budgets.web_requests,
+            project_budgets.web_requests if project_budgets is not None else None,
+        ),
+        web=user.web,
         memory=user.memory,
         user_skills=tuple(
             SkillSourceConfig(name=name, enabled=False) for name in user.skills.disabled
@@ -96,11 +102,10 @@ def resolve_turn_config(
 
 
 def _restrict_budgets(
-    user: BudgetConfig,
+    user: UserBudgetConfig,
     project: ProjectBudgetConfig | None,
 ) -> BudgetConfig:
-    if project is None:
-        return user
+    project = project or ProjectBudgetConfig()
     return BudgetConfig(
         model_calls=_minimum(user.model_calls, project.model_calls),
         tool_calls=_minimum(user.tool_calls, project.tool_calls),

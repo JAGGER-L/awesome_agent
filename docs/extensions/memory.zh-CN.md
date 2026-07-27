@@ -76,7 +76,7 @@ Mem0 凭据。两种 Memory 后端默认都关闭，并且可以独立启用。
 用户配置控制两种后端：
 
 ```yaml
-version: 1
+version: 2
 memory:
   local_file_memory: true
   mem0_cloud: false

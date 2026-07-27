@@ -82,18 +82,20 @@ terminal outcome of asynchronously admitted Agent work.
 
 ### `<HOME>/config.yaml`
 
-Strict user configuration schema version `1`: Provider defaults, credential
-source selection, budgets, Memory switches, disabled Skills, and user MCP
-declarations. It contains no secret values. See
+Strict user configuration schema version `2`: Provider defaults, credential
+source selection, budgets, Web settings, Memory switches, disabled Skills, and
+user MCP declarations. Version `1` remains readable and is atomically upgraded
+by the first supported write. The document contains no secret values. See
 [configuration](configuration.md).
 
 ### `<HOME>/.env`
 
 The Awesome-managed credential store for `DEEPSEEK_API_KEY`,
-`MOONSHOT_API_KEY`, and `MEM0_API_KEY`. `/auth` writes through a same-directory
-temporary file, flushes it, and atomically replaces the destination. On POSIX,
-Awesome creates the directory for owner-only access and the file with owner
-read/write mode.
+`MOONSHOT_API_KEY`, `MEM0_API_KEY`, and optionally
+`AWESOME_WEB_PROXY_URL`. `/auth` manages only the first three entries; supported
+writers use a same-directory temporary file, flush it, and atomically replace
+the destination. On POSIX, Awesome creates the directory for owner-only access
+and the file with owner read/write mode.
 
 This is not a general dotenv contract. Arbitrary entries are not treated as
 configuration, and values are not automatically forwarded to MCP servers.

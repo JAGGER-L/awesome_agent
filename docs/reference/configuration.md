@@ -12,8 +12,11 @@ These sources serve different trust boundaries; they are not interchangeable.
 | Workspace configuration | `<workspace>/.awesome/config.yaml` | Repository | Only after workspace trust | No |
 | Thread state | `application.db` | Awesome | Thread selection and each Turn | No |
 
-Both YAML documents use schema version `1`. Unknown fields, duplicate mapping
-keys, values with the wrong native YAML scalar type, and out-of-range values
+User configuration uses schema version `2`; workspace configuration remains at
+version `1`. A user version-1 document is upgraded only in memory while it is
+read, then written atomically as version 2 by the first supported configuration
+change. Unknown fields, duplicate mapping keys, values with the wrong native
+YAML scalar type, and out-of-range values
 invalidate the whole document. Validation does not coerce quoted numbers or
 booleans: use `32`, not `"32"`, and `false`, not `"false"`. Enum values remain
 their documented strings, YAML sequences remain the representation for lists,
@@ -25,7 +28,7 @@ The following is a complete valid document. Every field shown with its default
 can be omitted.
 
 ```yaml
-version: 1
+version: 2
 
 providers:
   default_model: deepseek/deepseek-v4-flash
@@ -35,6 +38,8 @@ credentials:
   deepseek: environment
   kimi: awesome
   mem0: awesome
+  tavily: environment
+  web_proxy: null
 
 budgets:
   model_calls: 32
@@ -43,6 +48,12 @@ budgets:
   compressions: 2
   active_execution_seconds: 1800
   total_context_tokens: 262144
+  web_requests: 8
+
+web:
+  enabled: false
+  provider: tavily
+  blocked_domains: []
 
 memory:
   local_file_memory: false
@@ -90,15 +101,18 @@ before an Agent Turn can start.
 
 ### `credentials`
 
-Each service accepts `environment`, `awesome`, or an omitted/`null` selection:
+The static credential catalog defines five services:
 
 | Service | Environment variable | `awesome` storage |
 | --- | --- | --- |
 | DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_API_KEY` in `<AWESOME_HOME>/.env` |
 | Kimi | `MOONSHOT_API_KEY` | `MOONSHOT_API_KEY` in `<AWESOME_HOME>/.env` |
 | Mem0 | `MEM0_API_KEY` | `MEM0_API_KEY` in `<AWESOME_HOME>/.env` |
+| Tavily | `TAVILY_API_KEY` | Not supported; this selection must be `environment` |
+| Web proxy | `AWESOME_WEB_PROXY_URL` | `AWESOME_WEB_PROXY_URL` in `<AWESOME_HOME>/.env` |
 
-With no explicit selection, a non-empty process environment value wins; the
+DeepSeek, Kimi, Mem0, and Web proxy accept `environment`, `awesome`, or an
+omitted/`null` selection. With no explicit selection, a non-empty process environment value wins; the
 Awesome credential file is used only when the environment value is absent. An
 explicit source never falls back to the other source. For example, selecting
 `environment` while the variable is missing reports that Provider as not
@@ -111,8 +125,9 @@ file atomically, masks secret input, and never exposes its value through
 before normal saving (with an explicit save-unverified path for reachability
 failure). Mem0 keys receive only local format/storage validation and are saved
 without a remote check; rejection appears when the cloud adapter is enabled or
-called. See [files and state](files-and-state.md) for ownership and backup
-guidance.
+called. `/auth` currently manages DeepSeek, Kimi, and Mem0; it does not edit the
+Tavily or Web proxy entries. See [files and state](files-and-state.md) for
+ownership and backup guidance.
 
 ### `budgets`
 
@@ -124,11 +139,23 @@ guidance.
 | `compressions` | 2 | 0–10 | Context compression passes in one Turn |
 | `active_execution_seconds` | 1,800 | 1–21,600 | Active foreground execution time for one Turn |
 | `total_context_tokens` | 262,144 | any positive integer | Requested total context budget before the model profile and input allocation reduce it |
+| `web_requests` | 8 | 0–8 | Maximum Web requests reserved for one Turn; a workspace may only lower it |
 
 A budget is a circuit breaker, not a target. A Turn may finish far below it.
 `total_context_tokens` is capped again by the selected model profile; the Context
 Builder reserves output/headroom before allocating effective input. Provider
 retries do not make non-idempotent tools repeat.
+
+### `web`
+
+| Field | Type and values | Default | Meaning |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `false` | User-owned Web enablement. Workspace configuration cannot turn it on. |
+| `provider` | `tavily` | `tavily` | Static Web Provider selection, separate from model Providers. |
+| `blocked_domains` | up to 128 unique normalized ASCII hostnames | `[]` | Additional destinations rejected before a Web request. |
+
+This configuration increment establishes the closed contract and credential
+catalog; by itself it does not register a Web tool or grant network authority.
 
 ### `memory`
 
@@ -186,6 +213,7 @@ budgets:
   compressions: 1
   active_execution_seconds: 900
   total_context_tokens: 131072
+  web_requests: 3
 
 skills:
   disabled:
@@ -258,6 +286,8 @@ an internal resolver seam from becoming an accidental compatibility promise.
 | `DEEPSEEK_API_KEY` | DeepSeek credential when its selected source is `environment`. |
 | `MOONSHOT_API_KEY` | Kimi credential when its selected source is `environment`. |
 | `MEM0_API_KEY` | Mem0 credential when its selected source is `environment`. |
+| `TAVILY_API_KEY` | Tavily credential; its source is always `environment`. |
+| `AWESOME_WEB_PROXY_URL` | Explicit Web proxy when `credentials.web_proxy` resolves to `environment`. |
 
 `AWESOME_HOME` accepts a platform path and expands the home marker supported by
 the host runtime. An empty value behaves as unset. Changing it selects a

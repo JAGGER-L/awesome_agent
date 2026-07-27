@@ -103,9 +103,9 @@ Awesome 会整份忽略无效文件。修复后启动新 Session；当前 Sessio
 
 ### 配置无效
 
-检查 `<AWESOME_HOME>/config.yaml`，以及完成信任后的 `<workspace>/.awesome/config.yaml`。每个文件都必须是带 `version: 1` 的 YAML mapping。重复 key、未知 key、不受支持的模型 ID、无效名称和超范围预算都会产生错误。
+检查 `<AWESOME_HOME>/config.yaml`，以及完成信任后的 `<workspace>/.awesome/config.yaml`。User 配置使用 `version: 2`，Workspace 配置使用 `version: 1`；User version 1 仍可读取，并在下一次受支持写操作时升级。重复 key、未知 key、不受支持的模型 ID、无效名称和超范围预算都会产生错误。
 
-手动编辑时，可暂时把文档缩减为 `version: 1`，以定位无效的可选 section；但请先在仓库外保存备份。不要把凭据移入 Workspace 配置。手动修复后重启 Awesome 并运行 `/config`。
+手动编辑时，可暂时把 User 配置缩减为 `version: 2`，或把 Workspace 配置缩减为 `version: 1`，以定位无效的可选 section；但请先在仓库外保存备份。不要把凭据移入 Workspace 配置。手动修复后重启 Awesome 并运行 `/config`。
 
 ### 未配置模型
 
