@@ -413,6 +413,123 @@ async def test_process_runner_preserves_executable_spawn_error(
 
 
 @pytest.mark.asyncio
+async def test_windows_spawn_status_retries_a_transient_open_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"S" + (0).to_bytes(4, byteorder="big", signed=True)
+    attempts = 0
+
+    def read_status(path: Path) -> bytes:
+        nonlocal attempts
+        assert path == tmp_path / "spawn.status"
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError(13, "status publication is still locked", path)
+        return payload
+
+    process = cast(
+        asyncio.subprocess.Process,
+        type("ExitedSupervisor", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(process_module, "_read_windows_status", read_status)
+
+    await process_module._wait_for_windows_supervisor_spawn(
+        tmp_path / "spawn.status",
+        process,
+        sys.executable,
+    )
+
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_windows_spawn_status_preserves_a_persistent_open_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_path = tmp_path / "spawn.status"
+
+    def read_status(path: Path) -> bytes:
+        assert path == status_path
+        raise PermissionError(13, "status publication remains locked", path)
+
+    process = cast(
+        asyncio.subprocess.Process,
+        type("RunningSupervisor", (), {"returncode": None})(),
+    )
+    monkeypatch.setattr(process_module, "_read_windows_status", read_status)
+    monkeypatch.setattr(process_module, "_WINDOWS_STATUS_OPEN_GRACE_SECONDS", 0)
+
+    with pytest.raises(PermissionError) as error:
+        await process_module._wait_for_windows_supervisor_spawn(
+            status_path,
+            process,
+            sys.executable,
+        )
+
+    assert error.value.filename == status_path
+
+
+@pytest.mark.asyncio
+async def test_windows_spawn_status_keeps_denial_when_publication_disappears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_path = tmp_path / "spawn.status"
+    attempts = 0
+
+    def read_status(path: Path) -> bytes:
+        nonlocal attempts
+        assert path == status_path
+        attempts += 1
+        if attempts == 1:
+            raise PermissionError(13, "status publication was locked", path)
+        return b""
+
+    process = cast(
+        asyncio.subprocess.Process,
+        type("ExitedSupervisor", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(process_module, "_read_windows_status", read_status)
+    monkeypatch.setattr(process_module, "_WINDOWS_STATUS_OPEN_GRACE_SECONDS", 0.01)
+    monkeypatch.setattr(process_module, "_SUPERVISOR_EVENT_POLL_SECONDS", 0)
+
+    with pytest.raises(PermissionError) as error:
+        await process_module._wait_for_windows_supervisor_spawn(
+            status_path,
+            process,
+            sys.executable,
+        )
+
+    assert attempts > 1
+    assert error.value.filename == status_path
+
+
+@pytest.mark.asyncio
+async def test_windows_spawn_status_reports_exit_without_an_open_denial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status_path = tmp_path / "spawn.status"
+    process = cast(
+        asyncio.subprocess.Process,
+        type("ExitedSupervisor", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(process_module, "_read_windows_status", lambda path: b"")
+
+    with pytest.raises(
+        RuntimeError,
+        match="Windows command supervisor exited before spawning",
+    ):
+        await process_module._wait_for_windows_supervisor_spawn(
+            status_path,
+            process,
+            sys.executable,
+        )
+
+
+@pytest.mark.asyncio
 async def test_process_runner_bounds_pipe_drain_from_inherited_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
