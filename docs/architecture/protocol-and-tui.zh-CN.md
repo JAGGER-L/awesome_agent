@@ -207,6 +207,25 @@ facade/event，同时选择不同的展示模型。
 Composer history、modal selection、notice 和 pending-input queue 仍是 React 展示状态。
 Coordinator 不会独立 drain 输入；Core 继续只准入一个前台 Operation。
 
+## Headless 界面
+
+`awesome run` 是同一个 TypeScript launcher 的第二种展示模式，不是第二套产品 runtime。
+它连接一个 `ConnectedSurface`，通过 `StartupSessionController` 调用同一条 `beginStartup`
+流程，使用现有 command 选择或创建 Thread，通过 Protocol v3 提交，并用 `thread.read` 读取
+持久化的最终 assistant entry。Python Application 仍是唯一的生命周期与 mutation 权威。
+
+Runner 不渲染 Ink，也不消费终端输入。父进程 stdout 只为一次成功的最终文本值或一个带版本
+的 JSON 文档保留；诊断使用父进程 stderr。Core 子进程 stdout 仍是私有 NDJSON，绝不会作为
+命令输出转发。这样可以在不改变 Protocol v3 的情况下提供确定性的重定向输出。
+
+未解决 interaction 是 headless 的终态：runner 会请求取消已准入 Operation，并返回退出码 3，
+而不是虚构审批。SIGINT 使用同一个紧急 `operation.cancel` 方法，在有界期限内尝试取消、抑制
+结果输出，并返回 130。Launcher 随后执行有界 Surface/Core shutdown；优雅关闭无法完成时，
+仍会强制终止进程树。
+
+本次增量中，解析后的 `--allow-network` 值只是进程级 CLI 意图。它不是 Protocol v3 权限字段，
+也没有内置 Web 工具消费它，因此不能启用 capability 或绕过 hard admission。
+
 ## 输入所有权
 
 `TerminalInput.tsx` 是唯一的 Ink `useInput` subscriber。唯一的根 key router 将按键分发
@@ -321,6 +340,7 @@ kill-on-close lifetime Job Object。Core 无法建立这一不变量时会 fail 
 - Host framing 与调度：`protocol/stdio.py`
 - Fixtures：`protocol/fixtures/v3/`、`scripts/generate_protocol_fixtures.py`
 - Core 进程适配器：`tui/src/core/process.ts`
+- Headless runner：`tui/src/cli/headless.ts`、`tui/src/cli/main.tsx`
 - TypeScript schema：`tui/src/protocol/`
 - 界面 reducer：`tui/src/state/`
 - 输入 mode：`tui/src/interaction/`、`tui/src/components/Composer.tsx`

@@ -55,6 +55,22 @@ MCP 和未知扩展能力在所有模式中都逐次询问。内置 Memory 操�
 
 切换模式会清除临时 capability grant，并推进 permission generation。选择其他 Thread 也会把权限 Session 重置为 Request approval。
 
+## Headless 权限
+
+`awesome run "<prompt>"` 使用同一套控制；非交互执行不是另一条权限路径。除非通过
+`--thread <id>` 选择现有 Thread，否则它会创建新 Thread。`--trust-workspace` 通过正常
+启动 interaction 接受规范启动 Workspace 的信任。没有该显式 flag 时，所需信任保持未解决，
+命令以退出码 3 退出。
+
+`--permission-mode request_approval|accept_edits|full_access` 为选中的 Thread 和当前进程
+请求正常权限模式。提供 `full_access` 是对同一警告的显式 headless 确认，不是绕过警告
+不变量的方法：权限仍只在 Thread/Session 范围有效，路径检查、限制、扩展审批和硬拒绝继续
+生效。如果后续工具调用需要无法非交互解决的审批，runner 会请求取消、不向 stdout 写入
+部分回答，并以退出码 3 退出。
+
+`--allow-network` 在本次增量中只是进程级意图声明。目前没有内置 Web 工具消费它，所以它
+不会授予 capability、不会让已禁用工具可用，也不能绕过硬拒绝。
+
 ## 审批语义
 
 写入审批可能提供：

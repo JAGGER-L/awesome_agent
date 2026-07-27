@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CoreSpawnError } from "../../src/core/errors.js";
 import {
   clearCurrentInkFrame,
+  closeHeadlessSurface,
   executeFatalRecoverySelection,
   flushCurrentInkFrame,
   reconnectAndReplaceSurface,
@@ -114,6 +115,13 @@ function harness(overrides: Partial<CliDependencies> = {}) {
   const stderr: string[] = [];
   const surface = {
     close: vi.fn(async () => undefined),
+    session: {
+      exit: Promise.resolve({
+        code: 0,
+        signal: null,
+        shutdown_requested: true,
+      }),
+    },
   } as unknown as ConnectedSurface;
   const dependencies: CliDependencies = {
     argv: [],
@@ -276,6 +284,143 @@ describe("runCli", () => {
     await expect(runCli(value.dependencies)).resolves.toBe(2);
     expect(value.stderr.join("")).toContain("interactive terminal");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+  });
+
+  it("runs headless without TTY or Ink and closes the same Surface", async () => {
+    const runHeadlessApplication = vi.fn(async (_surface, _intent, io) => {
+      io.writeStdout("durable answer\n");
+      return 0 as const;
+    });
+    const value = harness({
+      argv: ["run", "do the work"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      runHeadlessApplication,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+
+    expect(runHeadlessApplication).toHaveBeenCalledWith(
+      value.surface,
+      expect.objectContaining({
+        kind: "run",
+        prompt: "do the work",
+        target: { kind: "new" },
+      }),
+      expect.objectContaining({
+        writeStdout: expect.any(Function),
+        writeStderr: expect.any(Function),
+      }),
+    );
+    expect(value.dependencies.startApplication).not.toHaveBeenCalled();
+    expect(value.dependencies.renderApplication).not.toHaveBeenCalled();
+    expect(value.surface.close).toHaveBeenCalledOnce();
+    expect(value.stdout.join("")).toBe("durable answer\n");
+  });
+
+  it("keeps unresolved headless interaction paths off stdout", async () => {
+    const value = harness({
+      argv: ["run", "do the work"],
+      stdoutIsTTY: false,
+      runHeadlessApplication: vi.fn(async () => 3 as const),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(3);
+
+    expect(value.stdout).toEqual([]);
+    expect(value.surface.close).toHaveBeenCalledOnce();
+  });
+
+  it("suppresses successful output when Core shutdown cannot be confirmed", async () => {
+    const value = harness({
+      argv: ["run", "do the work"],
+      runHeadlessApplication: vi.fn(async (_surface, _intent, io) => {
+        io.writeStdout("must not escape\n");
+        return 0 as const;
+      }),
+      closeHeadlessApplication: vi.fn(async () => false),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(1);
+
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toContain("did not shut down cleanly");
+  });
+
+  it("closes Core after the headless SIGINT path requests cancellation", async () => {
+    const order: string[] = [];
+    const surface = {
+      close: vi.fn(async () => {
+        order.push("shutdown");
+      }),
+      session: {
+        exit: Promise.resolve({
+          code: 0,
+          signal: null,
+          shutdown_requested: true,
+        }),
+      },
+    } as unknown as ConnectedSurface;
+    const value = harness({
+      argv: ["run", "do the work"],
+      startSurface: vi.fn(async () => surface),
+      runHeadlessApplication: vi.fn(async () => {
+        order.push("cancel");
+        return 130 as const;
+      }),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(130);
+
+    expect(order).toEqual(["cancel", "shutdown"]);
+    expect(value.stdout).toEqual([]);
+  });
+
+  it("forces termination when graceful headless close stalls", async () => {
+    const exit = deferred<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      shutdown_requested: boolean;
+    }>();
+    const surface = {
+      close: vi.fn(async () => await new Promise<never>(() => undefined)),
+      session: {
+        exit: exit.promise,
+        terminate: vi.fn(async () => {
+          exit.resolve({
+            code: null,
+            signal: "SIGTERM",
+            shutdown_requested: true,
+          });
+        }),
+      },
+    } as unknown as ConnectedSurface;
+
+    await expect(
+      closeHeadlessSurface(surface, {
+        gracefulTimeoutMs: 2,
+        totalTimeoutMs: 50,
+      }),
+    ).resolves.toBe(true);
+    expect(surface.session.terminate).toHaveBeenCalledOnce();
+  });
+
+  it("returns from headless close when termination and exit both stall", async () => {
+    const never = new Promise<never>(() => undefined);
+    const surface = {
+      close: vi.fn(async () => await never),
+      session: {
+        exit: never,
+        terminate: vi.fn(async () => await never),
+      },
+    } as unknown as ConnectedSurface;
+
+    await expect(
+      closeHeadlessSurface(surface, {
+        gracefulTimeoutMs: 2,
+        totalTimeoutMs: 10,
+      }),
+    ).resolves.toBe(false);
   });
 
   it("rejects Node versions older than 22", async () => {

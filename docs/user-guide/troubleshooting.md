@@ -76,12 +76,29 @@ launcher directory manually, check `awesome --version`, close running Awesome
 sessions, and rerun once to clean rollback residue. Do not interpret a cleanup
 warning as permission to overwrite release assets or bypass checksums.
 
-### Awesome requires an interactive terminal
+### Interactive Awesome requires a TTY
 
-The Ink UI requires TTY input and output. Start it directly in a terminal, not
-through a non-interactive pipe or redirected standard output. Use normal shell
-tools for automation; Awesome does not currently expose the TUI as a batch
-interface.
+The Ink UI requires TTY input and output. Start `awesome`, `--continue`, and
+`--resume` directly in a terminal, not through a non-interactive pipe or
+redirected standard output. For automation, use the dedicated headless path:
+
+```text
+awesome run "<prompt>" [--new | --thread <id>] [--format text|json]
+```
+
+`awesome run` deliberately skips only the TTY requirement. It still starts the
+same private Core, performs the same Application startup and trust checks, and
+uses normal Thread/Turn persistence and permission policy.
+
+### `awesome run` exits without stdout
+
+This is intentional for every nonzero exit; read stderr and inspect the exit
+code. Code 1 is a run failure, code 2 is an invocation/runtime failure, code 3
+means an interaction such as trust, state reset, Thread selection, or approval
+was not resolved, and 130 means SIGINT requested cancellation. Add
+`--trust-workspace` only after verifying the current directory. Select an
+appropriate `--permission-mode` only when its consequences are acceptable.
+The runner never emits a partial final answer on failure or interruption.
 
 ### Core cannot start or the protocol/version handshake fails
 

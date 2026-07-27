@@ -22,6 +22,7 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 - 实现功能、调试问题、重构代码和运行测试；
 - 通过 `/diff`、`/undo`、`/redo` 检查和撤销受控文件修改；
 - 继续最近的 Thread，或通过 ID 恢复指定 Thread；
+- 以确定性的文本或 JSON 输出非交互运行一个 Agent Turn；
 - 在 Request approval、Accept edits 和 Thread 范围的 Full access 之间切换；
 - 使用 Skills、MCP 工具、本地 Memory 和 Mem0 Cloud 扩展能力；
 - 使用 DeepSeek 和 Kimi 模型。
@@ -74,9 +75,16 @@ approval 模式；可通过 `/permissions` 查看或切换当前 Thread 的权�
 awesome --continue
 awesome --resume
 awesome --resume <thread_id>
+awesome run "Analyze the test failure" --trust-workspace
 awesome --version
 awesome --help
 ```
+
+`awesome run "<prompt>"` 是供脚本使用的非交互入口。它默认创建新 Thread，只把最终
+回答写入 stdout（`--format text` 或 `--format json`），诊断写入 stderr。使用
+`--thread <id>` 可指定现有 Thread。信任、权限检查、取消以及同一套私有 Core/Application
+生命周期仍然生效；存在未解决 interaction 时会退出，不会打印部分回答。完整选项和退出码
+见 [CLI 参考](docs/reference/cli.zh-CN.md)。
 
 如果启动时发现未完成的 Turn，Awesome 会先询问再继续。已验证的本地 checkpoint
 默认提供 Retry；如果 shell 或 MCP 调用结果不确定，则默认提供 Abort，并且绝不会

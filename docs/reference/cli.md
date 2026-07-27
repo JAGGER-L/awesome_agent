@@ -1,22 +1,34 @@
 # CLI and keyboard reference
 
-The public `awesome` executable is the Ink terminal client. The official
+The public `awesome` executable provides an Ink terminal interface and a
+headless single-Turn mode. The official
 installers bundle a private Node.js 22.23.1 runtime, so an installer user does
-not need Node preinstalled. Running the TUI from source or installing its npm
-package directly requires Node.js 22.23.1 or newer plus interactive stdin and
-stdout. The client starts one private `awesome-core` process discovered through
+not need Node preinstalled. Running from source or installing the npm package
+directly requires Node.js 22.23.1 or newer. The Ink interface additionally
+requires interactive stdin and stdout; `awesome run` is the supported
+non-interactive surface. The client starts one private `awesome-core` process discovered through
 its launch environment; Core performs every model, state, and tool operation.
 
 ## Launch syntax
 
 ```text
 Usage: awesome [--continue | --resume [thread_id]]
+       awesome run <prompt> [--new | --thread <id>] [options]
 
 Options:
   --continue            Resume the most recent thread in this workspace
   --resume [thread_id]  Choose a recent thread or resume the given thread
   -V, --version         Print the installed product version
   -h, --help            Show this help
+
+Headless run options:
+  --new                  Create a new thread (default)
+  --thread <id>          Run in the selected existing thread
+  --format <text|json>   Select final output format (default: text)
+  --trust-workspace      Trust this workspace for the current startup flow
+  --permission-mode <request_approval|accept_edits|full_access>
+                         Select the process-local permission mode
+  --allow-network        Declare network intent for this process only
 ```
 
 | Invocation | Result |
@@ -25,17 +37,75 @@ Options:
 | `awesome --continue` | Select the most recently updated Thread in this workspace. |
 | `awesome --resume` | Open the recent-Thread picker. |
 | `awesome --resume <thread_id>` | Resume one exact or accepted abbreviated Thread ID. |
+| `awesome run "<prompt>"` | Run one Turn in a new Thread and print its final answer. |
+| `awesome run "<prompt>" --thread <id>` | Run one Turn in the exact existing Thread. |
 | `awesome -V`, `awesome --version` | Print the numeric product version and exit. |
 | `awesome -h`, `awesome --help` | Print help and exit. |
 
-Flags cannot be combined, and no other public launch flags are accepted.
-Unknown or malformed arguments print the same usage contract and exit with a
-failure.
+Interactive launch flags cannot be combined. Headless options apply only after
+`run`; `--new` and `--thread` are mutually exclusive. No other public launch
+flags are accepted. Unknown or malformed arguments print the same usage
+contract to stderr and exit with code 2.
 
 The startup directory is the workspace. Trust, local state compatibility, and
 Core/TUI protocol compatibility are resolved before normal input is admitted.
 See [files and state](files-and-state.md) and
 [Protocol v3](protocol.md).
+
+## Headless run
+
+`awesome run` executes exactly one natural-language Agent Turn without Ink:
+
+```text
+awesome run "Summarize the failing tests" --trust-workspace
+awesome run "Continue the analysis" --thread <thread_id> --format json
+awesome run "Apply the reviewed fix" --permission-mode accept_edits
+```
+
+The quoted prompt is one required argument. A new Thread is the default;
+`--thread <id>` selects one exact existing Thread instead. Startup uses the
+same trust, state preflight, configuration, Thread/Turn lifecycle, private
+Core, and Application facade as the interactive surface. It does not create a
+second runtime or a public remote API.
+
+`--trust-workspace` accepts the trust prompt for the canonical startup
+Workspace. Without it, required trust or any other unresolved startup
+interaction exits with code 3. `--permission-mode` requests one of the three
+normal modes for the selected Thread. The `full_access` spelling is itself the
+explicit warning confirmation for this headless process; it remains
+Thread/session scoped and cannot override hard denials. If the Turn later
+requires any interaction that the runner cannot resolve, Awesome requests
+cancellation and exits with code 3.
+
+`--allow-network` declares process-local network intent only. This increment
+has no built-in Web tool that consumes the flag, so it does not enable network
+access or authorize an existing tool call. It never bypasses capability policy
+or a hard denial.
+
+With `--format text`, stdout contains only the durable final assistant text
+followed by one newline. With `--format json`, stdout contains one compact JSON
+document followed by one newline:
+
+```json
+{"version":1,"type":"awesome.run.result","thread_id":"...","turn_id":"...","text":"...","termination_reason":null,"usage":{"input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"model_calls":0,"tool_calls":0,"provider_retries":0,"compressions":0,"active_execution_seconds":0}}
+```
+
+The JSON document is versioned independently from Protocol v3. It reports the
+durable answer and Turn facts; it is not a stream of protocol events. On every
+nonzero exit, stdout is empty and diagnostics go to stderr.
+
+| Exit code | Meaning |
+| ---: | --- |
+| `0` | The Turn completed and the final text or JSON document was written. |
+| `1` | The run failed, including an unexpected Core launch, model/configuration, Turn, transport, or durable-result failure. |
+| `2` | Arguments or a known CLI/runtime prerequisite were invalid, including a recognized Core executable startup failure. |
+| `3` | Trust, state reset, Thread selection, approval, or another interaction remains unresolved. |
+| `130` | SIGINT was received; Awesome first requests cancellation of the active Operation, then shuts down Core. |
+
+SIGINT never prints a partial answer. The runner makes a bounded attempt to
+confirm cancellation before returning 130; if confirmation times out, stderr
+reports that fact and the launcher proceeds to bounded shutdown of the same
+Surface and Core process used for the Turn.
 
 ## Input classification
 
@@ -118,8 +188,9 @@ accepted unless `/quit` is recalled before execution.
 
 ## Terminal and process failures
 
-The CLI exits before startup when Node is older than 22 or either terminal
-stream is not a TTY. Loss of Core, malformed NDJSON, protocol or version
+The CLI exits before startup when Node is older than 22. Interactive launches
+also require both terminal streams to be TTYs; `awesome run` does not. Loss of
+Core, malformed NDJSON, protocol or version
 incompatibility, and unexpected UI exceptions are fatal surfaces. Request-level
 product errors remain transcript feedback and do not masquerade as process
 failure.

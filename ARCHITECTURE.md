@@ -1,8 +1,9 @@
 # Awesome Architecture
 
-Awesome is a terminal AI coding assistant. One `awesome` launcher starts an Ink
-interface and a private Python process; all product behavior remains in the
-Python Core, while the TUI submits intent and renders typed events.
+Awesome is a terminal AI coding assistant. One `awesome` launcher starts a
+private Python process and selects either the Ink interface or one headless
+Turn; all product behavior remains in the Python Core, while TypeScript submits
+intent and projects typed results.
 
 This document is the authoritative technical overview. Focused documents under
 [`docs/architecture/`](docs/architecture/README.md) explain individual
@@ -14,8 +15,8 @@ boundaries without redefining the system.
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                         Entry & Presentation                              │
 │                                                                           │
-│  awesome launcher                     Ink + React TUI                     │
-│  CLI arguments                        Input / Rendering / Keyboard / UX   │
+│  awesome launcher                     Ink + React TUI / Headless run      │
+│  CLI arguments                        Input / UX / Final text or JSON     │
 └───────────────────────────────────┬───────────────────────────────────────┘
                                     │
                                     │ JSON-RPC 2.0 / NDJSON over stdio
@@ -583,7 +584,7 @@ does not import Memory or know Mem0 types.
 - **Primary files:** `protocol/jsonrpc.py`, `protocol/stdio.py`,
   `tui/src/core/process.ts`, `tui/src/app/App.tsx`,
   `tui/src/app/submission-coordinator.ts`, and
-  `tui/src/cli/startup-session-controller.ts`.
+  `tui/src/cli/startup-session-controller.ts`, `tui/src/cli/headless.ts`.
 
 Two session-local controllers keep asynchronous sequencing out of the React
 render tree without creating another state framework. `StartupSessionController`
@@ -592,6 +593,16 @@ does not reproduce Application bootstrap phases. `SubmissionCoordinator`
 owns one input's parse, Core-admission, optimistic identity, and generation
 fence. The existing React queue still owns only pending presentation input,
 while Core remains the sole foreground execution authority.
+
+`awesome run` reuses that `ConnectedSurface`, startup controller, Protocol v3
+client, Application facade, and durable Thread/Turn records without rendering
+Ink. It creates a new Thread by default or targets one explicit Thread, then
+projects only the durable final assistant entry as text or a versioned JSON
+document. Parent stdout is result-only and stderr is diagnostic-only; Core
+stdout remains private NDJSON. An unresolved interaction returns code 3, while
+SIGINT sends urgent cancellation before returning 130 and closing the same
+Core process tree. `--allow-network` is only unconsumed process-local CLI intent
+at this stage, not a capability grant or hard-denial bypass.
 
 `TerminalInput.tsx` is the only keyboard subscriber. A single discriminated UI
 mode routes Enter, Escape, Tab, arrows, and global cancellation without

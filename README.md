@@ -24,6 +24,7 @@ change, and helps verify the result.
 - implement, debug, refactor, and test code;
 - show controlled file changes with `/diff`, `/undo`, and `/redo`;
 - continue the latest Thread or resume one by ID;
+- run one Agent Turn non-interactively with deterministic text or JSON output;
 - choose Request approval, Accept edits, or Thread-scoped Full access;
 - extend tasks with Skills, MCP tools, local Memory, and Mem0 Cloud;
 - work with DeepSeek and Kimi models.
@@ -81,9 +82,18 @@ Useful launch options:
 awesome --continue
 awesome --resume
 awesome --resume <thread_id>
+awesome run "Analyze the test failure" --trust-workspace
 awesome --version
 awesome --help
 ```
+
+`awesome run "<prompt>"` is the non-interactive path for scripts. It creates a
+new Thread by default, writes only the final answer to stdout (`--format text`
+or `--format json`), and sends diagnostics to stderr. Use `--thread <id>` to
+target an existing Thread. Trust, permission checks, cancellation, and the same
+private Core/Application lifecycle still apply; an unresolved interaction
+exits without printing a partial answer. See the [CLI reference](docs/reference/cli.md)
+for options and exit codes.
 
 If startup finds an unfinished Turn, Awesome asks before continuing it. A
 verified local checkpoint offers Retry first; a shell or MCP call whose outcome

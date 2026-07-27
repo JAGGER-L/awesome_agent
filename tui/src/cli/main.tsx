@@ -60,8 +60,14 @@ import {
   CLI_HELP,
   LaunchArgumentError,
   parseCliIntent,
+  type HeadlessRunIntent,
   type LaunchIntent,
 } from "./args.js";
+import {
+  runHeadless,
+  type HeadlessExitCode,
+  type HeadlessIo,
+} from "./headless.js";
 import {
   assertInteractiveTerminal,
   assertSupportedNode,
@@ -112,12 +118,20 @@ export interface CliDependencies {
   readonly renderApplication: (
     request: CliRenderRequest,
   ) => Promise<CliRenderOutcome>;
+  readonly runHeadlessApplication?: (
+    surface: ConnectedSurface,
+    intent: HeadlessRunIntent,
+    io: HeadlessIo,
+  ) => Promise<HeadlessExitCode>;
+  readonly closeHeadlessApplication?: (
+    surface: ConnectedSurface,
+  ) => Promise<boolean>;
 }
 
 export async function runCli(
   dependencies: CliDependencies = productionDependencies(),
-): Promise<0 | 1 | 2> {
-  let intent: LaunchIntent;
+): Promise<0 | 1 | 2 | 3 | 130> {
+  let intent: LaunchIntent | HeadlessRunIntent;
   try {
     const parsed = parseCliIntent(dependencies.argv);
     if (parsed.kind === "version") {
@@ -130,10 +144,12 @@ export async function runCli(
     }
     intent = parsed;
     assertSupportedNode(dependencies.nodeVersion);
-    assertInteractiveTerminal(
-      dependencies.stdinIsTTY,
-      dependencies.stdoutIsTTY,
-    );
+    if (intent.kind !== "run") {
+      assertInteractiveTerminal(
+        dependencies.stdinIsTTY,
+        dependencies.stdoutIsTTY,
+      );
+    }
   } catch (error) {
     if (
       error instanceof LaunchArgumentError ||
@@ -162,6 +178,37 @@ export async function runCli(
     }
     dependencies.writeStderr("Unable to start the Awesome Core process.\n");
     return 1;
+  }
+
+  if (intent.kind === "run") {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let exitCode: HeadlessExitCode;
+    try {
+      exitCode = await (dependencies.runHeadlessApplication ?? runHeadless)(
+        surface,
+        intent,
+        {
+          writeStdout: (value) => stdout.push(value),
+          writeStderr: (value) => stderr.push(value),
+        },
+      );
+    } catch {
+      stderr.push("The headless run failed unexpectedly.\n");
+      exitCode = 1;
+    }
+    const closed = await (
+      dependencies.closeHeadlessApplication ?? closeHeadlessSurface
+    )(surface);
+    if (!closed) {
+      stderr.push("Awesome Core did not shut down cleanly.\n");
+      if (exitCode === 0) exitCode = 1;
+    }
+    if (exitCode === 0) {
+      for (const value of stdout) dependencies.writeStdout(value);
+    }
+    for (const value of stderr) dependencies.writeStderr(value);
+    return exitCode;
   }
 
   let state: StartupRenderState;
@@ -198,6 +245,71 @@ export async function runCli(
     dependencies.writeStderr("The terminal interface failed unexpectedly.\n");
     return 1;
   }
+}
+
+export interface HeadlessCloseOptions {
+  readonly gracefulTimeoutMs?: number;
+  readonly totalTimeoutMs?: number;
+}
+
+export async function closeHeadlessSurface(
+  surface: ConnectedSurface,
+  options: HeadlessCloseOptions = {},
+): Promise<boolean> {
+  const gracefulTimeoutMs = boundedTimeout(options.gracefulTimeoutMs, 5_000);
+  const totalTimeoutMs = Math.max(
+    gracefulTimeoutMs,
+    boundedTimeout(options.totalTimeoutMs, 10_000),
+  );
+  const deadline = Date.now() + totalTimeoutMs;
+  const close = settledCall(() => surface.close());
+  const exited = settled(surface.session.exit);
+  const graceful = await within(
+    Promise.all([close, exited]).then((results) => results.every(Boolean)),
+    Math.min(gracefulTimeoutMs, totalTimeoutMs),
+  );
+  if (graceful === true) return true;
+
+  const terminated = settledCall(() => surface.session.terminate());
+  const forced = await within(
+    Promise.all([terminated, exited]).then((results) => results.every(Boolean)),
+    Math.max(1, deadline - Date.now()),
+  );
+  return forced === true;
+}
+
+async function settled<Value>(promise: Promise<Value>): Promise<boolean> {
+  return await promise.then(
+    () => true,
+    () => false,
+  );
+}
+
+async function settledCall<Value>(
+  operation: () => Promise<Value>,
+): Promise<boolean> {
+  return await settled(Promise.resolve().then(operation));
+}
+
+async function within<Value>(
+  promise: Promise<Value>,
+  timeoutMs: number,
+): Promise<Value | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const result = await Promise.race([
+    promise,
+    new Promise<undefined>((resolve) => {
+      timeout = setTimeout(() => resolve(undefined), timeoutMs);
+    }),
+  ]);
+  if (timeout) clearTimeout(timeout);
+  return result;
+}
+
+function boundedTimeout(value: number | undefined, fallback: number): number {
+  return value !== undefined && Number.isFinite(value) && value >= 1
+    ? Math.min(Math.floor(value), 30_000)
+    : fallback;
 }
 
 function productionDependencies(): CliDependencies {

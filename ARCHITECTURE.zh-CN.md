@@ -1,7 +1,8 @@
 # Awesome 架构
 
-Awesome 是一个终端 AI coding assistant。一个 `awesome` launcher 会启动 Ink 界面和私有
-Python 进程；所有产品行为都保留在 Python Core 中，TUI 只提交意图并渲染类型化事件。
+Awesome 是一个终端 AI coding assistant。一个 `awesome` launcher 会启动私有 Python
+进程，并在 Ink 界面与单次 headless Turn 之间选择；所有产品行为都保留在 Python Core 中，
+TypeScript 只提交意图并投影类型化结果。
 
 本文档是权威技术概览。[`docs/architecture/`](docs/architecture/README.zh-CN.md) 下的专题
 文档会解释各个边界，但不会重新定义系统。
@@ -12,8 +13,8 @@ Python 进程；所有产品行为都保留在 Python Core 中，TUI 只提交�
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                          入口与展示                                       │
 │                                                                           │
-│  awesome launcher                     Ink + React TUI                     │
-│  CLI 参数                              输入 / 渲染 / 键盘 / UX             │
+│  awesome launcher                     Ink + React TUI / Headless run      │
+│  CLI 参数                              输入 / UX / 最终文本或 JSON          │
 └───────────────────────────────────┬───────────────────────────────────────┘
                                     │
                                     │ stdio 上的 JSON-RPC 2.0 / NDJSON
@@ -499,13 +500,21 @@ client、使候选 generation 失效、移除该 server namespace，并发布脱
 - **主要文件：** `protocol/jsonrpc.py`、`protocol/stdio.py`、
   `tui/src/core/process.ts`、`tui/src/app/App.tsx`、
   `tui/src/app/submission-coordinator.ts` 和
-  `tui/src/cli/startup-session-controller.ts`。
+  `tui/src/cli/startup-session-controller.ts`、`tui/src/cli/headless.ts`。
 
 两个仅属于 session 的 controller 把异步时序移出 React render tree，但不创建另一套状态
 框架。`StartupSessionController` 继续处理类型化的 trust、state reset 和启动 Thread
 selection 结果；它不复制 Application bootstrap phase。`SubmissionCoordinator` 负责单条
 输入的解析、Core 准入、乐观 identity 和 generation fence。既有 React queue 仍只拥有
 pending 展示输入，而 Core 仍是唯一的前台执行权威。
+
+`awesome run` 复用同一个 `ConnectedSurface`、startup controller、Protocol v3 client、
+Application facade 和持久化 Thread/Turn record，但不渲染 Ink。它默认创建新 Thread，或指定
+一个明确 Thread，随后只把持久化的最终 assistant entry 投影为文本或带版本的 JSON 文档。
+父进程 stdout 只承载结果，stderr 只承载诊断；Core stdout 仍是私有 NDJSON。未解决
+interaction 返回退出码 3；SIGINT 会先发送紧急取消，再返回 130 并关闭同一棵 Core 进程树。
+此阶段的 `--allow-network` 只是未被消费的进程级 CLI 意图，不是 capability grant，也不能
+绕过 hard denial。
 
 `TerminalInput.tsx` 是唯一 keyboard subscriber。一个可辨识 UI mode 路由 Enter、Escape、
 Tab、方向键和全局取消，不会有相互竞争的 component listener。乐观 user message 使用

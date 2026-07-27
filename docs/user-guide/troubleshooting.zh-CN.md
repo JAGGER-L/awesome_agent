@@ -55,9 +55,25 @@ version-bound installer；安装器会先验证记录的 owner，再回收死亡
 再运行一次以清理 rollback 遗留项。不要把 cleanup warning 理解成覆盖 release asset 或绕过
 checksum 的许可。
 
-### Awesome 要求交互式终端
+### 交互式 Awesome 要求 TTY
 
-Ink UI 需要 TTY 输入和输出。请直接在终端中启动，不要通过非交互式 pipe 或重定向的标准输出启动。自动化请使用普通 shell 工具；Awesome 当前不提供 TUI batch interface。
+Ink UI 需要 TTY 输入和输出。请直接在终端中启动 `awesome`、`--continue` 和 `--resume`，
+不要通过非交互式 pipe 或重定向的标准输出启动。自动化请使用专用 headless 路径：
+
+```text
+awesome run "<prompt>" [--new | --thread <id>] [--format text|json]
+```
+
+`awesome run` 只跳过 TTY 要求。它仍启动同一个私有 Core，执行相同的 Application 启动与
+信任检查，并使用正常的 Thread/Turn 持久化和权限策略。
+
+### `awesome run` 退出但 stdout 为空
+
+所有非零退出都会有意保持 stdout 为空；请读取 stderr 并检查退出码。退出码 1 表示运行
+失败，2 表示调用或 runtime 失败，3 表示信任、状态重置、Thread 选择或审批等 interaction
+未解决，130 表示 SIGINT 已请求取消。只有在核对当前目录后才添加 `--trust-workspace`；
+只有在能接受对应后果时才选择 `--permission-mode`。运行失败或中断时，runner 绝不会输出
+部分最终回答。
 
 ### Core 无法启动，或协议/版本握手失败
 

@@ -79,6 +79,20 @@ Provider 的数据边界。
 正常工作，且项目文件没有被修改。可运行 `/context`、`/tools` 和 `/status` 查看
 Awesome 实际使用的状态。
 
+## 从脚本运行一个 Turn
+
+完成模型设置后，可在不启动 Ink 的情况下执行同一项只读检查：
+
+```text
+awesome run "Analyze this project's structure and tell me where I should start reading." --trust-workspace
+```
+
+该命令默认创建新 Thread，stdout 只写最终回答。添加 `--format json` 可得到一个带版本的
+JSON 文档，使用 `--thread <id>` 可指定现有 Thread。诊断写入 stderr。所需信任、审批、
+状态恢复或其他未解决 interaction 不会产生部分 stdout，并以退出码 3 退出。SIGINT 会先
+请求取消 Turn，再以退出码 130 结束进程。完整契约见
+[CLI 参考](../reference/cli.zh-CN.md)。
+
 ## 接下来读什么
 
 - 通过 [Workspace、Thread、Turn 与 Operation](../concepts/workspace-thread-turn.zh-CN.md)

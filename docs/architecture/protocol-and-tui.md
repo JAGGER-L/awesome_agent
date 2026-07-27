@@ -240,6 +240,32 @@ Composer history, modal selection, notices, and the pending-input queue remain
 React presentation state. The coordinator never drains input independently;
 Core still admits the single foreground Operation.
 
+## Headless surface
+
+`awesome run` is a second presentation mode of the same TypeScript launcher,
+not a second product runtime. It connects one `ConnectedSurface`, invokes the
+same `beginStartup` flow through `StartupSessionController`, selects or creates
+a Thread through existing commands, submits through Protocol v3, and hydrates
+the durable final assistant entry with `thread.read`. Python Application remains
+the only lifecycle and mutation authority.
+
+The runner does not render Ink or consume terminal input. Parent stdout is
+reserved for one successful final text value or one versioned JSON document;
+diagnostics use parent stderr. Core child stdout remains private NDJSON and is
+never forwarded as command output. This separation makes redirected output
+deterministic without changing Protocol v3.
+
+An unresolved interaction is a terminal headless outcome: the runner requests
+cancellation of an admitted Operation and returns code 3 instead of inventing
+an approval. SIGINT follows the same urgent `operation.cancel` method, makes a
+bounded cancellation attempt, suppresses result output, and returns 130. The
+launcher then performs bounded Surface/Core shutdown, including forced
+process-tree termination when graceful close cannot complete.
+
+The parsed `--allow-network` value is only process-local CLI intent in this
+increment. It is not a Protocol v3 authority field and no built-in Web tool
+consumes it, so it cannot enable a capability or bypass hard admission.
+
 ## Input ownership
 
 `TerminalInput.tsx` is the only Ink `useInput` subscriber. One root key router
@@ -369,6 +395,7 @@ their filesystem or network access.
 - Host framing and dispatch: `protocol/stdio.py`
 - Fixtures: `protocol/fixtures/v3/`, `scripts/generate_protocol_fixtures.py`
 - Core process adapter: `tui/src/core/process.ts`
+- Headless runner: `tui/src/cli/headless.ts`, `tui/src/cli/main.tsx`
 - TypeScript schemas: `tui/src/protocol/`
 - Surface reducer: `tui/src/state/`
 - Input modes: `tui/src/interaction/`, `tui/src/components/Composer.tsx`
