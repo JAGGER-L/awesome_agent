@@ -42,8 +42,8 @@
     {
       "english_source": "docs/architecture/protocol-and-tui.md",
       "chinese_source": "docs/architecture/protocol-and-tui.zh-CN.md",
-      "english_sha256": "8f8f7b4f8c4e7d1227f104b0de007f1a2a3dfeff7c14d759aff989db85c7391a",
-      "chinese_sha256": "13fb9d0538cf4cd97a93d5b1085020fdb420e6aa9de4a5e3a6f213e9a3071704"
+      "english_sha256": "43e605d819c71e88b411b15ac841c3de52c37c2741271c4949777bca9b645399",
+      "chinese_sha256": "7e75175627d83d752f0bf43ecbb8dccbc3f092a33ed2f8678228bcf139d99202"
     },
     {
       "english_source": "docs/architecture/request-lifecycles.md",

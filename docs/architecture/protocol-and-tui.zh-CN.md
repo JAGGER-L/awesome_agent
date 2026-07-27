@@ -306,14 +306,22 @@ Composer 使用 Ink 的物理光标，而不是打印出来的块状 glyph：
 ```text
 grapheme-aware logical cursor
   -> display-width-aware viewport row/column
+  -> Composer insertion phase 中的当前 Ink Yoga layout
   -> React TerminalFrameMetrics
-  -> InkCursorBridge
-  -> useCursor physical terminal position
+  -> InkCursorBridge fullscreen adjustment
+  -> ancestor useCursor physical terminal position
 ```
 
-该 bridge 隔离了 Ink 7.1 的一个全屏约定：填满 viewport 的 frame 会省略末尾换行。
-终端 frame metric 仍是本地展示状态。未来升级 Ink 后，只有当低于、等于和高于 viewport
-的 ANSI 回归仍全部通过，才能移除该 bridge。
+`TerminalSurfaceLayout` 持有 `useCursor`。每次 active Composer commit 时，后代的
+insertion effect 都会在 host mutation 之后重新计算当前 Ink Yoga layout，并在祖先的 cursor
+effect 运行前发布该位置。因此，流式内容与光标来自同一份 layout；缓存的 `useBoxMetrics`
+坐标只负责首次 readiness 并请求第一次祖先 cursor commit，不会用于定位当前 frame。
+
+该 bridge 还隔离了 Ink 7.1 的一个全屏约定：填满 viewport 的 frame 会省略末尾换行。
+同步 layout pass 会在 Composer 活动时增加一次 Yoga 计算，但可以保留自然终端流和终端 host
+的 IME 渲染。终端 frame metric 仍是本地展示状态。未来升级 Ink 后，只有当逐 frame 的低于、
+等于和高于 viewport 光标回归，以及 resize 和 Composer remount 回归仍全部通过，才能移除
+任一 workaround。
 
 IME preedit 仍由终端 host 负责。Composer 逻辑处理已经提交的 grapheme 输入，不尝试自行
 渲染平台 IME 状态。

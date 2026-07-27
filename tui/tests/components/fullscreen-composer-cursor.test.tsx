@@ -64,7 +64,12 @@ function composerState() {
   return composerReducer(initialComposerState(), { type: "resize", width: 72 });
 }
 
-function surface(transcriptRows: number, active = true): ReactElement {
+function surface(
+  transcriptRows: number,
+  active = true,
+  activeTurnRows = 0,
+  composerVisible = true,
+): ReactElement {
   return (
     <TerminalSurfaceLayout
       transcript={
@@ -77,8 +82,25 @@ function surface(transcriptRows: number, active = true): ReactElement {
           ))}
         </Box>
       }
-      activeTurn={null}
-      input={<Composer state={composerState()} active={active} />}
+      activeTurn={
+        activeTurnRows > 0 ? (
+          <Text>
+            {Array.from(
+              { length: activeTurnRows },
+              (_, index) => `response ${index + 1}`,
+            ).join("\n")}
+          </Text>
+        ) : null
+      }
+      input={
+        composerVisible ? (
+          <Composer state={composerState()} active={active} />
+        ) : (
+          <Box height={4}>
+            <Text>Exclusive interaction</Text>
+          </Box>
+        )
+      }
       status={null}
     />
   );
@@ -110,18 +132,21 @@ async function mountSurface(
   });
   mounted.push(instance);
   await eventually(() => expect(tty.writes.join("")).toContain(SHOW_CURSOR));
+  await instance.waitUntilRenderFlush();
   return instance;
 }
 
 function cursorFrame(
   tty: CaptureTty,
   transcriptRows: number,
+  activeTurnRows = 0,
 ): {
   readonly frameHeight: number;
   readonly promptLine: number;
   readonly cursorLine: number;
+  readonly cursorLines: readonly number[];
 } {
-  const frame = renderToString(surface(transcriptRows), {
+  const frame = renderToString(surface(transcriptRows, true, activeTurnRows), {
     columns: tty.columns,
   });
   const lines = frame.split("\n");
@@ -129,44 +154,73 @@ function cursorFrame(
   expect(promptLine).toBeGreaterThanOrEqual(0);
 
   const matches = [...tty.writes.join("").matchAll(CURSOR_SUFFIX)];
-  const suffix = matches.at(-1);
-  expect(suffix).toBeDefined();
-  const moveUp = Number(suffix?.[1] ?? 0);
   const physicalBase =
     lines.length >= tty.rows ? lines.length - 1 : lines.length;
+  const cursorLines = matches.map(
+    (suffix) => physicalBase - Number(suffix[1] ?? 0),
+  );
+  const cursorLine = cursorLines.at(-1);
+  expect(cursorLine).toBeDefined();
   return {
     frameHeight: lines.length,
     promptLine,
-    cursorLine: physicalBase - moveUp,
+    cursorLine: cursorLine ?? -1,
+    cursorLines,
   };
 }
 
-async function waitForMeasuredCursor(
+function expectOnlyPromptCursors(
   tty: CaptureTty,
   transcriptRows: number,
+  activeTurnRows = 0,
+): void {
+  const frame = cursorFrame(tty, transcriptRows, activeTurnRows);
+  expect(frame.cursorLines.length).toBeGreaterThan(0);
+  expect(frame.cursorLines.every((line) => line === frame.promptLine)).toBe(
+    true,
+  );
+}
+
+async function waitForPromptCursorFrames(
+  instance: Instance,
+  tty: CaptureTty,
+  transcriptRows: number,
+  activeTurnRows = 0,
 ): Promise<void> {
-  await eventually(() => {
-    const frame = cursorFrame(tty, transcriptRows);
-    expect(frame.cursorLine).toBe(frame.promptLine);
-  });
+  await eventually(() =>
+    expectOnlyPromptCursors(tty, transcriptRows, activeTurnRows),
+  );
+  await instance.waitUntilRenderFlush();
+  expectOnlyPromptCursors(tty, transcriptRows, activeTurnRows);
 }
 
 describe("fullscreen Composer cursor", () => {
+  it("never publishes a stale cursor while an active response gains lines", async () => {
+    const tty = new CaptureTty(12);
+    const instance = await mountSurface(tty, 2);
+
+    for (const activeTurnRows of [1, 2, 6, 7]) {
+      tty.clearWrites();
+      instance.rerender(surface(2, true, activeTurnRows));
+      await waitForPromptCursorFrames(instance, tty, 2, activeTurnRows);
+    }
+  });
+
   it("stays on the prompt when content crosses the viewport threshold", async () => {
     const tty = new CaptureTty(12);
     const instance = await mountSurface(tty, 2);
-    expect(cursorFrame(tty, 2).cursorLine).toBe(cursorFrame(tty, 2).promptLine);
+    expectOnlyPromptCursors(tty, 2);
 
     tty.clearWrites();
     instance.rerender(surface(8));
-    await waitForMeasuredCursor(tty, 8);
+    await waitForPromptCursorFrames(instance, tty, 8);
     const equal = cursorFrame(tty, 8);
     expect(equal.frameHeight).toBe(12);
     expect(equal.cursorLine).toBe(equal.promptLine);
 
     tty.clearWrites();
     instance.rerender(surface(9));
-    await waitForMeasuredCursor(tty, 9);
+    await waitForPromptCursorFrames(instance, tty, 9);
     const above = cursorFrame(tty, 9);
     expect(above.frameHeight).toBe(13);
     expect(above.cursorLine).toBe(above.promptLine);
@@ -174,18 +228,16 @@ describe("fullscreen Composer cursor", () => {
 
   it("recalculates the physical anchor across terminal resize", async () => {
     const tty = new CaptureTty(12);
-    await mountSurface(tty, 8);
-    expect(cursorFrame(tty, 8).cursorLine).toBe(cursorFrame(tty, 8).promptLine);
+    const instance = await mountSurface(tty, 8);
+    expectOnlyPromptCursors(tty, 8);
 
     tty.clearWrites();
     tty.resize(20);
-    await waitForMeasuredCursor(tty, 8);
-    expect(cursorFrame(tty, 8).cursorLine).toBe(cursorFrame(tty, 8).promptLine);
+    await waitForPromptCursorFrames(instance, tty, 8);
 
     tty.clearWrites();
     tty.resize(10);
-    await waitForMeasuredCursor(tty, 8);
-    expect(cursorFrame(tty, 8).cursorLine).toBe(cursorFrame(tty, 8).promptLine);
+    await waitForPromptCursorFrames(instance, tty, 8);
   });
 
   it("hides the native cursor when Composer releases ownership", async () => {
@@ -195,6 +247,22 @@ describe("fullscreen Composer cursor", () => {
     tty.clearWrites();
     instance.rerender(surface(2, false));
     await eventually(() => expect(tty.writes.join("")).toContain(HIDE_CURSOR));
+    await instance.waitUntilRenderFlush();
     expect(tty.writes.join("")).not.toContain(SHOW_CURSOR);
+  });
+
+  it("reanchors the cursor after the Composer remounts", async () => {
+    const tty = new CaptureTty(20);
+    const instance = await mountSurface(tty, 2);
+
+    tty.clearWrites();
+    instance.rerender(surface(2, true, 0, false));
+    await eventually(() => expect(tty.writes.join("")).toContain(HIDE_CURSOR));
+    await instance.waitUntilRenderFlush();
+    expect(tty.writes.join("")).not.toContain(SHOW_CURSOR);
+
+    tty.clearWrites();
+    instance.rerender(surface(2));
+    await waitForPromptCursorFrames(instance, tty, 2);
   });
 });

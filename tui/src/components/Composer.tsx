@@ -23,6 +23,7 @@ export function Composer({
   const metrics = useBoxMetrics(composerRef);
   useComposerCursor({
     active: active && !submitting,
+    elementRef: composerRef,
     metrics,
     cursorRow: state.viewport.cursorRow,
     cursorColumn: state.viewport.cursorColumn,

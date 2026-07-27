@@ -362,15 +362,26 @@ Composer uses Ink's physical cursor, not a printed block glyph:
 ```text
 grapheme-aware logical cursor
   -> display-width-aware viewport row/column
+  -> current Ink Yoga layout in the Composer insertion phase
   -> React TerminalFrameMetrics
-  -> InkCursorBridge
-  -> useCursor physical terminal position
+  -> InkCursorBridge fullscreen adjustment
+  -> ancestor useCursor physical terminal position
 ```
 
-The bridge isolates an Ink 7.1 fullscreen convention where a frame filling the
-viewport omits a trailing newline. Terminal frame metrics remain local
-presentation state. A future Ink upgrade can remove the bridge only after
-below-, equal-, and above-viewport ANSI regressions still pass.
+`TerminalSurfaceLayout` owns `useCursor`. On every commit with an active
+Composer, the descendant insertion effect recomputes the current Ink Yoga
+layout after host mutations and publishes that position before the ancestor
+cursor effect runs. Streaming content and its cursor therefore come from the
+same layout; cached `useBoxMetrics` coordinates only gate initial readiness and
+request the first ancestor cursor commit, and never position a current frame.
+
+The bridge also isolates an Ink 7.1 fullscreen convention where a frame
+filling the viewport omits a trailing newline. The synchronous layout pass adds
+one extra Yoga calculation while the Composer is active, but preserves natural
+terminal flow and terminal-host IME rendering. Terminal frame metrics remain
+local presentation state. A future Ink upgrade can remove either workaround
+only after per-frame cursor regressions below, equal to, and above the viewport,
+plus resize and Composer remount regressions, still pass.
 
 IME preedit remains a responsibility of the terminal host. Composer logic
 operates on submitted grapheme input rather than attempting to render platform

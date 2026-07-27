@@ -1,4 +1,10 @@
-import { createContext, useContext, type ReactNode } from "react";
+import type { CursorPosition, DOMElement } from "ink";
+import {
+  createContext,
+  useContext,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 export interface TerminalFrameMetrics {
   readonly frameHeight: number;
@@ -6,17 +12,27 @@ export interface TerminalFrameMetrics {
   readonly hasMeasured: boolean;
 }
 
-const TerminalFrameMetricsContext = createContext<TerminalFrameMetrics>({
+export interface TerminalCursorFrame extends TerminalFrameMetrics {
+  readonly frameRef: RefObject<DOMElement | null>;
+  readonly publishCursor: (position: CursorPosition | undefined) => void;
+  readonly requestCursorCommit: () => void;
+}
+
+const detachedFrameRef: RefObject<DOMElement | null> = { current: null };
+const TerminalFrameMetricsContext = createContext<TerminalCursorFrame>({
   frameHeight: 0,
   terminalRows: 0,
   hasMeasured: false,
+  frameRef: detachedFrameRef,
+  publishCursor: () => undefined,
+  requestCursorCommit: () => undefined,
 });
 
 export function TerminalFrameMetricsProvider({
   value,
   children,
 }: {
-  readonly value: TerminalFrameMetrics;
+  readonly value: TerminalCursorFrame;
   readonly children: ReactNode;
 }) {
   return (
@@ -26,6 +42,6 @@ export function TerminalFrameMetricsProvider({
   );
 }
 
-export function useTerminalFrameMetrics(): TerminalFrameMetrics {
+export function useTerminalFrameMetrics(): TerminalCursorFrame {
   return useContext(TerminalFrameMetricsContext);
 }
