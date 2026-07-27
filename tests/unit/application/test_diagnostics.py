@@ -173,7 +173,12 @@ async def test_two_writers_serialize_one_shared_log_set(tmp_path: Path) -> None:
 
 def test_two_processes_serialize_forced_rotations_without_losing_records(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # ``spawn`` must be able to import this test module in a fresh interpreter.
+    # Pytest's importlib mode does not otherwise promise that the repository
+    # root is present in the child process import path.
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[3]))
     logs_dir = tmp_path / "logs"
     expected_indices = tuple(range(20))
     max_record_bytes = max(
