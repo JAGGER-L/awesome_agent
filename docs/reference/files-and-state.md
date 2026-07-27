@@ -27,6 +27,8 @@ home, not the operating-system home.
 ├── .provider-credential-transaction.env
 ├── .state.lock
 ├── .config.yaml.lock
+├── .skills.lock
+├── .skills-transaction.json
 ├── config.yaml
 ├── ui.json
 ├── logs/
@@ -120,9 +122,31 @@ not own this document.
 ### `<HOME>/skills/`
 
 User Skill packages, normally `<HOME>/skills/<name>/SKILL.md` plus optional
-resources. User Skills are local trusted input and retain existing link
-behavior; the stricter no-reparse package rule applies to Workspace Skills.
-See [Skills](../extensions/skills.md).
+resources. Bundled and User Skills use the same pinned package and `SKILL.md`
+identity requirement; Workspace Skills additionally pin the complete trusted
+workspace chain. Resource traversal for every source rejects escape, links,
+junctions, and other reparse components.
+
+`awesome skills install` validates a complete local directory or ZIP before it
+publishes a User package. Local source traversal and cleanup of installed or
+quarantined packages reject crossing a filesystem or mount boundary, including
+POSIX mount and bind boundaries; Windows volume-mount traversal is covered by
+the existing reparse-point rejection.
+
+`<HOME>/.skills.lock` serializes list and mutation operations across processes.
+`<HOME>/.skills-transaction.json` records an in-progress install, replacement,
+or removal. A fresh install publishes its validated stage to an absent target
+with one same-directory no-replace atomic rename. Replace is not one atomic
+replacement: it records `prepared`, renames target to quarantine, records
+`quarantined`, renames stage to target, and records `published` before cleanup.
+Remove records the same phases around target-to-quarantine and deletes the
+quarantine only after publication. Recovery rolls back replace/remove before
+publication and rolls forward quarantine cleanup after publication.
+
+Private `.skill-stage-*` and `.skill-quarantine-*` directories may exist under
+`skills/` while such a transaction is running or awaiting recovery. Do not edit
+or delete those artifacts while Awesome may be active. See
+[Skills](../extensions/skills.md).
 
 ### Local Memory files
 
@@ -136,14 +160,15 @@ hash. See [Memory](../extensions/memory.md).
 
 Core serializes read-modify-write transactions for `config.yaml`, `.env`,
 `USER.md`, and each Workspace `MEMORY.md` across threads and processes. It uses
-a persistent one-byte sibling named `.<resource>.lock`; an already-hidden
-resource such as `.env` uses `.env.lock`, not a second leading dot. Waiting for
-these locks is bounded and runs outside the event-loop thread, so another
-process cannot freeze foreground cancellation or status rendering. A cancelled
-mutation finishes its already-started filesystem transaction within a bounded
-cleanup window before cancellation is reported; a worker that misses that
-window cannot later publish an in-memory state commit. Its filesystem outcome
-must be treated as uncertain until a later process reloads the durable files.
+a persistent one-byte sibling named
+`.<resource>.lock`; an already-hidden resource such as `.env` uses `.env.lock`,
+not a second leading dot. Waiting for these locks is bounded and runs outside
+the event-loop thread, so another process cannot freeze foreground cancellation
+or status rendering. A cancelled mutation finishes its already-started
+filesystem transaction within a bounded cleanup window before cancellation is
+reported; a worker that misses that window cannot later publish an in-memory
+state commit. Its filesystem outcome must be treated as uncertain until a later
+process reloads the durable files.
 
 A lock wait that reaches its deadline is reported as retryable
 `operation_busy` for commands and credential RPCs, or retryable `timeout` for a
@@ -154,11 +179,27 @@ tool returns a non-retryable `state_unavailable` `ToolOutput`. These errors are
 fixed and sanitized; they never expose the sidecar path or the operating-system
 exception.
 
-These sidecars are coordination artifacts, not configuration or Memory
-content. Do not edit or delete them while an Awesome process may be running.
-Their absence before the first mutation is normal; Core creates them lazily and
-rejects a sidecar that is a link, reparse point, non-regular file, or whose
-opened identity does not match its path.
+Skill package operations use their separate `.skills.lock`; lock waiting is
+bounded and runs off the event-loop thread. Source size, entry count, and file
+reads are also bounded. Once the owned package worker starts, however,
+cancellation-safe convergence has no wall-clock cleanup deadline: if the caller
+is cancelled, Core continues awaiting that worker until the transaction reaches
+a recoverable terminal state, then re-raises the original cancellation. It does
+not detach a worker whose later filesystem outcome would be unknown.
+
+For Skill package RPCs, an unavailable or contended `.skills.lock` is a
+retryable `operation_busy`; a package transaction that cannot complete safely
+—including installed or quarantined cleanup that detects a boundary crossing—
+is retryable `state_unavailable`. Source validation, source boundary-crossing,
+size, existing-name, and missing-name failures are non-retryable
+`invalid_arguments` with bounded diagnostic codes.
+
+These lock files and package transaction markers are coordination artifacts,
+not configuration, Memory, or Skill package content. Do not edit or delete them
+while an Awesome process may be running. Their absence before the first
+mutation is normal; Core creates them lazily and rejects a sidecar that is a
+link, reparse point, non-regular file, or whose opened identity does not match
+its path.
 
 ## Workspace-owned files
 

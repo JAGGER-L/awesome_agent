@@ -28,10 +28,10 @@ from awesome_agent.config import (
     missing_provider_credential_statuses,
 )
 from awesome_agent.config.loader import read_user_config_document
-from awesome_agent.config.resource_lock import exclusive_resource_lock
 from awesome_agent.context import ContextBuilder
 from awesome_agent.conversation import ConversationService, UsageSummary
 from awesome_agent.core.events import CollectingEventSink, EventEmitter
+from awesome_agent.core.resource_lock import exclusive_resource_lock
 from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,

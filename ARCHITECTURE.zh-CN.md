@@ -1,8 +1,9 @@
 # Awesome 架构
 
 Awesome 是一个终端 AI coding assistant。一个 `awesome` launcher 会启动私有 Python
-进程，并在 Ink 界面与单次 headless Turn 之间选择；所有产品行为都保留在 Python Core 中，
-TypeScript 只提交意图并投影类型化结果。
+进程，并在 Ink 界面、单次 headless Turn 与一个本地 User Skill 包命令之间选择；所有 runtime
+与 package 规则都保留在 Python Core 中，TypeScript 只解析公共意图并投影类型化
+结果。
 
 本文档是权威技术概览。[`docs/architecture/`](docs/architecture/README.zh-CN.md) 下的专题
 文档会解释各个边界，但不会重新定义系统。
@@ -13,8 +14,8 @@ TypeScript 只提交意图并投影类型化结果。
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                          入口与展示                                       │
 │                                                                           │
-│  awesome launcher                     Ink + React TUI / Headless run      │
-│  CLI 参数                              输入 / UX / 最终文本或 JSON          │
+│  awesome launcher                  Ink TUI / Headless run / Skills CLI   │
+│  CLI 参数                           输入 / UX / 结果投影                    │
 └───────────────────────────────────┬───────────────────────────────────────┘
                                     │
                                     │ stdio 上的 JSON-RPC 2.0 / NDJSON
@@ -72,7 +73,7 @@ awesome_agent/
 │   │   └── process_lifetime.py # Core 进程树所有权
 │   ├── extensions/
 │   │   ├── mcp/        # MCP stdio client 与 tool adapter
-│   │   └── skills/     # Skill 发现、加载与工具暴露
+│   │   └── skills/     # Skill 发现、加载、包管理与工具暴露
 │   ├── memory/         # USER.md、MEMORY.md、Mem0 Cloud、memory tool
 │   ├── modeling/       # 提供商中立消息与 model gateway
 │   ├── protocol/       # JSON-RPC 类型与私有 stdio Host
@@ -335,11 +336,11 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
 ### Application Host
 
 - **职责：** 工作区初始化、配置解析、Thread/Turn 生命周期、命令、前台 operation
-  串行化、interaction、取消、事件投影、恢复和组装。
+  串行化、interaction、取消、事件投影、恢复、组装，以及初始化前的本地 User Skill 包 use case。
 - **不负责：** 模型推理、图路由、工具实现或 UI 渲染。
 - **主要文件：** `application/facade.py`、`application/composition.py`、
   `application/bootstrap.py`、`application/turns.py`、
-  `application/operations.py`。
+  `application/operations.py`、`application/skill_management.py`。
 - **依赖：** Agent Core、当前 adapter、Conversation、Storage、Core、Context、Extensions
   和 Memory。
 
@@ -349,6 +350,13 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
 operation 是否准入，并把拒绝转换成既有的 Protocol v4 握手错误；它既不维护并行 phase
 machine，也不解析 response payload 来推断 readiness。这次内部所有权迁移不会改变
 Protocol v4 的 request、result 或 error 形状。
+
+私有 `skill.list`、`skill.install` 与 `skill.remove` operation 只在该 phase 恰好为
+`UNINITIALIZED` 时准入。一个由 Application 持有的 pre-initialize transition 使三者彼此
+互斥，也与 `initialize` 互斥；完成后 phase 不变，也不会构建 Workspace Runtime。私有 client
+随后可以初始化同一个 Core，并发现变更后的 User package tree。官方 `awesome skills` CLI 是
+一次性的，会在取得结果后关闭 Core。两条路径都不会热更新已经初始化的 Session 所持有的
+不可变 Skill catalog。
 
 受信激活完成后，backend 会发布一个 frozen、slotted 的 `WorkspaceRuntime`。它是请求可见
 的快照，统一包含已解析配置以及组装后的 Conversation、Turn、command、tool、model
@@ -506,11 +514,13 @@ identity 的旧记录与被中断的 pending mutation 无法区分，恢复会�
 
 ### Skills 与 MCP
 
-- **职责：** 发现 bundled/user/受信 workspace Skills，分配并验证不可变 Session identity，
-  加载有界指令、连接配置的 MCP stdio server，并将扩展 tool 适配到共享 registry。
+- **职责：** 发现 bundled/user/受信 workspace Skills，校验并管理本地 User 包，分配并验证
+  不可变 Session identity，加载有界指令、连接配置的 MCP stdio server，并将扩展 tool 适配到
+  共享 registry。
 - **不负责：** 权限或替代执行路径。
 - **主要文件：** `extensions/skills/discovery.py`、
-  `extensions/skills/loader.py`、`extensions/mcp/manager.py`、
+  `extensions/skills/loader.py`、`extensions/skills/manifest.py`、
+  `extensions/skills/package_manager.py`、`extensions/mcp/manager.py`、
   `extensions/mcp/adapter.py`。
 
 每个有效 Skill 都会冻结版本化 package/`SKILL.md` identity。Turn manifest 与 checkpoint
@@ -518,7 +528,15 @@ identity 的旧记录与被中断的 pending mutation 无法区分，恢复会�
 按该冻结模式过滤，`context.read` 硬准入会在 policy 之前验证操作与 identity，并在返回内容前
 再次验证。Workspace Skill path 还会在不跟随 link 或 reparse point 的情况下重新校验完整的
 受信任 anchor 链。一个无效 package 仍是隔离诊断，Runtime 重建或 package 漂移不能扩大
-恢复中 Turn 的 Skill scope。MCP 会在 page、tool-count、byte 与 deadline 边界
+恢复中 Turn 的 Skill scope。
+
+本地包管理只接受经过校验的目录或 ZIP source，并跨进程序列化操作。全新安装通过一次同目录
+no-replace 原子 rename，把 staged package 发布到不存在的 target。Replace 与 remove 是由
+marker 驱动的可恢复事务，不是一次原子替换：它们会 quarantine 旧 target，在发布前回滚，
+并在发布后向前完成清理。调用方取消时会继续等待 owned worker，直到事务收敛，不设置
+wall-clock 清理 deadline，随后重新抛出取消。
+
+MCP 会在 page、tool-count、byte 与 deadline 边界
 下消费完整分页 catalog，编译所有 JSON Schema 和完整 namespaced tool name，再构建全部
 generation-bound Registry entry。Manager 持有 server lock 时同步替换完整 Registry
 namespace，并且不经过新的 `await` 就发布相匹配的 client、catalog、generation 与
@@ -554,7 +572,8 @@ client、使候选 generation 失效、移除该 server namespace，并发布脱
 - **主要文件：** `protocol/jsonrpc.py`、`protocol/stdio.py`、
   `tui/src/core/process.ts`、`tui/src/app/App.tsx`、
   `tui/src/app/submission-coordinator.ts` 和
-  `tui/src/cli/startup-session-controller.ts`、`tui/src/cli/headless.ts`。
+  `tui/src/cli/startup-session-controller.ts`、`tui/src/cli/headless.ts`、
+  `tui/src/cli/skills.ts`。
 
 两个仅属于 session 的 controller 把异步时序移出 React render tree，但不创建另一套状态
 框架。`StartupSessionController` 继续处理类型化的 trust、state reset 和启动 Thread
@@ -733,6 +752,7 @@ history 存储有界 summary。
 - 第二个外部 memory service 必须证明共享 provider abstraction 的必要性；
 - 未来界面适配 `ApplicationFacade` 和类型化 event，而不是重新实现 Core 行为。
 
-产品 roadmap 还包含单命令 Skills 安装、Multi-Agent delegation、search tool、Cron task、
-Gateway messaging 和可选 Docker tool backend。这些是未来 capability，不属于当前系统图。
-Docker backend 会位于 Tool Executor policy 之下，不会替代 workspace trust。
+产品 roadmap 还包含 Multi-Agent delegation、search tool、Cron task、Gateway messaging 和
+可选 Docker tool backend。这些是未来 capability，不属于当前系统图。本地单命令 User Skill
+包管理已经属于当前 Application 与 CLI 边界。Docker backend 会位于 Tool Executor policy
+之下，不会替代 workspace trust。

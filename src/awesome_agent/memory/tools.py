@@ -5,11 +5,11 @@ from collections.abc import Callable
 
 from pydantic import BaseModel, Field, field_validator
 
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
 )
-from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
 from awesome_agent.core.tools.context import ToolExecutionContext, ToolHandler
 from awesome_agent.core.tools.contracts import (
     ToolArguments,

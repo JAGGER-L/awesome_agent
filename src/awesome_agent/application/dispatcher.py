@@ -10,7 +10,7 @@ from awesome_agent.application.commands import (
     CommandOwner,
 )
 from awesome_agent.application.foreground import ForegroundArbiter, ForegroundBusy
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
 )

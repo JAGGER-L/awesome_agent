@@ -24,6 +24,8 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 ├── .provider-credential-transaction.env
 ├── .state.lock
 ├── .config.yaml.lock
+├── .skills.lock
+├── .skills-transaction.json
 ├── config.yaml
 ├── ui.json
 ├── logs/
@@ -105,8 +107,24 @@ Ink 拥有的 UI preferences。当前 schema：
 
 ### `<HOME>/skills/`
 
-User Skill 包，通常为 `<HOME>/skills/<name>/SKILL.md` 加可选资源。User Skills 是本地受信任
-输入，并保留现有链接行为；更严格的禁止 reparse 包规则应用于 Workspace Skills。见
+User Skill 包，通常为 `<HOME>/skills/<name>/SKILL.md` 加可选资源。Bundled 与 User Skills
+使用相同的固定 package 和 `SKILL.md` identity 要求；Workspace Skills 还会固定完整的受信任
+Workspace 链。每种来源的资源遍历都拒绝逃逸、link、junction 和其他 reparse 组成部分。
+
+`awesome skills install` 会在发布 User 包前校验完整的本地目录或 ZIP。本地 source 遍历以及
+installed/quarantine 包清理都会拒绝跨越 filesystem 或 mount boundary，其中包括 POSIX mount
+与 bind boundary；Windows volume mount 遍历由既有的 reparse-point 拒绝覆盖。
+
+`<HOME>/.skills.lock` 会跨进程序列化 list 和 mutation 操作；
+`<HOME>/.skills-transaction.json` 记录进行中的安装、替换或移除。全新安装通过一次同目录
+no-replace 原子 rename，把已校验 stage 发布到不存在的 target。Replace 不是一次原子替换：
+它依次记录 `prepared`、把 target rename 到 quarantine、记录 `quarantined`、把 stage rename
+到 target，并在清理前记录 `published`。Remove 围绕 target-to-quarantine 记录相同 phase，
+只在发布后删除 quarantine。Recovery 会在发布前回滚 replace/remove，在发布后向前完成
+quarantine 清理。
+
+事务运行或等待恢复期间，`skills/` 下可能出现私有 `.skill-stage-*` 与
+`.skill-quarantine-*` 目录。Awesome 可能仍在运行时，不要编辑或删除这些 artifact。见
 [Skills](../extensions/skills.zh-CN.md)。
 
 ### Local Memory 文件
@@ -118,13 +136,13 @@ User Skill 包，通常为 `<HOME>/skills/<name>/SKILL.md` 加可选资源。Use
 
 ### User 状态 mutation 锁
 
-Core 会在线程和进程之间串行化 `config.yaml`、`.env`、`USER.md` 以及每个
-Workspace `MEMORY.md` 的 read-modify-write 事务。它使用一个持久的单字节 sibling
+Core 会在线程和进程之间串行化 `config.yaml`、`.env`、`USER.md` 与每个 Workspace
+`MEMORY.md` 的 read-modify-write 事务。它使用一个持久的单字节 sibling
 `.<resource>.lock`；已经隐藏的 `.env` 使用 `.env.lock`，不会再增加一个前导点。
-等待这些锁有明确上限，且不在 event-loop 线程中运行，因此另一进程不会冻结
-foreground cancellation 或状态渲染。已取消的 mutation 会先在有界清理窗口内完成
-已经开始的文件系统事务，再报告取消；错过该窗口的 worker 不能之后再提交内存状态。
-在之后的进程重新加载持久文件前，必须把该 worker 的文件系统 outcome 视为不确定。
+等待这些锁有明确上限，且不在 event-loop 线程中运行，因此另一进程不会冻结 foreground
+cancellation 或状态渲染。已取消的 mutation 会先在有界清理窗口内完成已经开始的文件系统
+事务，再报告取消；错过该窗口的 worker 不能之后再提交内存状态。在之后的进程重新加载
+持久文件前，必须把该 worker 的文件系统 outcome 视为不确定。
 
 等待锁达到 deadline 时，Command 和 credential RPC 会返回可重试的
 `operation_busy`，Memory tool 调用会返回可重试的 `timeout`。不安全或不可用的
@@ -133,9 +151,21 @@ sidecar/平台锁有两种类型化 envelope：Application command 或 RPC 返�
 不可重试的 `state_unavailable` `ToolOutput`。这些错误是固定且脱敏的，不会暴露
 sidecar 路径或操作系统异常。
 
-这些 sidecar 是协调 artifact，不是配置或 Memory 内容。只要 Awesome 进程可能仍在运行，
-就不要编辑或删除它们。第一次 mutation 前缺失它们是正常的；Core 会按需创建，
-并拒绝 link、reparse point、非常规文件，以及打开后 identity 与路径不匹配的 sidecar。
+Skill package 操作使用独立的 `.skills.lock`；等待锁有明确上限，并在 event-loop 线程外运行。
+Source 大小、entry 数和文件读取同样有界。但 owned package worker 一旦开始，cancellation-safe
+收敛就没有 wall-clock 清理 deadline：调用方被取消时，Core 会继续等待 worker，直到事务
+到达可恢复的终态，再重新抛出原始取消。它不会 detach 一个会让之后文件系统 outcome 变成
+未知的 worker。
+
+对于 Skill package RPC，不可用或竞争中的 `.skills.lock` 会返回可重试的
+`operation_busy`；无法安全完成的包事务（包括 installed/quarantine 清理发现跨 boundary）
+会返回可重试的 `state_unavailable`。Source 校验、source 跨 boundary、大小、名称已存在和
+名称不存在错误则返回不可重试的 `invalid_arguments`，并携带有界诊断 code。
+
+这些 lock file 和包事务 marker 是协调 artifact，不是配置、Memory 或 Skill 包内容。只要
+Awesome 进程可能仍在运行，就不要编辑或删除它们。第一次 mutation 前缺失它们是正常的；
+Core 会按需创建，并拒绝 link、reparse point、非常规文件，以及打开后 identity 与路径不匹配
+的 sidecar。
 
 ## Workspace 拥有的文件
 

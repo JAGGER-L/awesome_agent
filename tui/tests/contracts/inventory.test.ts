@@ -21,6 +21,9 @@ describe("protocol inventory", () => {
   it("contains the complete product method inventory", () => {
     expect(methodNames).toEqual([
       "initialize",
+      "skill.list",
+      "skill.install",
+      "skill.remove",
       "application.getState",
       "thread.list",
       "thread.search",

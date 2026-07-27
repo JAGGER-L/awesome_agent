@@ -52,6 +52,9 @@ The current request methods are:
 | Method | Purpose |
 | --- | --- |
 | `initialize` | negotiate identity and perform startup/bootstrap |
+| `skill.list` | list valid installed User Skill packages before initialization |
+| `skill.install` | validate and install or replace one local User Skill package before initialization |
+| `skill.remove` | remove one installed User Skill package before initialization |
 | `application.getState` | read authoritative Application state |
 | `thread.list` | page workspace Threads |
 | `thread.search` | page workspace-isolated conversation substring matches |
@@ -114,7 +117,12 @@ component, not stdio Host state:
 
 ```text
 UNINITIALIZED
+  -> skill.* starts: PREINITIALIZE_ACTIVE
   -> initialize starts: INITIALIZING
+
+PREINITIALIZE_ACTIVE (guard; BootstrapPhase remains UNINITIALIZED)
+  -> result/error/cancellation after the owned worker converges: UNINITIALIZED
+  -> another skill.* or initialize: reject
 
 INITIALIZING
   -> ready result: READY
@@ -135,11 +143,21 @@ Before dispatch, the Host maps the method to the closed
 only translates a rejection to the wire; it does not maintain another phase
 enum or inspect serialized request/result payloads to advance readiness.
 
-Before `READY`, ordinary requests receive a stable server-not-initialized or
-server-not-ready error. A second concurrent initialize receives
-`initialization_in_progress`. During bootstrap, only the matching interaction,
-another initialize, cancellation, and shutdown are admitted. A malformed or v3
-initialize never advances the Application phase.
+The three private `skill.*` methods are the only ordinary-looking methods
+available at plain `UNINITIALIZED`. They share one Application-owned
+pre-initialize guard, are mutually exclusive with one another and with
+`initialize`, and never initialize Application themselves. After one completes,
+a private client may initialize the same Core and discovery observes the changed
+User package tree. The official `awesome skills` CLI instead performs one
+request and closes Core. Neither path hot-updates an already initialized
+Session's immutable catalog.
+
+Before `READY`, all other ordinary requests receive a stable
+server-not-initialized or server-not-ready error. Once initialization starts,
+`skill.*` is no longer admitted. A second concurrent initialize receives
+`initialization_in_progress`; the matching bootstrap interaction, cancellation,
+and shutdown retain their defined control paths. A malformed or v3 initialize
+never advances the Application phase.
 
 Initialization remains repeatable after `READY` so a surface retry can observe
 the current snapshot without creating a second Application. These ownership

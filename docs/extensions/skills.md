@@ -84,6 +84,67 @@ Keep the body imperative and testable: state when the Skill applies, required
 inputs, ordered work, stop conditions, verification, and expected output. Put
 large background material in resources so it is loaded only when needed.
 
+## Install and manage User Skills
+
+Use the standalone CLI when you want Awesome to manage the User source safely:
+
+```text
+awesome skills list
+awesome skills install <local-directory-or-zip> [--replace]
+awesome skills remove <name> [--yes]
+```
+
+`list` reports valid packages installed directly under `<AWESOME_HOME>/skills`;
+it does not merge Bundled or Workspace sources. Use `/skills` inside a session
+to inspect the effective catalog after precedence, disabled names, and
+diagnostics are applied.
+
+The install source is local and may be either a directory that is itself the
+package root or a ZIP whose archive root directly contains `SKILL.md`. A single
+top-level wrapper directory is not stripped. Relative source paths are resolved
+from the directory where the command starts. The first release does not accept
+URLs or provide a remote registry, signatures, or automatic updates.
+
+Before publishing anything, Core validates the complete package and its
+manifest. A package may contain at most 512 entries and 32 MiB of expanded file
+content; each file is limited to 1 MiB. A ZIP file is additionally limited to
+32 MiB. Traversal, absolute paths, duplicate or colliding paths, links,
+junctions, reparse points, non-regular files, encrypted ZIP entries, and binary
+or invalid `SKILL.md` content are rejected. Local source traversal and cleanup
+of installed or quarantined packages also reject crossing a filesystem or mount
+boundary, including POSIX mount and bind boundaries; Windows volume mounts are
+covered by reparse-point rejection. The TUI launcher does not duplicate these
+package rules.
+
+List, install, replace, and remove operations are serialized across processes.
+For a fresh install, Core fully validates a private stage, records a `prepared`
+transaction, and publishes it to an absent target with one same-directory,
+no-replace atomic rename. Existing names require `--replace`.
+
+Replace and remove are recoverable transactions, not single atomic
+replacements. Replace records `prepared`, renames the existing target to a
+private quarantine, records `quarantined`, renames the validated stage to the
+target, and records `published` before deleting the quarantine. Those are two
+separate forward renames, so recovery rolls back to the original package before
+the published marker and rolls forward quarantine cleanup after it. Remove
+records the same phases around target-to-quarantine, marks the removal
+published, and then deletes the quarantine; recovery restores the target before
+publication or finishes cleanup after publication.
+
+Removal asks for confirmation only when stdin is a TTY; scripts must pass
+`--yes`, otherwise the command fails before Core starts. These commands affect
+only User packages and cannot mutate Bundled or Workspace sources. If a caller
+is cancelled after Core starts the owned worker, Core continues awaiting that
+worker until the package transaction converges, then re-raises cancellation;
+this convergence has no wall-clock cleanup deadline.
+
+The official `awesome skills` command is one-shot: it calls one private package
+RPC before initialization and then closes Core. An already initialized Session
+never hot-updates its immutable Skill catalog and must be restarted to discover
+a package change. A private client that still has the same Core in
+`UNINITIALIZED` may instead perform a package operation and then call
+`initialize`; that initialization discovers the changed package tree.
+
 ## Select and load Skills
 
 ```text
@@ -147,8 +208,9 @@ Skill reads use the built-in `context.read` capability. Permission modes allow
 that capability without a prompt only after hard admission proves that the
 requested package and operation occur in the Turn's frozen Skill scope. A
 Runtime rebuild, recovery, or on-disk package change cannot widen that scope;
-an identity mismatch returns `conflict`. Package changes take effect only in a
-new session.
+an identity mismatch returns `conflict`. Restart an already initialized Session
+after changing a package; an uninitialized Core discovers the current package
+tree when it is initialized.
 
 Resources use package-relative paths, reject absolute paths and `..`, and must
 be UTF-8 non-binary text no larger than 1 MiB. `read_skill_resource` returns at

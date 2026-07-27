@@ -74,6 +74,52 @@ Read `references/checklist.md` only when the change exposes an HTTP endpoint.
 正文应使用祈使语气并且可测试：说明 Skill 何时适用、所需输入、有序工作步骤、停止条件、
 验证和预期输出。将大段背景材料放入资源，以便只在需要时加载。
 
+## 安装和管理 User Skills
+
+需要由 Awesome 安全管理 User 来源时，使用独立 CLI：
+
+```text
+awesome skills list
+awesome skills install <local-directory-or-zip> [--replace]
+awesome skills remove <name> [--yes]
+```
+
+`list` 只报告直接安装在 `<AWESOME_HOME>/skills` 下的有效包，不会合并 Bundled 或
+Workspace 来源。要查看应用来源优先级、禁用名称和诊断后的有效 catalog，请在会话中使用
+`/skills`。
+
+安装源必须位于本机，可以是本身就是包根目录的目录，也可以是 archive root 直接包含
+`SKILL.md` 的 ZIP；不会剥离单层顶级包装目录。相对 source path 从命令启动目录解析。
+首版不接受 URL，也不提供远程 registry、签名或自动更新。
+
+Core 会在发布任何内容前校验完整包和 manifest。包最多包含 512 个 entry，所有文件展开后
+内容合计不超过 32 MiB，单个文件不超过 1 MiB；ZIP 文件本身还不得超过 32 MiB。Traversal、
+绝对路径、重复或冲突路径、link、junction、reparse point、非常规文件、加密 ZIP entry，
+以及二进制或无效 `SKILL.md` 都会被拒绝。本地 source 遍历以及 installed/quarantine 包清理
+还会拒绝跨越 filesystem 或 mount boundary，包括 POSIX mount 与 bind boundary；Windows
+volume mount 由 reparse-point 拒绝覆盖。TUI launcher 不会复制这些包规则。
+
+列出、安装、替换和移除操作会跨进程串行执行。全新安装时，Core 会完整校验私有 stage、记录
+`prepared` 事务，再通过一次同目录且 no-replace 的原子 rename，把 stage 发布到原本不存在的
+target。已有名称必须显式提供 `--replace`。
+
+替换和移除是可恢复事务，不是一次原子替换。替换会记录 `prepared`，把已有 target rename 到
+私有 quarantine，记录 `quarantined`，再把已校验 stage rename 到 target，并在删除 quarantine
+前记录 `published`。这是两次独立的正向 rename，因此 recovery 会在 published marker 之前
+回滚到原包，在 marker 之后向前完成 quarantine 清理。移除会围绕 target-to-quarantine 记录
+相同 phase，标记移除已发布后再删除 quarantine；recovery 会在发布前恢复 target，或在发布后
+完成清理。
+
+只有 stdin 是 TTY 时，移除才会显示确认提示；脚本必须提供 `--yes`，否则命令会在 Core
+启动前失败。这些命令只影响 User 包，不能修改 Bundled 或 Workspace 来源。如果 Core 启动
+owned worker 后调用方被取消，Core 会继续等待该 worker，直到包事务收敛，再重新抛出取消；
+这种收敛没有 wall-clock 清理 deadline。
+
+官方 `awesome skills` 命令是一次性的：它在初始化前调用一个私有包 RPC，随后关闭 Core。
+已经初始化的 Session 绝不会热更新其不可变 Skill catalog，必须重启才能发现包变化。仍在
+同一个 `UNINITIALIZED` Core 上的私有 client 可以先执行包操作，再调用 `initialize`；该次
+初始化会发现变更后的 package tree。
+
 ## 选择和加载 Skills
 
 ```text
@@ -129,8 +175,8 @@ Skill 加载时，`allowed-tools` 会被冻结并作为诊断元数据返回。�
 
 Skill 读取使用内置 `context.read` capability。只有硬准入证明请求的包和操作位于该 Turn
 冻结的 Skill scope 中后，permission mode 才会无提示允许该 capability。Runtime 重建、恢复
-或磁盘上的包变化都不能扩大此 scope；identity 不匹配会返回 `conflict`。包变更只在新 Session
-中生效。
+或磁盘上的包变化都不能扩大此 scope；identity 不匹配会返回 `conflict`。包变更后应重启已经
+初始化的 Session；尚未初始化的 Core 会在 initialize 时发现当前 package tree。
 
 资源使用相对于包的路径，拒绝绝对路径和 `..`，并且必须是 UTF-8 非二进制文本且不大于
 1 MiB。`read_skill_resource` 每次调用最多返回 5,000 个估算 token，并报告是否发生截断。

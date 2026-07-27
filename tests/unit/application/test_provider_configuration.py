@@ -57,9 +57,9 @@ from awesome_agent.config.model_transaction import (
     ProviderModelTransactionPhase,
     ProviderModelTransactionRecord,
 )
-from awesome_agent.config.resource_lock import exclusive_resource_lock
 from awesome_agent.conversation import ConversationService, ThreadNotFound, ThreadView
 from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.resource_lock import exclusive_resource_lock
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage import ApplicationSQLite, ApplicationSQLiteUnavailable
 from awesome_agent.storage.conversations import SQLiteConversationRepositories

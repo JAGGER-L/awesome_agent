@@ -10,7 +10,7 @@ from typing import Any, cast
 import pytest
 from pydantic import SecretStr
 
-import awesome_agent.config.resource_lock as resource_lock
+import awesome_agent.core.resource_lock as resource_lock
 from awesome_agent.application.command_results import (
     CommandApplicationInteraction,
     CommandError,
@@ -43,10 +43,6 @@ from awesome_agent.application.operations import (
     OperationContinuation,
 )
 from awesome_agent.config import CredentialValidation, CredentialValidationStatus
-from awesome_agent.config.resource_lock import (
-    ResourceLockTimeout,
-    ResourceLockUnavailable,
-)
 from awesome_agent.context import ContextManifestItem
 from awesome_agent.conversation import (
     ThreadListPage,
@@ -58,6 +54,10 @@ from awesome_agent.core.events import (
     EventEnvelope,
     EventType,
     InteractionResolvedPayload,
+)
+from awesome_agent.core.resource_lock import (
+    ResourceLockTimeout,
+    ResourceLockUnavailable,
 )
 from awesome_agent.core.tools import (
     ToolExecutionContext,

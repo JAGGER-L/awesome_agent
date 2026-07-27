@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from awesome_agent.config import resource_lock
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core import resource_lock
+from awesome_agent.core.filesystem import open_directory
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
     exclusive_resource_lock,
 )
-from awesome_agent.core.filesystem import open_directory
 
 
 @pytest.mark.parametrize(

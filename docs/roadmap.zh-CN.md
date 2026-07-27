@@ -22,7 +22,8 @@ Awesome 目前提供：
   命令防误操作断路器；
 - 可见的 ChangeSet，以及 diff、undo、redo 和保守的崩溃恢复；
 - 彼此独立且可选的本地 Memory 与 Mem0 Cloud；
-- Bundled、User 和受信任 Workspace 三类 Skills；
+- Bundled、User 和受信任 Workspace 三类 Skills，以及对 User 包执行安全的本地目录/ZIP
+  列出、安装、替换和移除；
 - 使用经过校验且绑定 generation 的 catalog 的 MCP stdio 服务器；
 - 通过同一 Registry、Policy 与 Executor 提供可选的结构化 Tavily Web Search 与 Fetch，
   并具有每 Turn 预算、Thread 范围的联网同意和可持久引用；
@@ -44,15 +45,6 @@ Awesome 目前提供：
 条目，会把文档变成没有依据的承诺。
 
 ## 近期产品方向
-
-### 一条命令安装 Skills
-
-**用户需要：** 查找并安装 Skill 不应要求用户手工构造包目录。
-
-**不变量：** 安装必须保留 manifest 校验、来源优先级、Workspace 信任、有界读取和
-现有工具策略路径。发现更方便不能把 Skill 变成可执行权限。
-
-**待决策：** registry 所有权、包真实性、更新行为、版本固定、移除与离线安装。
 
 ### Multi-Agent 委派
 

@@ -30,6 +30,12 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
     ShutdownResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
@@ -62,6 +68,10 @@ _SERVER_NOT_READY = BootstrapRejection(
     message="Server not ready",
     diagnostic_code="server_not_ready",
 )
+_SKILL_MANAGEMENT_UNAVAILABLE = BootstrapRejection(
+    message="Skill package management is only available before initialization",
+    diagnostic_code="skill_management_requires_uninitialized",
+)
 
 
 class BootstrapAdmissionStub:
@@ -88,6 +98,7 @@ class BootstrapAdmissionStub:
             _SERVER_NOT_INITIALIZED,
             initialize=None,
             respond=_SERVER_NOT_INITIALIZED,
+            skills=None,
         )
 
     def initializing(self) -> None:
@@ -95,13 +106,24 @@ class BootstrapAdmissionStub:
             _SERVER_NOT_READY,
             initialize=_INITIALIZATION_IN_PROGRESS,
             respond=_SERVER_NOT_READY,
+            skills=_SKILL_MANAGEMENT_UNAVAILABLE,
         )
 
     def interaction_required(self) -> None:
-        self._configure(_SERVER_NOT_READY, initialize=None, respond=None)
+        self._configure(
+            _SERVER_NOT_READY,
+            initialize=None,
+            respond=None,
+            skills=_SKILL_MANAGEMENT_UNAVAILABLE,
+        )
 
     def ready(self) -> None:
-        self._configure(None, initialize=None, respond=None)
+        self._configure(
+            None,
+            initialize=None,
+            respond=None,
+            skills=_SKILL_MANAGEMENT_UNAVAILABLE,
+        )
 
     def _configure(
         self,
@@ -109,11 +131,15 @@ class BootstrapAdmissionStub:
         *,
         initialize: BootstrapRejection | None,
         respond: BootstrapRejection | None,
+        skills: BootstrapRejection | None,
     ) -> None:
         self._default = default
         self._overrides = {
             ApplicationOperation.INITIALIZE: initialize,
             ApplicationOperation.RESPOND_INTERACTION: respond,
+            ApplicationOperation.SKILL_LIST: skills,
+            ApplicationOperation.SKILL_INSTALL: skills,
+            ApplicationOperation.SKILL_REMOVE: skills,
             ApplicationOperation.CANCEL_OPERATION: None,
             ApplicationOperation.SHUTDOWN: None,
         }
@@ -216,6 +242,7 @@ class Facade:
     def __init__(self, event_sink: ProtocolEventSink | None = None) -> None:
         self.event_sink = event_sink
         self.shutdown_calls = 0
+        self.skill_calls: list[tuple[str, object]] = []
         self.bootstrap = BootstrapAdmissionStub()
 
     def bootstrap_rejection(
@@ -248,6 +275,37 @@ class Facade:
                 configuration_valid=True,
                 secret_status=SecretStatus(),
             )
+        )
+
+    async def list_skills(self) -> ApplicationResult[SkillListResult]:
+        self.skill_calls.append(("list", None))
+        return ApplicationResult.success(
+            SkillListResult(
+                skills=(
+                    SkillPackageSummary(name="review", description="Review code"),
+                )
+            )
+        )
+
+    async def install_skill(
+        self,
+        request: SkillInstallRequest,
+    ) -> ApplicationResult[SkillInstallResult]:
+        self.skill_calls.append(("install", request))
+        return ApplicationResult.success(
+            SkillInstallResult(
+                name="review",
+                status="replaced" if request.replace else "installed",
+            )
+        )
+
+    async def remove_skill(
+        self,
+        request: SkillRemoveRequest,
+    ) -> ApplicationResult[SkillRemoveResult]:
+        self.skill_calls.append(("remove", request))
+        return ApplicationResult.success(
+            SkillRemoveResult(name=request.name, status="removed")
         )
 
     async def list_threads(
@@ -1058,6 +1116,66 @@ async def test_business_request_before_initialize_is_explicitly_rejected(
         ApplicationOperation(method),
         ApplicationOperation.SHUTDOWN,
     ]
+
+
+@pytest.mark.asyncio
+async def test_skill_management_methods_are_available_only_before_initialize() -> None:
+    facade = Facade()
+    output = Output()
+    private_source = "C:\\private\\review.zip"
+
+    await serve_stdio(
+        facade,
+        reader=Chunks(
+            _request(1, "skill.list", {})
+            + _request(
+                2,
+                "skill.install",
+                {"source_path": private_source, "replace": True},
+            )
+            + _request(3, "skill.remove", {"name": "review"})
+            + _request(4, "shutdown", {})
+        ),
+        writer=JsonLineWriter(output),
+    )
+
+    frames = {frame["id"]: frame for frame in map(json.loads, output.frames)}
+    assert frames[1]["result"]["value"] == {
+        "skills": [{"name": "review", "description": "Review code"}]
+    }
+    assert frames[2]["result"]["value"] == {
+        "name": "review",
+        "status": "replaced",
+    }
+    assert frames[3]["result"]["value"] == {
+        "name": "review",
+        "status": "removed",
+    }
+    encoded = b"".join(output.frames).decode("utf-8")
+    assert private_source not in encoded
+    assert "restart_required" not in encoded
+    assert {call[0] for call in facade.skill_calls} == {"list", "install", "remove"}
+
+    initialized_facade = Facade()
+    initialized_output = Output()
+    await serve_stdio(
+        initialized_facade,
+        reader=Chunks(
+            _initialize_request(10)
+            + _request(11, "skill.list", {})
+            + _request(12, "shutdown", {})
+        ),
+        writer=JsonLineWriter(initialized_output),
+    )
+    initialized_frames = {
+        frame["id"]: frame for frame in map(json.loads, initialized_output.frames)
+    }
+    assert initialized_frames[11]["error"] == {
+        "code": -32002,
+        "message": "Skill package management is only available before initialization",
+        "data": {"diagnostic_code": "skill_management_requires_uninitialized"},
+    }
+    assert initialized_facade.skill_calls == []
 
 
 @pytest.mark.asyncio

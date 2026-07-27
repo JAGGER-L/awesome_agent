@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from awesome_agent.config.resource_lock import exclusive_resource_lock
+from awesome_agent.core.resource_lock import exclusive_resource_lock
 from awesome_agent.memory.models import (
     MemoryDocument,
     MemoryEntry,

@@ -117,6 +117,21 @@ function harness(overrides: Partial<CliDependencies> = {}) {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const surface = {
+    request: vi.fn(async (method: string, params: Record<string, unknown>) => {
+      if (method === "skill.list") {
+        return { ok: true, value: { skills: [] } };
+      }
+      if (method === "skill.install") {
+        return {
+          ok: true,
+          value: {
+            name: "review",
+            status: params.replace === true ? "replaced" : "installed",
+          },
+        };
+      }
+      return { ok: true, value: { name: params.name, status: "removed" } };
+    }),
     close: vi.fn(async () => undefined),
     session: {
       exit: Promise.resolve({
@@ -319,6 +334,130 @@ describe("runCli", () => {
     expect(value.dependencies.renderApplication).not.toHaveBeenCalled();
     expect(value.surface.close).toHaveBeenCalledOnce();
     expect(value.stdout.join("")).toBe("durable answer\n");
+  });
+
+  it("runs Skills list before initialize without requiring a TTY or Ink", async () => {
+    const value = harness({
+      argv: ["skills", "list"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+
+    expect(value.surface.request).toHaveBeenCalledWith("skill.list", {});
+    expect(value.dependencies.startApplication).not.toHaveBeenCalled();
+    expect(value.dependencies.renderApplication).not.toHaveBeenCalled();
+    expect(value.surface.close).toHaveBeenCalledOnce();
+    expect(value.stdout.join("")).toBe("No User Skills are installed.\n");
+    expect(value.stderr).toEqual([]);
+    expect(
+      vi.mocked(value.surface.request).mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      vi.mocked(value.surface.close).mock.invocationCallOrder[0] ??
+        Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("refuses non-TTY removal without --yes before starting Core", async () => {
+    const confirmSkillRemoval = vi.fn(async () => true);
+    const value = harness({
+      argv: ["skills", "remove", "review"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      confirmSkillRemoval,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(2);
+
+    expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+    expect(confirmSkillRemoval).not.toHaveBeenCalled();
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toContain("requires --yes");
+  });
+
+  it("rejects --replace without an install source before starting Core", async () => {
+    const value = harness({ argv: ["skills", "install", "--replace"] });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(2);
+
+    expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toContain(
+      "awesome skills install <local-directory-or-zip> [--replace]",
+    );
+  });
+
+  it("treats the default TTY removal response as a clean cancellation", async () => {
+    const confirmSkillRemoval = vi.fn(async () => false);
+    const value = harness({
+      argv: ["skills", "remove", "review"],
+      confirmSkillRemoval,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+
+    expect(confirmSkillRemoval).toHaveBeenCalledWith("review");
+    expect(value.dependencies.startSurface).not.toHaveBeenCalled();
+    expect(value.stdout.join("")).toBe("Skill removal cancelled.\n");
+    expect(value.stderr).toEqual([]);
+  });
+
+  it("allows --yes removal without a TTY and closes Core after the RPC", async () => {
+    const confirmSkillRemoval = vi.fn(async () => false);
+    const value = harness({
+      argv: ["skills", "remove", "review", "--yes"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      confirmSkillRemoval,
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(0);
+
+    expect(confirmSkillRemoval).not.toHaveBeenCalled();
+    expect(value.surface.request).toHaveBeenCalledWith("skill.remove", {
+      name: "review",
+    });
+    expect(value.surface.close).toHaveBeenCalledOnce();
+    expect(value.stdout.join("")).toContain("Removed Skill review.");
+    expect(value.stderr).toEqual([]);
+  });
+
+  it("reports a completed Skill mutation when Core shutdown cannot be confirmed", async () => {
+    const value = harness({
+      argv: ["skills", "install", "review.zip"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      closeSkillApplication: vi.fn(async () => false),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(1);
+
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toBe(
+      "Installed Skill review. Restart Awesome to use this change.\n" +
+        "Awesome Core did not shut down cleanly.\n",
+    );
+  });
+
+  it("reports a missing Core for non-interactive Skill commands", async () => {
+    const value = harness({
+      argv: ["skills", "list"],
+      stdinIsTTY: false,
+      stdoutIsTTY: false,
+      startSurface: vi.fn(async () => {
+        throw new CoreSpawnError(
+          "Unable to spawn Core executable: private-awesome-core",
+        );
+      }),
+    });
+
+    await expect(runCli(value.dependencies)).resolves.toBe(2);
+
+    expect(value.stdout).toEqual([]);
+    expect(value.stderr.join("")).toContain("Awesome Core");
+    expect(value.stderr.join("")).not.toContain("private-awesome-core");
+    expect(value.dependencies.startApplication).not.toHaveBeenCalled();
   });
 
   it("keeps unresolved headless interaction paths off stdout", async () => {

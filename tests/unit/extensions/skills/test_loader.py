@@ -553,6 +553,7 @@ def test_workspace_resource_rejects_parent_aba_through_directory_link(
         parent: DirectoryPin | None = None,
         name: str | None = None,
         expected_identity: CoreFileIdentity | None = None,
+        establish_mount_boundary: bool = False,
     ) -> DirectoryPin:
         nonlocal attacked
         if not attacked and parent is not None and name == "references":
@@ -563,9 +564,10 @@ def test_workspace_resource_rejects_parent_aba_through_directory_link(
             try:
                 return original_open(
                     path,
-                    parent=parent,
-                    name=name,
-                    expected_identity=expected_identity,
+                        parent=parent,
+                        name=name,
+                        expected_identity=expected_identity,
+                        establish_mount_boundary=establish_mount_boundary,
                 )
             finally:
                 _remove_directory_link(nested)
@@ -575,6 +577,7 @@ def test_workspace_resource_rejects_parent_aba_through_directory_link(
             parent=parent,
             name=name,
             expected_identity=expected_identity,
+            establish_mount_boundary=establish_mount_boundary,
         )
 
     monkeypatch.setattr(

@@ -21,11 +21,11 @@ from awesome_agent.application.middleware import (
     ApplicationOperation,
     DiagnosticUsage,
 )
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.filesystem import DirectoryPin
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     exclusive_resource_lock,
 )
-from awesome_agent.core.filesystem import DirectoryPin
 
 
 class _ProcessBarrier(Protocol):

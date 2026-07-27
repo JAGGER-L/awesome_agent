@@ -111,9 +111,18 @@ Host 绝不会通过解析序列化 result payload 来推进 readiness；类型�
 结果会先更新 Application；该路径属于 Protocol v4 wire contract。
 
 Ready 前，普通 request 会收到 JSON-RPC `-32002`，diagnostic 为 `server_not_initialized` 或
-`server_not_ready`。Initialize 运行期间，第二次 initialize 会收到 `initialization_in_progress`。
-等待期间允许匹配 bootstrap 的 `interaction.respond`。`operation.cancel` 和 `shutdown` 是紧急
-control，在 ready 前仍然允许。
+`server_not_ready`。有意保留的例外是 `skill.list`、`skill.install` 与 `skill.remove`：三者都
+只在 Application 恰好处于 `UNINITIALIZED` 时准入。Application 会为请求保留一个互斥的
+pre-initialize transition；该 transition 活动期间，另一个 Skill 包请求或 `initialize` 会收到
+`preinitialize_operation_in_progress`。请求完成不会调用 `initialize`，也不会推进 bootstrap
+phase；Application 仍处于 `UNINITIALIZED`。
+
+一旦 initialization 已开始，或 Application 已进入任何后续 phase，三个 Skill 包 method 都会
+收到 `skill_management_requires_uninitialized`。因此，私有 client 可以在同一个 Core 上依次
+运行包 method，再调用 initialize；初始化会发现变更后的 User 包。这不会热更新已经初始化的
+Session 所持有的不可变 catalog。Initialize 运行期间，第二次 initialize 会收到
+`initialization_in_progress`。等待期间允许匹配 bootstrap 的 `interaction.respond`。
+`operation.cancel` 和 `shutdown` 是紧急 control，在 ready 前仍然允许。
 
 ## Method catalog
 
@@ -123,6 +132,9 @@ Unicode string 长度。
 | Method | 严格 params | 成功 value |
 | --- | --- | --- |
 | `initialize` | `protocol_version`；1–128 的 `client_name`；1–64 的 `client_version` | `InitializeResult` |
+| `skill.list` | `{}` | `{ "skills": [{ "name": string, "description": string }] }`；最多 512 个唯一且按名称排序的条目 |
+| `skill.install` | 1–4,096 的 `source_path`，不得有首尾空白、NUL、CR 或 LF；可选严格 Boolean `replace`，默认 false | `{ "name": string, "status": "installed" | "replaced" }`；name 是规范名称 |
+| `skill.remove` | 匹配 `[a-z][a-z0-9-]{0,63}` 的规范 `name` | `{ "name": string, "status": "removed" }` |
 | `application.getState` | `{}` | 当前 `ApplicationState` snapshot |
 | `thread.list` | 可选 1–1,024 的 `cursor`；`limit` 为 1–200，默认 50 | Thread、`has_more`、可选 next cursor |
 | `thread.search` | trim 后 1–200 的 `query`；可选 1–1,024 的 `cursor`；`limit` 为 1–50，默认 50 | 与 `thread.list` 相同的 `ThreadListResult` |
@@ -134,6 +146,10 @@ Unicode string 长度。
 | `interaction.respond` | 1–128 的 `interaction_id`；`decision` enum | Accepted flag 和 status |
 | `operation.cancel` | 1–128 的 `operation_id` | Operation ID 以及是否请求了 cancellation |
 | `shutdown` | `{}` | `{ "stopped": true }` |
+
+三个 `skill.*` method 是一次性 `awesome skills` CLI 的私有包管理支持，不是 Agent tool。它们
+不会创建 Thread 或 Turn，也不会构建 Workspace Runtime。其 phase 与 concurrency 规则属于
+bootstrap admission，不是第二套由 Host 持有的状态机。
 
 `direct.execute` 会在预留 Operation 前执行与委托 `execute` 工具相同的 8,000 字符边界。
 超限命令会作为 invalid params 同步拒绝，且绝不会启动进程。

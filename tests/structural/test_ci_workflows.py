@@ -132,7 +132,6 @@ def test_required_ci_covers_every_product_boundary() -> None:
     assert isinstance(run, str)
     assert "tests/unit/core" in run
     assert "tests/unit/protocol" in run
-    assert "tests/unit/config/test_resource_lock.py" in run
     assert "tests/unit/config/test_user_state_concurrency.py" in run
     assert "tests/unit/memory/test_tools.py" in run
     assert "tests/integration/test_local_memory.py" in run

@@ -21,11 +21,11 @@ from awesome_agent.application.dispatcher import (
 )
 from awesome_agent.application.foreground import ForegroundArbiter, ForegroundKind
 from awesome_agent.application.operations import OperationBusy, OperationController
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.events import CollectingEventSink, EventEmitter
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
 )
-from awesome_agent.core.events import CollectingEventSink, EventEmitter
 
 
 async def successful_handler(intent: CommandIntent) -> CommandOutcome:

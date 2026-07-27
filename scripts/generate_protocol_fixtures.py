@@ -33,6 +33,10 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
     ShutdownResult,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveResult,
     StatusSnapshot,
     ThreadListResult,
     ThreadReadResult,
@@ -109,6 +113,9 @@ CAPABILITIES = ("threads", "turns", "commands", "web", "citations")
 
 METHODS = (
     "initialize",
+    "skill.list",
+    "skill.install",
+    "skill.remove",
     "application.getState",
     "thread.list",
     "thread.search",
@@ -339,6 +346,39 @@ def _valid_methods() -> dict[str, object]:
                     capabilities=CAPABILITIES,
                 )
             ),
+        ),
+        (
+            "skill.list",
+            "skill.list",
+            {},
+            _success(
+                SkillListResult(
+                    skills=(
+                        SkillPackageSummary(
+                            name="review",
+                            description="Review code safely",
+                        ),
+                    )
+                )
+            ),
+        ),
+        (
+            "skill.install.installed",
+            "skill.install",
+            {"source_path": "C:\\packages\\review", "replace": False},
+            _success(SkillInstallResult(name="review", status="installed")),
+        ),
+        (
+            "skill.install.replaced",
+            "skill.install",
+            {"source_path": "C:\\packages\\review.zip", "replace": True},
+            _success(SkillInstallResult(name="review", status="replaced")),
+        ),
+        (
+            "skill.remove",
+            "skill.remove",
+            {"name": "review"},
+            _success(SkillRemoveResult(name="review", status="removed")),
         ),
         (
             "application.get_state",
@@ -605,6 +645,42 @@ def _invalid_methods() -> dict[str, object]:
                 "name": "application.get_state.extra",
                 "method": "application.getState",
                 "params": {"extra": True},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.list.extra",
+                "method": "skill.list",
+                "params": {"extra": True},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.install.missing_source",
+                "method": "skill.install",
+                "params": {},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.install.replace_type",
+                "method": "skill.install",
+                "params": {"source_path": "review", "replace": 1},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.install.extra",
+                "method": "skill.install",
+                "params": {"source_path": "review", "extra": True},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.remove.invalid_name",
+                "method": "skill.remove",
+                "params": {"name": "../review"},
+                "expected": {"kind": "jsonrpc_error", "code": -32602},
+            },
+            {
+                "name": "skill.remove.extra",
+                "method": "skill.remove",
+                "params": {"name": "review", "extra": True},
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {

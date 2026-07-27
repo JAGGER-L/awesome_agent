@@ -1,9 +1,9 @@
 # Awesome Architecture
 
 Awesome is a terminal AI coding assistant. One `awesome` launcher starts a
-private Python process and selects either the Ink interface or one headless
-Turn; all product behavior remains in the Python Core, while TypeScript submits
-intent and projects typed results.
+private Python process and selects the Ink interface, one headless Turn, or one
+local User Skill package command; runtime and package rules remain in the
+Python Core, while TypeScript parses public intent and projects typed results.
 
 This document is the authoritative technical overview. Focused documents under
 [`docs/architecture/`](docs/architecture/README.md) explain individual
@@ -15,8 +15,8 @@ boundaries without redefining the system.
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                         Entry & Presentation                              │
 │                                                                           │
-│  awesome launcher                     Ink + React TUI / Headless run      │
-│  CLI arguments                        Input / UX / Final text or JSON     │
+│  awesome launcher                  Ink TUI / Headless run / Skills CLI   │
+│  CLI arguments                     Input / UX / Result projection        │
 └───────────────────────────────────┬───────────────────────────────────────┘
                                     │
                                     │ JSON-RPC 2.0 / NDJSON over stdio
@@ -75,7 +75,7 @@ awesome_agent/
 │   │   └── process_lifetime.py # Core process-tree ownership
 │   ├── extensions/
 │   │   ├── mcp/        # MCP stdio client and tool adapter
-│   │   └── skills/     # Skill discovery, loading, and tool exposure
+│   │   └── skills/     # Skill discovery, loading, package management, tools
 │   ├── memory/         # USER.md, MEMORY.md, Mem0 Cloud, memory tools
 │   ├── modeling/       # provider-neutral messages and model gateway
 │   ├── protocol/       # JSON-RPC types and private stdio Host
@@ -379,12 +379,13 @@ as authority.
 
 - **Responsibility:** workspace initialization, configuration resolution,
   Thread/Turn lifecycle, commands, foreground operation serialization,
-  interactions, cancellation, event projection, recovery, and composition.
+  interactions, cancellation, event projection, recovery, composition, and
+  pre-initialize local User Skill package use cases.
 - **Does not own:** model reasoning, graph routing, tool implementation, or UI
   rendering.
 - **Primary files:** `application/facade.py`, `application/composition.py`,
   `application/bootstrap.py`, `application/turns.py`,
-  `application/operations.py`.
+  `application/operations.py`, `application/skill_management.py`.
 - **Dependencies:** Agent Core, current adapters, Conversation, Storage, Core,
   Context, Extensions, and Memory.
 
@@ -396,6 +397,15 @@ operation is admitted and translates a rejection into the existing Protocol
 v4 handshake error. It neither keeps a parallel phase machine nor parses
 response payloads to infer readiness. Protocol v4 request, result, and error
 shapes are unchanged by this internal ownership move.
+
+The private `skill.list`, `skill.install`, and `skill.remove` operations are
+admitted only while that phase is exactly `UNINITIALIZED`. One Application-owned
+pre-initialize transition makes them mutually exclusive with each other and
+with `initialize`; completion leaves the phase unchanged and does not construct
+a Workspace Runtime. A private client may then initialize the same Core and
+discover the changed User package tree. The official `awesome skills` CLI is
+one-shot and closes Core after its result. Neither path hot-updates an already
+initialized Session's immutable Skill catalog.
 
 After trusted activation, the backend publishes one frozen, slotted
 `WorkspaceRuntime`. It is the request-visible snapshot of resolved
@@ -597,13 +607,14 @@ parallel output object for ordinary file changes.
 
 ### Skills and MCP
 
-- **Responsibility:** discover bundled/user/trusted-workspace Skills, assign and
-  verify immutable session identities, load bounded instructions, connect
-  configured MCP stdio servers, and adapt extension tools into the shared
-  registry.
+- **Responsibility:** discover bundled/user/trusted-workspace Skills, validate
+  and manage local User packages, assign and verify immutable session
+  identities, load bounded instructions, connect configured MCP stdio servers,
+  and adapt extension tools into the shared registry.
 - **Does not own:** permissions or an alternate execution path.
 - **Primary files:** `extensions/skills/discovery.py`,
-  `extensions/skills/loader.py`, `extensions/mcp/manager.py`,
+  `extensions/skills/loader.py`, `extensions/skills/manifest.py`,
+  `extensions/skills/package_manager.py`, `extensions/mcp/manager.py`,
   `extensions/mcp/adapter.py`.
 
 Every effective Skill freezes a versioned package/`SKILL.md` identity. The
@@ -615,6 +626,16 @@ paths additionally revalidate the complete trusted-anchor chain without
 following links or reparse points. One invalid package remains an isolated
 diagnostic, and Runtime rebuild or package drift cannot widen a recovering
 Turn's Skill scope.
+
+Local package management accepts only validated directory or ZIP sources and
+serializes operations across processes. A fresh install publishes a staged
+package to an absent target with one same-directory no-replace atomic rename.
+Replace and remove are marker-driven recoverable transactions, not single
+atomic replacements: they quarantine the old target, roll back before
+publication, and roll forward cleanup after publication. Caller cancellation
+continues awaiting the owned worker until this transaction converges, without a
+wall-clock cleanup deadline, and then re-raises cancellation.
+
 MCP consumes the complete paginated catalog under page, tool-count, byte, and
 deadline bounds, then compiles its JSON Schemas and complete namespaced tool
 names before building every generation-bound Registry entry. While holding the
@@ -658,7 +679,8 @@ does not import Memory or know Mem0 types.
 - **Primary files:** `protocol/jsonrpc.py`, `protocol/stdio.py`,
   `tui/src/core/process.ts`, `tui/src/app/App.tsx`,
   `tui/src/app/submission-coordinator.ts`, and
-  `tui/src/cli/startup-session-controller.ts`, `tui/src/cli/headless.ts`.
+  `tui/src/cli/startup-session-controller.ts`, `tui/src/cli/headless.ts`,
+  `tui/src/cli/skills.ts`.
 
 Two session-local controllers keep asynchronous sequencing out of the React
 render tree without creating another state framework. `StartupSessionController`
@@ -876,8 +898,9 @@ Current extension points are deliberately narrow:
 - a future surface adapts `ApplicationFacade` and typed events instead of
   reimplementing Core behavior.
 
-The product roadmap also identifies one-command Skills installation,
-Multi-Agent delegation, search tools, Cron tasks, Gateway
-messaging, and an optional Docker tool backend. These are future capabilities,
-not components in the current-system diagram. A Docker backend would sit below
-Tool Executor policy; it would not replace workspace trust.
+The product roadmap also identifies Multi-Agent delegation, search tools, Cron
+tasks, Gateway messaging, and an optional Docker tool backend. These are future
+capabilities, not components in the current-system diagram. Local one-command
+User Skill package management is already part of the current Application and
+CLI boundaries. A Docker backend would sit below Tool Executor policy; it would
+not replace workspace trust.

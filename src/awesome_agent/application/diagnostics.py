@@ -13,15 +13,15 @@ from contextlib import suppress
 from pathlib import Path
 
 from awesome_agent.application.middleware import ApplicationObservation
-from awesome_agent.config.resource_lock import (
-    ResourceLockTimeout,
-    exclusive_resource_lock,
-)
 from awesome_agent.core.filesystem import (
     DirectoryPin,
     lstat_child,
     open_directory,
     remove_child,
+)
+from awesome_agent.core.resource_lock import (
+    ResourceLockTimeout,
+    exclusive_resource_lock,
 )
 
 logger = logging.getLogger(__name__)

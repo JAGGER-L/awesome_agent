@@ -132,7 +132,20 @@ initialize and interaction outcomes update Application first. This ownership
 is internal and remains part of the Protocol v4 wire contract.
 
 Before ready, ordinary requests receive JSON-RPC `-32002` with diagnostic
-`server_not_initialized` or `server_not_ready`. While initialize is running, a
+`server_not_initialized` or `server_not_ready`. The deliberate exception is
+`skill.list`, `skill.install`, and `skill.remove`: each is admitted only while
+Application is exactly `UNINITIALIZED`. Application reserves one mutually
+exclusive pre-initialize transition for the request. While it is active,
+another Skill package request or `initialize` receives
+`preinitialize_operation_in_progress`. Completion does not call `initialize`
+or advance the bootstrap phase; Application remains `UNINITIALIZED`.
+
+Once initialization has started or Application has entered any later phase,
+all three Skill package methods receive
+`skill_management_requires_uninitialized`. A private client may therefore run
+package methods sequentially and then initialize that same Core; initialization
+discovers the resulting User packages. This does not hot-update the immutable
+catalog of an already initialized Session. While initialize is running, a
 second initialize receives `initialization_in_progress`. A matching bootstrap
 `interaction.respond` is admitted while waiting. `operation.cancel` and
 `shutdown` are urgent controls and remain admitted before ready.
@@ -145,6 +158,9 @@ Lengths are Unicode string lengths after JSON decoding.
 | Method | Strict params | Successful value |
 | --- | --- | --- |
 | `initialize` | `protocol_version`; `client_name` 1–128; `client_version` 1–64 | `InitializeResult` |
+| `skill.list` | `{}` | `{ "skills": [{ "name": string, "description": string }] }`; at most 512 entries, unique and name-sorted |
+| `skill.install` | `source_path` 1–4,096 with no surrounding whitespace, NUL, CR, or LF; optional strict Boolean `replace`, default false | `{ "name": string, "status": "installed" | "replaced" }`; name is canonical |
+| `skill.remove` | canonical `name` matching `[a-z][a-z0-9-]{0,63}` | `{ "name": string, "status": "removed" }` |
 | `application.getState` | `{}` | Current `ApplicationState` snapshot |
 | `thread.list` | optional `cursor` 1–1,024; `limit` 1–200, default 50 | Threads, `has_more`, optional next cursor |
 | `thread.search` | trimmed `query` 1–200; optional `cursor` 1–1,024; `limit` 1–50, default 50 | The same `ThreadListResult` as `thread.list` |
@@ -156,6 +172,11 @@ Lengths are Unicode string lengths after JSON decoding.
 | `interaction.respond` | `interaction_id` 1–128; `decision` enum | Accepted flag and status |
 | `operation.cancel` | `operation_id` 1–128 | Operation ID and whether cancellation was requested |
 | `shutdown` | `{}` | `{ "stopped": true }` |
+
+The three `skill.*` methods are private package-management support for the
+one-shot `awesome skills` CLI, not Agent tools. They neither create a Thread or
+Turn nor construct a Workspace Runtime. Their phase and concurrency rules are
+part of bootstrap admission, not a second Host-owned state machine.
 
 `direct.execute` validates the same 8,000-character command boundary as the
 delegated `execute` tool before reserving an Operation. Oversized commands are

@@ -20,7 +20,7 @@ from awesome_agent.config.credential_catalog import (
     credential_descriptor,
 )
 from awesome_agent.config.models import CredentialSelectionConfig, CredentialSource
-from awesome_agent.config.resource_lock import exclusive_resource_lock
+from awesome_agent.core.resource_lock import exclusive_resource_lock
 
 type ProviderName = Literal["deepseek", "kimi"]
 type CredentialService = Literal["deepseek", "kimi", "mem0"]

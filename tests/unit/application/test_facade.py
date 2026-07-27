@@ -19,6 +19,12 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveRequest,
+    SkillRemoveResult,
 )
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import (
@@ -53,6 +59,9 @@ from awesome_agent.storage import ApplicationSQLiteUnavailable
 
 METHODS = {
     "initialize",
+    "list_skills",
+    "install_skill",
+    "remove_skill",
     "get_state",
     "list_threads",
     "search_threads",
@@ -81,6 +90,31 @@ class Backend:
             workspace=WorkspacePresentation(display_path="C:\\workspace"),
             capabilities=("turns", "commands"),
         )
+
+    async def list_skill_packages(self) -> SkillListResult:
+        self.calls.append(("skill.list", None))
+        return SkillListResult(
+            skills=(
+                SkillPackageSummary(name="review", description="Review code"),
+            )
+        )
+
+    async def install_skill_package(
+        self,
+        request: SkillInstallRequest,
+    ) -> SkillInstallResult:
+        self.calls.append(("skill.install", request))
+        return SkillInstallResult(
+            name="review",
+            status="replaced" if request.replace else "installed",
+        )
+
+    async def remove_skill_package(
+        self,
+        request: SkillRemoveRequest,
+    ) -> SkillRemoveResult:
+        self.calls.append(("skill.remove", request))
+        return SkillRemoveResult(name=request.name, status="removed")
 
     async def application_state(self) -> ApplicationState:
         self.calls.append(("state", None))
@@ -200,6 +234,137 @@ async def test_facade_initialization_and_shutdown_are_idempotent() -> None:
     assert _unwrap(await facade.shutdown()).stopped is True
 
     assert [name for name, _ in backend.calls] == ["initialize", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_skill_management_is_serialized_and_preinitialize_only() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingBackend(Backend):
+        async def list_skill_packages(self) -> SkillListResult:
+            entered.set()
+            await release.wait()
+            return await super().list_skill_packages()
+
+    backend = BlockingBackend()
+    facade = LocalApplication(backend)
+    listing = asyncio.create_task(facade.list_skills())
+    await asyncio.wait_for(entered.wait(), timeout=0.5)
+
+    initializing = await facade.initialize()
+    concurrent = await facade.remove_skill(SkillRemoveRequest(name="review"))
+    shutdown = await facade.shutdown()
+    assert initializing.ok is False
+    assert initializing.error is not None
+    assert initializing.error.code is ProductErrorCode.OPERATION_BUSY
+    assert concurrent.ok is False
+    assert concurrent.error is not None
+    assert concurrent.error.code is ProductErrorCode.OPERATION_BUSY
+    assert shutdown.ok is False
+    assert shutdown.error is not None
+    assert shutdown.error.code is ProductErrorCode.OPERATION_BUSY
+    assert shutdown.error.data == {
+        "diagnostic_code": "preinitialize_operation_in_progress"
+    }
+    assert ("shutdown", None) not in backend.calls
+
+    release.set()
+    assert _unwrap(await listing).skills[0].name == "review"
+    assert _unwrap(await facade.initialize()).status is InitializeStatus.READY
+
+    after_initialize = await facade.install_skill(
+        SkillInstallRequest(source_path="review", replace=False)
+    )
+    assert after_initialize.ok is False
+    assert after_initialize.error is not None
+    assert after_initialize.error.code is ProductErrorCode.COMMAND_NOT_AVAILABLE
+    assert after_initialize.error.data == {
+        "diagnostic_code": "skill_management_requires_uninitialized"
+    }
+
+
+@pytest.mark.asyncio
+async def test_skill_list_preserves_catalog_size_failure() -> None:
+    class OversizedCatalogBackend(Backend):
+        async def list_skill_packages(self) -> SkillListResult:
+            raise ApplicationFailure(
+                ProductError(
+                    code=ProductErrorCode.RESULT_TOO_LARGE,
+                    message="The installed Skill catalog exceeds the supported limit.",
+                    data={"diagnostic_code": "package_too_large"},
+                )
+            )
+
+    result = await LocalApplication(OversizedCatalogBackend()).list_skills()
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code is ProductErrorCode.RESULT_TOO_LARGE
+    assert result.error.data == {"diagnostic_code": "package_too_large"}
+    assert "installation" not in result.error.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_skill_management_reserves_preinitialize_before_middleware() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingSkillMiddleware:
+        async def __call__(
+            self,
+            invocation: ApplicationInvocation,
+            next_call: ApplicationCall,
+        ) -> object:
+            if invocation.operation is ApplicationOperation.SKILL_LIST:
+                entered.set()
+                await release.wait()
+            return await next_call(invocation)
+
+    backend = Backend()
+    facade = LocalApplication(backend, middleware=(BlockingSkillMiddleware(),))
+    listing = asyncio.create_task(facade.list_skills())
+    await asyncio.wait_for(entered.wait(), timeout=0.5)
+
+    initializing = await facade.initialize()
+    assert initializing.ok is False
+    assert initializing.error is not None
+    assert initializing.error.code is ProductErrorCode.OPERATION_BUSY
+    assert backend.calls == []
+
+    listing.cancel("cancel-preinitialize")
+    with pytest.raises(asyncio.CancelledError) as cancellation:
+        await asyncio.wait_for(listing, timeout=0.5)
+    assert cancellation.value.args == ("cancel-preinitialize",)
+    assert facade.bootstrap_rejection(ApplicationOperation.INITIALIZE) is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_blocks_new_skill_management_before_closing_backend() -> None:
+    close_entered = asyncio.Event()
+    close_release = asyncio.Event()
+
+    class BlockingCloseBackend(Backend):
+        async def close_application(self) -> None:
+            self.calls.append(("shutdown", None))
+            close_entered.set()
+            await close_release.wait()
+
+    backend = BlockingCloseBackend()
+    facade = LocalApplication(backend)
+    shutdown = asyncio.create_task(facade.shutdown())
+    await asyncio.wait_for(close_entered.wait(), timeout=0.5)
+
+    install = await facade.install_skill(
+        SkillInstallRequest(source_path="review", replace=False)
+    )
+    assert install.ok is False
+    assert install.error is not None
+    assert install.error.code is ProductErrorCode.COMMAND_NOT_AVAILABLE
+    assert all(call[0] != "skill.install" for call in backend.calls)
+
+    close_release.set()
+    assert _unwrap(await shutdown).stopped is True
 
 
 @pytest.mark.asyncio
@@ -326,6 +491,19 @@ async def test_facade_delegates_typed_surface_neutral_intents() -> None:
     facade = LocalApplication(backend)
     intent = CommandIntent(name=CommandName.STATUS)
 
+    assert _unwrap(await facade.list_skills()).skills[0].name == "review"
+    assert (
+        _unwrap(
+            await facade.install_skill(
+                SkillInstallRequest(source_path="review", replace=True)
+            )
+        ).status
+        == "replaced"
+    )
+    assert (
+        _unwrap(await facade.remove_skill(SkillRemoveRequest(name="review"))).status
+        == "removed"
+    )
     assert _unwrap(await facade.get_state()).workspace_trusted is True
     assert _unwrap(await facade.list_threads(ThreadListQuery())).threads == ()
     assert (
@@ -375,6 +553,11 @@ async def test_facade_routes_only_closed_operation_names_through_middleware() ->
             return await next_call(invocation)
 
     facade = LocalApplication(backend, middleware=(Recorder(),))
+    await facade.list_skills()
+    await facade.install_skill(
+        SkillInstallRequest(source_path="C:\\private\\skill", replace=False)
+    )
+    await facade.remove_skill(SkillRemoveRequest(name="private-skill"))
     await facade.initialize()
     await facade.get_state()
     await facade.list_threads(ThreadListQuery())
@@ -399,7 +582,9 @@ async def test_facade_routes_only_closed_operation_names_through_middleware() ->
     await facade.cancel_operation("operation_private")
     await facade.shutdown()
 
-    assert [item.operation for item in invocations] == list(ApplicationOperation)
+    operations = [item.operation for item in invocations]
+    assert len(operations) == len(ApplicationOperation)
+    assert set(operations) == set(ApplicationOperation)
     encoded = "".join(item.model_dump_json() for item in invocations)
     for forbidden in (
         "thread_private",
@@ -407,6 +592,8 @@ async def test_facade_routes_only_closed_operation_names_through_middleware() ->
         "private.example",
         "private-secret",
         "private-credential",
+        "private-skill",
+        "private\\skill",
         "interaction_private",
         "operation_private",
     ):

@@ -23,6 +23,11 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
     ShutdownResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     StatusSnapshot,
     ThreadListQuery,
     ThreadListResult,
@@ -50,6 +55,18 @@ class ApplicationFacade(Protocol):
     ) -> BootstrapRejection | None: ...
 
     async def initialize(self) -> ApplicationResult[InitializeResult]: ...
+
+    async def list_skills(self) -> ApplicationResult[SkillListResult]: ...
+
+    async def install_skill(
+        self,
+        request: SkillInstallRequest,
+    ) -> ApplicationResult[SkillInstallResult]: ...
+
+    async def remove_skill(
+        self,
+        request: SkillRemoveRequest,
+    ) -> ApplicationResult[SkillRemoveResult]: ...
 
     async def get_state(self) -> ApplicationResult[ApplicationState]: ...
 
@@ -101,6 +118,18 @@ class ApplicationFacade(Protocol):
 
 class _ApplicationBackend(Protocol):
     async def initialize_application(self) -> InitializeResult: ...
+
+    async def list_skill_packages(self) -> SkillListResult: ...
+
+    async def install_skill_package(
+        self,
+        request: SkillInstallRequest,
+    ) -> SkillInstallResult: ...
+
+    async def remove_skill_package(
+        self,
+        request: SkillRemoveRequest,
+    ) -> SkillRemoveResult: ...
 
     async def application_state(self) -> ApplicationState: ...
 
@@ -160,6 +189,8 @@ class LocalApplication:
         self._diagnostics_close = diagnostics_close
         self._bootstrap = ApplicationBootstrap()
         self._initialize_result: ApplicationResult[InitializeResult] | None = None
+        self._shutdown_lock = asyncio.Lock()
+        self._closing = False
         self._closed = False
 
     def bootstrap_rejection(
@@ -174,8 +205,9 @@ class LocalApplication:
             return ApplicationResult.failure(
                 ProductError(
                     code=ProductErrorCode.OPERATION_BUSY,
-                    message="Application initialization is in progress.",
+                    message=rejection.message,
                     retryable=True,
+                    data={"diagnostic_code": rejection.diagnostic_code},
                 )
             )
         transition = self._bootstrap.begin_initialize()
@@ -201,6 +233,30 @@ class LocalApplication:
                 self._backend.initialize_application
             )
         return self._initialize_result
+
+    async def list_skills(self) -> ApplicationResult[SkillListResult]:
+        return await self._invoke_preinitialize(
+            ApplicationOperation.SKILL_LIST,
+            self._backend.list_skill_packages,
+        )
+
+    async def install_skill(
+        self,
+        request: SkillInstallRequest,
+    ) -> ApplicationResult[SkillInstallResult]:
+        return await self._invoke_preinitialize(
+            ApplicationOperation.SKILL_INSTALL,
+            lambda: self._backend.install_skill_package(request),
+        )
+
+    async def remove_skill(
+        self,
+        request: SkillRemoveRequest,
+    ) -> ApplicationResult[SkillRemoveResult]:
+        return await self._invoke_preinitialize(
+            ApplicationOperation.SKILL_REMOVE,
+            lambda: self._backend.remove_skill_package(request),
+        )
 
     async def get_state(self) -> ApplicationResult[ApplicationState]:
         return await self._invoke(
@@ -300,20 +356,36 @@ class LocalApplication:
         )
 
     async def shutdown(self) -> ApplicationResult[ShutdownResult]:
-        if self._closed:
-            return ApplicationResult.success(ShutdownResult())
-        try:
-            result = await self._invoke(
-                ApplicationOperation.SHUTDOWN,
-                lambda: self._call(self._close_backend),
-            )
-        except BaseException as error:
-            await self._close_diagnostics(primary=error)
-            raise
-        if result.ok:
-            self._closed = True
-            await self._close_diagnostics()
-        return result
+        async with self._shutdown_lock:
+            if self._closed:
+                return ApplicationResult.success(ShutdownResult())
+            if self._bootstrap.preinitialize_active:
+                return ApplicationResult.failure(
+                    ProductError(
+                        code=ProductErrorCode.OPERATION_BUSY,
+                        message="A pre-initialize operation is in progress.",
+                        retryable=True,
+                        data={
+                            "diagnostic_code": "preinitialize_operation_in_progress"
+                        },
+                    )
+                )
+            self._closing = True
+            try:
+                try:
+                    result = await self._invoke(
+                        ApplicationOperation.SHUTDOWN,
+                        lambda: self._call(self._close_backend),
+                    )
+                except BaseException as error:
+                    await self._close_diagnostics(primary=error)
+                    raise
+                if result.ok:
+                    self._closed = True
+                    await self._close_diagnostics()
+                return result
+            finally:
+                self._closing = False
 
     async def _close_backend(self) -> ShutdownResult:
         await self._backend.close_application()
@@ -335,6 +407,46 @@ class LocalApplication:
                     retryable=True,
                 )
             )
+
+    async def _invoke_preinitialize[T](
+        self,
+        operation: ApplicationOperation,
+        call: Callable[[], Awaitable[T]],
+    ) -> ApplicationResult[T]:
+        if self._closed or self._closing:
+            return ApplicationResult.failure(
+                ProductError(
+                    code=ProductErrorCode.COMMAND_NOT_AVAILABLE,
+                    message=(
+                        "Application is already shut down."
+                        if self._closed
+                        else "Application shutdown is in progress."
+                    ),
+                )
+            )
+        rejection = self._bootstrap.rejection(operation)
+        if rejection is not None:
+            busy = rejection.diagnostic_code == "preinitialize_operation_in_progress"
+            return ApplicationResult.failure(
+                ProductError(
+                    code=(
+                        ProductErrorCode.OPERATION_BUSY
+                        if busy
+                        else ProductErrorCode.COMMAND_NOT_AVAILABLE
+                    ),
+                    message=rejection.message,
+                    retryable=busy,
+                    data={"diagnostic_code": rejection.diagnostic_code},
+                )
+            )
+        transition = self._bootstrap.begin_preinitialize(operation)
+        try:
+            return await self._invoke(
+                operation,
+                lambda: self._call(call),
+            )
+        finally:
+            self._bootstrap.complete_preinitialize(transition)
 
     async def _invoke[T](
         self,
@@ -386,6 +498,11 @@ __all__ = [
     "ProviderCredentialSetRequest",
     "ProviderCredentialSetResult",
     "ShutdownResult",
+    "SkillInstallRequest",
+    "SkillInstallResult",
+    "SkillListResult",
+    "SkillRemoveRequest",
+    "SkillRemoveResult",
     "StatusSnapshot",
     "ThreadListQuery",
     "ThreadListResult",

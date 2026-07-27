@@ -362,6 +362,7 @@ def test_workspace_discovery_rejects_package_check_open_aba(
         parent: DirectoryPin | None = None,
         name: str | None = None,
         expected_identity: CoreFileIdentity | None = None,
+        establish_mount_boundary: bool = False,
     ) -> DirectoryPin:
         nonlocal attacked
         if (
@@ -376,9 +377,10 @@ def test_workspace_discovery_rejects_package_check_open_aba(
             try:
                 return original_open(
                     path,
-                    parent=parent,
-                    name=name,
-                    expected_identity=expected_identity,
+                        parent=parent,
+                        name=name,
+                        expected_identity=expected_identity,
+                        establish_mount_boundary=establish_mount_boundary,
                 )
             finally:
                 _remove_directory_link(package)
@@ -388,6 +390,7 @@ def test_workspace_discovery_rejects_package_check_open_aba(
             parent=parent,
             name=name,
             expected_identity=expected_identity,
+            establish_mount_boundary=establish_mount_boundary,
         )
 
     monkeypatch.setattr(

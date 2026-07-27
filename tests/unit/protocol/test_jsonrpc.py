@@ -26,6 +26,12 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetResult,
     ProviderCredentialSetStatus,
     ShutdownResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillPackageSummary,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
@@ -89,6 +95,37 @@ class Facade:
                 configuration_valid=True,
                 secret_status=SecretStatus(),
             )
+        )
+
+    async def list_skills(self) -> ApplicationResult[SkillListResult]:
+        self.calls.append(("skill.list", None))
+        return ApplicationResult.success(
+            SkillListResult(
+                skills=(
+                    SkillPackageSummary(name="review", description="Review code"),
+                )
+            )
+        )
+
+    async def install_skill(
+        self,
+        request: SkillInstallRequest,
+    ) -> ApplicationResult[SkillInstallResult]:
+        self.calls.append(("skill.install", request))
+        return ApplicationResult.success(
+            SkillInstallResult(
+                name="review",
+                status="replaced" if request.replace else "installed",
+            )
+        )
+
+    async def remove_skill(
+        self,
+        request: SkillRemoveRequest,
+    ) -> ApplicationResult[SkillRemoveResult]:
+        self.calls.append(("skill.remove", request))
+        return ApplicationResult.success(
+            SkillRemoveResult(name=request.name, status="removed")
         )
 
     async def list_threads(
@@ -182,6 +219,9 @@ class Facade:
 def test_dispatcher_exposes_exact_protocol_v4_method_table() -> None:
     assert set(JsonRpcDispatcher(Facade()).methods) == {
         "initialize",
+        "skill.list",
+        "skill.install",
+        "skill.remove",
         "application.getState",
         "thread.list",
         "thread.search",
@@ -201,6 +241,13 @@ def test_dispatcher_exposes_exact_protocol_v4_method_table() -> None:
     ("method", "params", "call"),
     [
         ("initialize", INITIALIZE_PARAMS, "initialize"),
+        ("skill.list", {}, "skill.list"),
+        (
+            "skill.install",
+            {"source_path": "C:\\packages\\review.zip", "replace": True},
+            "skill.install",
+        ),
+        ("skill.remove", {"name": "review"}, "skill.remove"),
         ("application.getState", {}, "state"),
         ("thread.list", {}, "list"),
         ("thread.search", {"query": "  provider retry  "}, "search"),
@@ -264,6 +311,74 @@ async def test_closed_method_table_dispatches_typed_params(
     assert "result" in response
     assert response["result"]["ok"] is (method != "command.execute")
     assert facade.calls[0][0] == call
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("skill.list", {"extra": True}),
+        ("skill.install", {}),
+        ("skill.install", {"source_path": "review", "replace": 1}),
+        ("skill.install", {"source_path": " review "}),
+        ("skill.install", {"source_path": "review\0hidden"}),
+        ("skill.install", {"source_path": "review", "extra": True}),
+        ("skill.remove", {"name": "Review"}),
+        ("skill.remove", {"name": "../review"}),
+        ("skill.remove", {"name": "review", "extra": True}),
+    ],
+)
+async def test_skill_management_params_are_strict_and_closed(
+    method: str,
+    params: dict[str, object],
+) -> None:
+    facade = Facade()
+
+    response = await JsonRpcDispatcher(facade).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "skill_invalid",
+            "method": method,
+            "params": params,
+        }
+    )
+
+    assert response is not None
+    assert response["error"]["code"] == -32602
+    assert facade.calls == []
+
+
+@pytest.mark.asyncio
+async def test_skill_list_catalog_size_failure_uses_stable_product_error() -> None:
+    class OversizedCatalogFacade(Facade):
+        async def list_skills(self) -> ApplicationResult[SkillListResult]:
+            return ApplicationResult.failure(
+                ProductError(
+                    code=ProductErrorCode.RESULT_TOO_LARGE,
+                    message="The installed Skill catalog exceeds the supported limit.",
+                    data={"diagnostic_code": "package_too_large"},
+                )
+            )
+
+    response = await JsonRpcDispatcher(OversizedCatalogFacade()).dispatch(
+        {
+            "jsonrpc": "2.0",
+            "id": "skill_catalog_too_large",
+            "method": "skill.list",
+            "params": {},
+        }
+    )
+
+    assert response is not None
+    assert response["result"] == {
+        "ok": False,
+        "error": {
+            "code": "result_too_large",
+            "message": "The installed Skill catalog exceeds the supported limit.",
+            "retryable": False,
+            "data": {"diagnostic_code": "package_too_large"},
+        },
+    }
 
 
 @pytest.mark.asyncio

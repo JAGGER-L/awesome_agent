@@ -22,6 +22,36 @@ const identifierSchema = boundedText(1, 128);
 const clientMessageIdentifierSchema = identifierSchema.regex(
   /^client_[A-Za-z0-9_-]+$/,
 );
+const skillNameSchema = boundedText(1, 64).regex(/^[a-z][a-z0-9-]{0,63}$/u);
+const skillPackageSummarySchema = z.strictObject({
+  name: skillNameSchema,
+  description: boundedText(1, 500),
+});
+const skillListResultSchema = z
+  .strictObject({
+    skills: z.array(skillPackageSummarySchema).max(512),
+  })
+  .superRefine(({ skills }, context) => {
+    const names = skills.map((skill) => skill.name);
+    const sorted = [...names].sort();
+    if (
+      new Set(names).size !== names.length ||
+      names.some((name, index) => name !== sorted[index])
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Installed Skills must be unique and name ordered",
+      });
+    }
+  });
+const skillInstallResultSchema = z.strictObject({
+  name: skillNameSchema,
+  status: z.enum(["installed", "replaced"]),
+});
+const skillRemoveResultSchema = z.strictObject({
+  name: skillNameSchema,
+  status: z.literal("removed"),
+});
 
 export const initializeParamsSchema = z.strictObject({
   protocol_version: z.literal(4),
@@ -111,6 +141,30 @@ export const methodSchemas = {
     params: initializeParamsSchema,
     value: initializeResultSchema,
     result: applicationResultSchema(initializeResultSchema),
+  },
+  "skill.list": {
+    params: emptyParamsSchema,
+    value: skillListResultSchema,
+    result: applicationResultSchema(skillListResultSchema),
+  },
+  "skill.install": {
+    params: z.strictObject({
+      source_path: boundedText(1, 4_096).refine(
+        (value) =>
+          value === value.trim() &&
+          !value.includes("\0") &&
+          !/[\r\n]/u.test(value),
+        "Skill source path is invalid",
+      ),
+      replace: z.boolean().default(false),
+    }),
+    value: skillInstallResultSchema,
+    result: applicationResultSchema(skillInstallResultSchema),
+  },
+  "skill.remove": {
+    params: z.strictObject({ name: skillNameSchema }),
+    value: skillRemoveResultSchema,
+    result: applicationResultSchema(skillRemoveResultSchema),
   },
   "application.getState": {
     params: emptyParamsSchema,

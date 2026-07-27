@@ -23,6 +23,8 @@ from awesome_agent.application.contracts import (
     ProductError,
     ProductErrorCode,
     ProviderCredentialSetRequest,
+    SkillInstallRequest,
+    SkillRemoveRequest,
     ThreadListQuery,
     ThreadReadQuery,
     ThreadSearchQuery,
@@ -165,6 +167,9 @@ class JsonRpcDispatcher:
         self._method_completed = method_completed
         self._methods: dict[str, MethodHandler] = {
             "initialize": self._initialize,
+            "skill.list": self._list_skills,
+            "skill.install": self._install_skill,
+            "skill.remove": self._remove_skill,
             "application.getState": self._get_state,
             "thread.list": self._list_threads,
             "thread.search": self._search_threads,
@@ -256,6 +261,18 @@ class JsonRpcDispatcher:
     async def _get_state(self, params: Mapping[str, object]) -> object:
         _EmptyParams.model_validate(params)
         return await self._facade.get_state()
+
+    async def _list_skills(self, params: Mapping[str, object]) -> object:
+        _EmptyParams.model_validate(params)
+        return await self._facade.list_skills()
+
+    async def _install_skill(self, params: Mapping[str, object]) -> object:
+        request = SkillInstallRequest.model_validate(params)
+        return await self._facade.install_skill(request)
+
+    async def _remove_skill(self, params: Mapping[str, object]) -> object:
+        request = SkillRemoveRequest.model_validate(params)
+        return await self._facade.remove_skill(request)
 
     async def _list_threads(self, params: Mapping[str, object]) -> object:
         wire = _ThreadListParams.model_validate(params)

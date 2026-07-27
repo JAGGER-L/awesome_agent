@@ -10,13 +10,13 @@ from pydantic import BaseModel
 
 import awesome_agent.core.tools.executor as tool_executor
 import awesome_agent.memory.tools as memory_tools
-from awesome_agent.config.resource_lock import (
+from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
+from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
+from awesome_agent.core.resource_lock import (
     ResourceLockTimeout,
     ResourceLockUnavailable,
     exclusive_resource_lock,
 )
-from awesome_agent.core.cancellation import run_cancellation_safe_blocking_call
-from awesome_agent.core.events import CollectingEventSink, EventEmitter, EventType
 from awesome_agent.core.tools import (
     ToolActivityDraft,
     ToolActivityWriter,

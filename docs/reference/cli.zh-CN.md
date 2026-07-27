@@ -1,17 +1,21 @@
 # CLI 与键盘参考
 
-公共 `awesome` 可执行文件提供 Ink 终端界面与 headless 单 Turn 模式。官方安装器打包了
+公共 `awesome` 可执行文件提供 Ink 终端界面、headless 单 Turn 模式和本地 User Skill
+包管理。官方安装器打包了
 私有 Node.js 22.23.1
 runtime，因此使用安装器的用户不需要预装 Node。从源码运行或直接安装 npm 包，需要
-Node.js 22.23.1 或更高版本。Ink 界面还需要交互式 stdin 和 stdout；`awesome run` 是受支持的
-非交互界面。客户端会通过其启动环境发现并启动
-一个私有 `awesome-core` 进程；Core 执行所有模型、状态和工具操作。
+Node.js 22.23.1 或更高版本。Ink 界面还需要交互式 stdin 和 stdout；`awesome run` 和不需要
+提示确认的 `awesome skills` 命令是受支持的非交互界面。客户端会通过其启动环境发现并启动
+一个私有 `awesome-core` 进程；Core 执行所有模型、状态、工具和 Skill 包操作。
 
 ## 启动语法
 
 ```text
 Usage: awesome [--continue | --resume [thread_id]]
        awesome run <prompt> [--new | --thread <id>] [options]
+       awesome skills list
+       awesome skills install <local-directory-or-zip> [--replace]
+       awesome skills remove <name> [--yes]
 
 Options:
   --continue            Resume the most recent thread in this workspace
@@ -27,6 +31,13 @@ Headless run options:
   --permission-mode <request_approval|accept_edits|full_access>
                          Select the process-local permission mode
   --allow-network        Declare network intent for this process only
+
+Skill management:
+  list                   List installed User Skills
+  install <path>         Install a local directory or ZIP as a User Skill
+  --replace              Replace an installed Skill with the same name
+  remove <name>          Remove an installed User Skill
+  --yes                  Confirm removal without an interactive prompt
 ```
 
 | 调用 | 结果 |
@@ -37,15 +48,61 @@ Headless run options:
 | `awesome --resume <thread_id>` | 恢复一个精确或可接受缩写的 Thread ID。 |
 | `awesome run "<prompt>"` | 在新 Thread 中运行一个 Turn，并打印最终回答。 |
 | `awesome run "<prompt>" --thread <id>` | 在精确指定的现有 Thread 中运行一个 Turn。 |
+| `awesome skills list` | 按名称列出有效的已安装 User Skill 包。 |
+| `awesome skills install <path>` | 校验、stage 本地目录或 ZIP，再通过 no-replace rename 发布。 |
+| `awesome skills install <path> --replace` | 通过可恢复的 quarantine 事务替换已安装包。 |
+| `awesome skills remove <name> [--yes]` | Quarantine 并移除已安装 User Skill；缺少 `--yes` 时先提示确认。 |
 | `awesome -V`、`awesome --version` | 打印数字产品版本并退出。 |
 | `awesome -h`、`awesome --help` | 打印帮助并退出。 |
 
 交互启动 flag 不能组合。Headless 选项只在 `run` 后有效；`--new` 与 `--thread` 互斥。
 不接受其他公共启动 flag。未知或格式错误的参数会把同一份 usage 契约写入 stderr，并以
-退出码 2 退出。
+退出码 2 退出。`skills list`、`skills install` 和 `skills remove --yes` 不要求 TTY。
+删除时若没有 `--yes`，则要求交互式 stdin 并默认为 No；非交互调用缺少 `--yes` 时会在启动
+Core 前被拒绝。
 
 启动目录就是 Workspace。允许普通输入之前，会先解决信任、本地状态兼容性和 Core/TUI
 protocol 兼容性。见[文件与状态](files-and-state.zh-CN.md)和 [Protocol v4](protocol.zh-CN.md)。
+
+## 本地 Skill 包管理
+
+Skill 包命令会启动同一个私有 Core，但在 `initialize` 之前调用专用的 Protocol v4 RPC。
+它们不会进入 Ink、创建 Thread 或 Turn、加载模型，也不会把包管理暴露为 Agent 工具。
+任何非零退出都会保持 stdout 为空，并把有界诊断写入 stderr。如果安装、替换或移除 RPC
+已经成功，但 Core 未能干净关闭，stderr 会同时报告两个事实：包变更已经完成且需要重启，
+但进程清理失败。命令仍以退出码 1 结束；不要盲目重试该 mutation。
+
+```text
+awesome skills list
+awesome skills install ./review-skill
+awesome skills install ./review-skill.zip --replace
+awesome skills remove review-skill
+awesome skills remove review-skill --yes
+```
+
+`list` 只报告 `<AWESOME_HOME>/skills` 下的有效 User 包，并按名称排序。Bundled 和 Workspace
+Skills 仍可通过产品内 `/skills` catalog 查看，但不是安装目标。
+
+`install` 接受一个本地目录或 ZIP；相对 source path 从启动目录解析。包、manifest、路径、
+link、大小、entry 数与重复路径检查全部由 Core 完成，Node CLI 不复制这套安全逻辑。Source
+遍历和 installed-package 清理还会拒绝跨越 filesystem 或 mount boundary，包括 POSIX mount
+与 bind boundary；Windows volume mount 由 reparse-point 拒绝覆盖。全新名称会先完成 staging
+与校验，再通过一次同目录 no-replace rename 发布到不存在的 target。已有同名包时必须显式
+传入 `--replace`，否则失败。Replace 不是一次原子替换：Core 会记录事务 phase，先把当前
+target rename 到 quarantine，再把 stage rename 到 target。Recovery 会在发布前回滚，或在
+发布后向前完成 quarantine 清理。
+
+`remove` 接受一个规范 Skill 名称。Core 会把 target rename 到 quarantine，标记移除已发布，
+再删除 quarantine；recovery 会在发布前恢复 target，或在发布后完成清理。缺少 `--yes` 时，
+简洁的 `Remove Skill <name>? [y/N]` 提示写入 stderr，并从交互式 stdin 读取回答；只有 `y`
+或 `yes` 会继续。使用 pipe 或重定向的输入必须传入 `--yes`，否则命令以退出码 2 结束，且
+不会启动 Core。
+
+成功安装、替换和删除以退出码 0 结束。包或 Core 故障返回退出码 1；格式错误的参数和已知
+启动前提错误返回退出码 2。官方命令会执行一个 pre-initialize RPC，随后关闭 Core。已经
+初始化的 Session 会保留不可变 Skill catalog，因此选择或加载变更后的包之前应重启该
+Session。私有 client 也可以先在仍未初始化的 Core 上执行 mutation，再初始化同一个进程；
+初始化会发现变更后的 package tree。本命令族不支持远程 registry、URL、签名或自动更新。
 
 ## Headless 运行
 

@@ -16,9 +16,9 @@ from awesome_agent.config import (
     load_config_sources,
 )
 from awesome_agent.config.loader import WORKSPACE_CONFIG_MAX_BYTES
-from awesome_agent.config.resource_lock import exclusive_resource_lock
 from awesome_agent.core.filesystem import DirectoryPin, ReadRegularFile
 from awesome_agent.core.filesystem import FileIdentity as CoreFileIdentity
+from awesome_agent.core.resource_lock import exclusive_resource_lock
 from awesome_agent.paths import AwesomePaths
 
 

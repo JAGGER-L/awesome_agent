@@ -50,6 +50,12 @@ class _InteractionTransition:
     decision: InteractionDecision
 
 
+@dataclass(frozen=True, slots=True)
+class _PreInitializeTransition:
+    generation: int
+    operation: ApplicationOperation
+
+
 _INITIALIZATION_IN_PROGRESS = BootstrapRejection(
     message="Server initialization is in progress",
     diagnostic_code="initialization_in_progress",
@@ -61,6 +67,21 @@ _SERVER_NOT_INITIALIZED = BootstrapRejection(
 _SERVER_NOT_READY = BootstrapRejection(
     message="Server not ready",
     diagnostic_code="server_not_ready",
+)
+_PREINITIALIZE_OPERATION_IN_PROGRESS = BootstrapRejection(
+    message="A pre-initialize operation is in progress",
+    diagnostic_code="preinitialize_operation_in_progress",
+)
+_SKILL_MANAGEMENT_REQUIRES_UNINITIALIZED = BootstrapRejection(
+    message="Skill package management is only available before initialization",
+    diagnostic_code="skill_management_requires_uninitialized",
+)
+_SKILL_MANAGEMENT_OPERATIONS = frozenset(
+    {
+        ApplicationOperation.SKILL_LIST,
+        ApplicationOperation.SKILL_INSTALL,
+        ApplicationOperation.SKILL_REMOVE,
+    }
 )
 _URGENT_OPERATIONS = frozenset(
     {
@@ -84,6 +105,8 @@ class ApplicationBootstrap:
         self._interaction_id: str | None = None
         self._next_initialize_generation = 0
         self._active_initialize_generation: int | None = None
+        self._next_preinitialize_generation = 0
+        self._active_preinitialize: _PreInitializeTransition | None = None
 
     @property
     def phase(self) -> BootstrapPhase:
@@ -93,6 +116,10 @@ class ApplicationBootstrap:
     def interaction_id(self) -> str | None:
         return self._interaction_id
 
+    @property
+    def preinitialize_active(self) -> bool:
+        return self._active_preinitialize is not None
+
     def rejection(
         self,
         operation: ApplicationOperation | None,
@@ -101,6 +128,17 @@ class ApplicationBootstrap:
 
         if operation is not None and type(operation) is not ApplicationOperation:
             raise TypeError("Bootstrap admission requires an ApplicationOperation.")
+        if operation in _SKILL_MANAGEMENT_OPERATIONS:
+            if self._phase is not BootstrapPhase.UNINITIALIZED:
+                return _SKILL_MANAGEMENT_REQUIRES_UNINITIALIZED
+            if self._active_preinitialize is not None:
+                return _PREINITIALIZE_OPERATION_IN_PROGRESS
+            return None
+        if (
+            operation is ApplicationOperation.INITIALIZE
+            and self._active_preinitialize is not None
+        ):
+            return _PREINITIALIZE_OPERATION_IN_PROGRESS
         if operation in _URGENT_OPERATIONS or self._phase is BootstrapPhase.READY:
             return None
         if operation is ApplicationOperation.INITIALIZE:
@@ -121,6 +159,8 @@ class ApplicationBootstrap:
     def begin_initialize(self) -> _InitializeTransition:
         """Enter INITIALIZING synchronously and return an exact rollback token."""
 
+        if self._active_preinitialize is not None:
+            raise RuntimeError("A pre-initialize operation is already in progress.")
         if self._phase is BootstrapPhase.INITIALIZING:
             raise RuntimeError("Application initialization is already in progress.")
         origin = self._stable_state()
@@ -132,6 +172,30 @@ class ApplicationBootstrap:
         self._phase = BootstrapPhase.INITIALIZING
         self._interaction_id = None
         return _InitializeTransition(generation=generation, origin=origin)
+
+    def begin_preinitialize(
+        self,
+        operation: ApplicationOperation,
+    ) -> _PreInitializeTransition:
+        if operation not in _SKILL_MANAGEMENT_OPERATIONS:
+            raise ValueError("Operation is not available before initialization.")
+        rejection = self.rejection(operation)
+        if rejection is not None:
+            raise RuntimeError(rejection.message)
+        self._next_preinitialize_generation += 1
+        transition = _PreInitializeTransition(
+            generation=self._next_preinitialize_generation,
+            operation=operation,
+        )
+        self._active_preinitialize = transition
+        return transition
+
+    def complete_preinitialize(self, transition: _PreInitializeTransition) -> None:
+        if type(transition) is not _PreInitializeTransition:
+            raise TypeError("Invalid pre-initialize transition token.")
+        if self._active_preinitialize != transition:
+            raise RuntimeError("Pre-initialize transition is no longer active.")
+        self._active_preinitialize = None
 
     def complete_initialize(
         self,

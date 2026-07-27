@@ -275,6 +275,7 @@ def test_tui_process_authority_is_confined_to_core_adapter() -> None:
 
     assert sources
     assert node_importers == {
+        "src/cli/skills.ts": {"node:readline/promises"},
         "src/cli/runtime-checks.ts": {"node:fs", "node:path"},
         "src/core/process.ts": {"node:child_process", "node:path"},
         "src/preferences/paths.ts": {"node:os", "node:path"},

@@ -210,6 +210,33 @@ anchor 链。因此，发现后替换 package 会 fail closed。一个无效 pac
 受包含的，并在该次受检打开的前后保持稳定；但它不会把普通嵌套目录或资源内容与发现时
 身份比较。因此，在资源读取开始前已经安全完成的替换可以被读取到。
 
+本地 User 包管理属于 Application use case，不是 Agent 工具，也不是第二套发现实现：
+
+```text
+awesome skills CLI
+  -> argument parsing + optional TTY confirmation
+  -> private Protocol v4 skill.list / skill.install / skill.remove
+  -> Application SkillManagementService
+  -> one blocking worker operation
+  -> SkillPackageManager validation + recoverable package transaction
+  -> <AWESOME_HOME>/skills
+```
+
+包 RPC 只在 Application 恰好处于 `UNINITIALIZED` 时准入；一个由 Application 持有的
+pre-initialize guard 使三者彼此互斥，也与 `initialize` 互斥。RPC 本身不会构建
+`WorkspaceRuntime`、Thread、Turn、graph、model 或 Tool Executor，并且不会改变 phase。Node
+launcher 只拥有命令语法、稳定输出和移除确认；manifest、archive、path、size、identity、
+locking 与 recovery 规则全部只由 Core 拥有。官方 CLI 收到一个有界 product result 后会关闭
+私有 Core。其他私有 client 可以在同一个仍未初始化的 Core 上执行 mutation，随后调用
+initialize；discovery 会看到变更后的包。Session 一旦初始化，其 catalog 就保持不可变，绝不
+hot-update。
+
+全新安装通过一次同目录 no-replace rename，把完整校验后的 stage 发布到不存在的 target。
+替换是两次正向 rename（target 到 quarantine，再由 stage 到 target）组成的可恢复序列，不是
+一次原子替换。移除同样先 quarantine target，再执行已发布后的清理。Marker 驱动发布前回滚
+与发布后向前清理。调用方取消时会等待 owned worker 收敛，不设 wall-clock 清理 deadline，
+随后重新抛出取消。
+
 `auto` 会冻结最多 64 个 identity 的确定性 catalog，并暴露 `load_skill` 与
 `read_skill_resource`；它不会执行 Skill。`off` 不冻结 Skill 来源，也不暴露两个工具。
 具名模式会 eagerly 冻结正文和 identity 作为 mandatory system context，并且只为该 package

@@ -31,6 +31,8 @@ change, and helps verify the result.
 - run one Agent Turn non-interactively with deterministic text or JSON output;
 - choose Request approval, Accept edits, or Thread-scoped Full access;
 - extend tasks with Skills, MCP tools, local Memory, and Mem0 Cloud;
+- list, install, replace, and remove validated local User Skill packages without
+  opening an interactive chat;
 - search and extract public Web content through an optional, cited Tavily
   integration;
 - work with DeepSeek and Kimi models.
@@ -97,6 +99,9 @@ awesome --continue
 awesome --resume
 awesome --resume <thread_id>
 awesome run "Analyze the test failure" --trust-workspace
+awesome skills list
+awesome skills install ./review-api
+awesome skills remove review-api --yes
 awesome --version
 awesome --help
 ```
@@ -108,6 +113,15 @@ target an existing Thread. Trust, permission checks, cancellation, and the same
 private Core/Application lifecycle still apply; an unresolved interaction
 exits without printing a partial answer. See the [CLI reference](docs/reference/cli.md)
 for options and exit codes.
+
+`awesome skills` is the standalone, non-chat package-management path for User
+Skills. Install from a local package directory or ZIP, add `--replace` to
+replace an existing package, and use `remove --yes` for unattended removal.
+Without `--yes`, removal asks for confirmation only in an interactive terminal.
+The official package command is one-shot and closes its private Core. An
+already initialized Awesome Session keeps its immutable Skill catalog, so
+restart that Session before selecting or loading a changed package. See
+[Skills](docs/extensions/skills.md) for the package and safety contract.
 
 If startup finds an unfinished Turn, Awesome asks before continuing it. A
 verified local checkpoint offers Retry first; a shell or MCP call whose outcome

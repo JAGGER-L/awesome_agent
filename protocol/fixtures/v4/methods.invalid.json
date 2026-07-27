@@ -38,6 +38,73 @@
     },
     {
       "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.list",
+      "name": "skill.list.extra",
+      "params": {
+        "extra": true
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.install",
+      "name": "skill.install.missing_source",
+      "params": {}
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.install",
+      "name": "skill.install.replace_type",
+      "params": {
+        "replace": 1,
+        "source_path": "review"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.install",
+      "name": "skill.install.extra",
+      "params": {
+        "extra": true,
+        "source_path": "review"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.remove",
+      "name": "skill.remove.invalid_name",
+      "params": {
+        "name": "../review"
+      }
+    },
+    {
+      "expected": {
+        "code": -32602,
+        "kind": "jsonrpc_error"
+      },
+      "method": "skill.remove",
+      "name": "skill.remove.extra",
+      "params": {
+        "extra": true,
+        "name": "review"
+      }
+    },
+    {
+      "expected": {
         "code": -32600,
         "kind": "jsonrpc_error"
       },

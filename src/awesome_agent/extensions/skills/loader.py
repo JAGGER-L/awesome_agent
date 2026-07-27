@@ -304,6 +304,7 @@ def _pinned_skill_package(boundary: _SkillBoundary) -> PinnedPlainDirectory:
         boundary.anchor,
         boundary.package_root,
         expected_identities=identities,
+        mount_boundary=boundary.source_root,
     )
 
 

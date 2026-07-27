@@ -55,6 +55,9 @@ def test_bootstrap_admission_is_one_closed_phase_table() -> None:
 
     assert _phase(bootstrap) is BootstrapPhase.UNINITIALIZED
     assert bootstrap.rejection(ApplicationOperation.INITIALIZE) is None
+    assert bootstrap.rejection(ApplicationOperation.SKILL_LIST) is None
+    assert bootstrap.rejection(ApplicationOperation.SKILL_INSTALL) is None
+    assert bootstrap.rejection(ApplicationOperation.SKILL_REMOVE) is None
     assert bootstrap.rejection(ApplicationOperation.CANCEL_OPERATION) is None
     assert bootstrap.rejection(ApplicationOperation.SHUTDOWN) is None
     assert bootstrap.rejection(ApplicationOperation.GET_STATE) == BootstrapRejection(
@@ -79,6 +82,10 @@ def test_bootstrap_admission_is_one_closed_phase_table() -> None:
             diagnostic_code="server_not_ready",
         )
     )
+    assert bootstrap.rejection(ApplicationOperation.SKILL_LIST) == BootstrapRejection(
+        message="Skill package management is only available before initialization",
+        diagnostic_code="skill_management_requires_uninitialized",
+    )
     bootstrap.complete_initialize(
         transition,
         ApplicationResult.success(
@@ -97,6 +104,36 @@ def test_bootstrap_admission_is_one_closed_phase_table() -> None:
         message="Server not ready",
         diagnostic_code="server_not_ready",
     )
+
+
+def test_preinitialize_skill_management_blocks_initialize_and_other_mutations() -> None:
+    bootstrap = ApplicationBootstrap()
+    transition = bootstrap.begin_preinitialize(ApplicationOperation.SKILL_INSTALL)
+
+    assert bootstrap.preinitialize_active is True
+    expected = BootstrapRejection(
+        message="A pre-initialize operation is in progress",
+        diagnostic_code="preinitialize_operation_in_progress",
+    )
+    assert bootstrap.rejection(ApplicationOperation.INITIALIZE) == expected
+    assert bootstrap.rejection(ApplicationOperation.SKILL_LIST) == expected
+    with pytest.raises(RuntimeError, match="pre-initialize operation"):
+        bootstrap.begin_initialize()
+
+    bootstrap.complete_preinitialize(transition)
+    assert bootstrap.preinitialize_active is False
+    assert _phase(bootstrap) is BootstrapPhase.UNINITIALIZED
+    assert bootstrap.rejection(ApplicationOperation.INITIALIZE) is None
+    assert bootstrap.rejection(ApplicationOperation.SKILL_REMOVE) is None
+
+    initialized = bootstrap.begin_initialize()
+    bootstrap.complete_initialize(
+        initialized,
+        ApplicationResult.success(_initialize_result(InitializeStatus.READY)),
+    )
+    unavailable = bootstrap.rejection(ApplicationOperation.SKILL_REMOVE)
+    assert unavailable is not None
+    assert unavailable.diagnostic_code == "skill_management_requires_uninitialized"
 
 
 def test_bootstrap_rejection_is_frozen() -> None:

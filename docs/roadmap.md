@@ -25,7 +25,8 @@ Awesome currently provides:
   `workspace.write` grant, and a non-disableable command circuit breaker;
 - visible ChangeSets with diff, undo, redo, and conservative crash recovery;
 - independently optional local Memory and Mem0 Cloud;
-- bundled, user, and trusted Workspace Skills;
+- bundled, user, and trusted Workspace Skills, plus safe local directory/ZIP
+  listing, installation, replacement, and removal for User packages;
 - configured MCP stdio servers with validated, generation-bound catalogs;
 - opt-in structured Tavily Web Search and Fetch through the same Registry,
   Policy, and Executor, with per-Turn budgets, Thread-scoped network consent,
@@ -53,18 +54,6 @@ reference/architecture updates. Removing a bullet from this list without that
 evidence would turn documentation into an unsupported promise.
 
 ## Near-term product directions
-
-### One-command Skills installation
-
-**User need:** finding and installing a Skill should not require manually
-constructing package directories.
-
-**Invariant:** installation must preserve manifest validation, source
-precedence, Workspace trust, bounded reads, and the existing tool-policy path.
-Discovery convenience must not turn a Skill into executable authority.
-
-**Open decisions:** registry ownership, package authenticity, update behavior,
-version pinning, removal, and offline installation.
 
 ### Multi-Agent delegation
 

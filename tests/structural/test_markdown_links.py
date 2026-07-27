@@ -337,14 +337,24 @@ def test_state_recovery_docs_use_the_product_flow() -> None:
 
 def test_roadmap_separates_current_behavior_from_future_directions() -> None:
     roadmap = (DOCS / "roadmap.md").read_text(encoding="utf-8")
+    roadmap_zh = (DOCS / "roadmap.zh-CN.md").read_text(encoding="utf-8")
 
     current = roadmap.index("## Current foundation")
     near_term = roadmap.index("## Near-term product directions")
     later = roadmap.index("## Later directions")
     assert current < near_term < later
-    assert "GitHub Pages documentation site" in roadmap[current:near_term]
+    current_foundation = roadmap[current:near_term]
+    assert "GitHub Pages documentation site" in current_foundation
+    assert "safe local directory/ZIP" in current_foundation
+    assert "listing, installation, replacement, and removal" in current_foundation
+
+    current_zh = roadmap_zh.index("## 当前基础")
+    near_term_zh = roadmap_zh.index("## 近期产品方向")
+    current_foundation_zh = roadmap_zh[current_zh:near_term_zh]
+    assert "安全的本地目录/ZIP" in current_foundation_zh
+    assert "列出、安装、替换和移除" in current_foundation_zh
+
     for direction in (
-        "One-command Skills installation",
         "Multi-Agent delegation",
         "More model providers",
         "Search tools",

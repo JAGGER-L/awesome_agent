@@ -62,6 +62,7 @@ import {
   parseCliIntent,
   type HeadlessRunIntent,
   type LaunchIntent,
+  type SkillCommandIntent,
 } from "./args.js";
 import {
   runHeadless,
@@ -74,6 +75,12 @@ import {
   resolveCoreExecutable,
   RuntimeCheckError,
 } from "./runtime-checks.js";
+import {
+  confirmSkillRemoval,
+  runSkillCommand,
+  type SkillCommandExitCode,
+  type SkillCommandIo,
+} from "./skills.js";
 import { StartupSessionController } from "./startup-session-controller.js";
 
 export type CliRenderOutcome =
@@ -126,12 +133,21 @@ export interface CliDependencies {
   readonly closeHeadlessApplication?: (
     surface: ConnectedSurface,
   ) => Promise<boolean>;
+  readonly runSkillApplication?: (
+    surface: ConnectedSurface,
+    intent: SkillCommandIntent,
+    io: SkillCommandIo,
+  ) => Promise<SkillCommandExitCode>;
+  readonly closeSkillApplication?: (
+    surface: ConnectedSurface,
+  ) => Promise<boolean>;
+  readonly confirmSkillRemoval?: (name: string) => Promise<boolean>;
 }
 
 export async function runCli(
   dependencies: CliDependencies = productionDependencies(),
 ): Promise<0 | 1 | 2 | 3 | 130> {
-  let intent: LaunchIntent | HeadlessRunIntent;
+  let intent: LaunchIntent | HeadlessRunIntent | SkillCommandIntent;
   try {
     const parsed = parseCliIntent(dependencies.argv);
     if (parsed.kind === "version") {
@@ -144,10 +160,20 @@ export async function runCli(
     }
     intent = parsed;
     assertSupportedNode(dependencies.nodeVersion);
-    if (intent.kind !== "run") {
+    if (intent.kind !== "run" && intent.kind !== "skills") {
       assertInteractiveTerminal(
         dependencies.stdinIsTTY,
         dependencies.stdoutIsTTY,
+      );
+    }
+    if (
+      intent.kind === "skills" &&
+      intent.action === "remove" &&
+      !intent.yes &&
+      !dependencies.stdinIsTTY
+    ) {
+      throw new LaunchArgumentError(
+        "awesome skills remove requires --yes when stdin is not a TTY.",
       );
     }
   } catch (error) {
@@ -159,6 +185,22 @@ export async function runCli(
       return 2;
     }
     throw error;
+  }
+
+  if (intent.kind === "skills" && intent.action === "remove" && !intent.yes) {
+    let confirmed: boolean;
+    try {
+      confirmed = await (
+        dependencies.confirmSkillRemoval ?? confirmSkillRemoval
+      )(intent.name);
+    } catch {
+      dependencies.writeStderr("Unable to read Skill removal confirmation.\n");
+      return 1;
+    }
+    if (!confirmed) {
+      dependencies.writeStdout("Skill removal cancelled.\n");
+      return 0;
+    }
   }
 
   const cwd = dependencies.cwd();
@@ -203,6 +245,45 @@ export async function runCli(
     if (!closed) {
       stderr.push("Awesome Core did not shut down cleanly.\n");
       if (exitCode === 0) exitCode = 1;
+    }
+    if (exitCode === 0) {
+      for (const value of stdout) dependencies.writeStdout(value);
+    }
+    for (const value of stderr) dependencies.writeStderr(value);
+    return exitCode;
+  }
+
+  if (intent.kind === "skills") {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let exitCode: SkillCommandExitCode;
+    try {
+      exitCode = await (dependencies.runSkillApplication ?? runSkillCommand)(
+        surface,
+        intent,
+        {
+          writeStdout: (value) => stdout.push(value),
+          writeStderr: (value) => stderr.push(value),
+        },
+      );
+    } catch {
+      stderr.push("The Skill command failed unexpectedly.\n");
+      exitCode = 1;
+    }
+    let closed = false;
+    try {
+      closed = await (
+        dependencies.closeSkillApplication ?? closeHeadlessSurface
+      )(surface);
+    } catch {
+      // Report the bounded public shutdown diagnostic below.
+    }
+    if (!closed) {
+      if (exitCode === 0 && intent.action !== "list") {
+        for (const value of stdout) stderr.push(value);
+      }
+      stderr.push("Awesome Core did not shut down cleanly.\n");
+      exitCode = 1;
     }
     if (exitCode === 0) {
       for (const value of stdout) dependencies.writeStdout(value);

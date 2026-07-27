@@ -31,6 +31,9 @@ type ObservationOutcome = Literal[
 
 class ApplicationOperation(StrEnum):
     INITIALIZE = "initialize"
+    SKILL_LIST = "skill.list"
+    SKILL_INSTALL = "skill.install"
+    SKILL_REMOVE = "skill.remove"
     GET_STATE = "application.getState"
     LIST_THREADS = "thread.list"
     SEARCH_THREADS = "thread.search"

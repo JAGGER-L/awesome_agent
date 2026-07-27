@@ -25,14 +25,36 @@ export interface HeadlessRunIntent {
   readonly allowNetwork: boolean;
 }
 
+export type SkillCommandIntent =
+  | { readonly kind: "skills"; readonly action: "list" }
+  | {
+      readonly kind: "skills";
+      readonly action: "install";
+      readonly sourcePath: string;
+      readonly replace: boolean;
+    }
+  | {
+      readonly kind: "skills";
+      readonly action: "remove";
+      readonly name: string;
+      readonly yes: boolean;
+    };
+
 export type CliMetaIntent =
   | { readonly kind: "help" }
   | { readonly kind: "version" };
 
-export type CliIntent = LaunchIntent | HeadlessRunIntent | CliMetaIntent;
+export type CliIntent =
+  | LaunchIntent
+  | HeadlessRunIntent
+  | SkillCommandIntent
+  | CliMetaIntent;
 
 export const CLI_HELP = `Usage: awesome [--continue | --resume [thread_id]]
        awesome run <prompt> [--new | --thread <id>] [options]
+       awesome skills list
+       awesome skills install <local-directory-or-zip> [--replace]
+       awesome skills remove <name> [--yes]
 
 Options:
   --continue            Resume the most recent thread in this workspace
@@ -48,10 +70,19 @@ Headless run options:
   --permission-mode <request_approval|accept_edits|full_access>
                          Select the process-local permission mode
   --allow-network        Declare network intent for this process only
+
+Skill management:
+  list                   List installed User Skills
+  install <path>         Install a local directory or ZIP as a User Skill
+  --replace              Replace an installed Skill with the same name
+  remove <name>          Remove an installed User Skill
+  --yes                  Confirm removal without an interactive prompt
 `;
 
 const MAX_PROMPT_LENGTH = 200_000;
 const MAX_THREAD_ID_LENGTH = 128;
+const MAX_SKILL_SOURCE_PATH_LENGTH = 4_096;
+const SKILL_NAME = /^[a-z][a-z0-9-]{0,63}$/u;
 const HEADLESS_FORMATS = new Set<HeadlessFormat>(["text", "json"]);
 const HEADLESS_PERMISSION_MODES = new Set<HeadlessPermissionMode>([
   "request_approval",
@@ -78,6 +109,7 @@ export function parseCliIntent(argv: readonly string[]): CliIntent {
     return { kind: "continue" };
   }
   if (argv[0] === "run") return parseHeadlessRunIntent(argv.slice(1));
+  if (argv[0] === "skills") return parseSkillCommandIntent(argv.slice(1));
   if (argv[0] === "--resume") {
     if (argv.length === 1) return { kind: "resume-picker" };
     if (argv.length === 2 && argv[1]) {
@@ -92,11 +124,52 @@ export function parseLaunchIntent(argv: readonly string[]): LaunchIntent {
   if (
     intent.kind === "help" ||
     intent.kind === "version" ||
-    intent.kind === "run"
+    intent.kind === "run" ||
+    intent.kind === "skills"
   ) {
     throw new LaunchArgumentError(CLI_HELP.trimEnd());
   }
   return intent;
+}
+
+function parseSkillCommandIntent(argv: readonly string[]): SkillCommandIntent {
+  const action = argv[0];
+  if (action === "list" && argv.length === 1) {
+    return { kind: "skills", action: "list" };
+  }
+  if (action === "install") {
+    const sourcePath = argv[1];
+    if (!validSkillSourcePath(sourcePath)) throw invalidArguments();
+    if (argv.length === 2) {
+      return { kind: "skills", action: "install", sourcePath, replace: false };
+    }
+    if (argv.length === 3 && argv[2] === "--replace") {
+      return { kind: "skills", action: "install", sourcePath, replace: true };
+    }
+    throw invalidArguments();
+  }
+  if (action === "remove") {
+    const name = argv[1];
+    if (name === undefined || !SKILL_NAME.test(name)) throw invalidArguments();
+    if (argv.length === 2) {
+      return { kind: "skills", action: "remove", name, yes: false };
+    }
+    if (argv.length === 3 && argv[2] === "--yes") {
+      return { kind: "skills", action: "remove", name, yes: true };
+    }
+  }
+  throw invalidArguments();
+}
+
+function validSkillSourcePath(value: string | undefined): value is string {
+  return (
+    value !== undefined &&
+    value.length > 0 &&
+    value === value.trim() &&
+    !value.startsWith("--") &&
+    !/[\0\r\n]/u.test(value) &&
+    Array.from(value).length <= MAX_SKILL_SOURCE_PATH_LENGTH
+  );
 }
 
 function parseHeadlessRunIntent(argv: readonly string[]): HeadlessRunIntent {

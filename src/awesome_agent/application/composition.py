@@ -48,6 +48,11 @@ from awesome_agent.application.contracts import (
     ProductErrorCode,
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     StatusSnapshot,
     ThreadListQuery,
     ThreadListResult,
@@ -94,6 +99,7 @@ from awesome_agent.application.provider_configuration import (
     reconcile_provider_model_transaction,
 )
 from awesome_agent.application.runtime_resources import RuntimeResources
+from awesome_agent.application.skill_management import SkillManagementService
 from awesome_agent.application.thread_export import ThreadExportService
 from awesome_agent.application.turns import (
     RecoveryResult,
@@ -123,10 +129,6 @@ from awesome_agent.config import (
     resolve_turn_config,
 )
 from awesome_agent.config.model_transaction import ProviderModelTransactionJournal
-from awesome_agent.config.resource_lock import (
-    ResourceLockTimeout,
-    ResourceLockUnavailable,
-)
 from awesome_agent.context import (
     CODING_AGENT_PRODUCT_INSTRUCTIONS,
     ContextBuilder,
@@ -175,6 +177,10 @@ from awesome_agent.core.events import (
     InteractionRequiredPayload,
     InteractionResolvedPayload,
 )
+from awesome_agent.core.resource_lock import (
+    ResourceLockTimeout,
+    ResourceLockUnavailable,
+)
 from awesome_agent.core.tools import (
     ToolExecutionContext,
     ToolExecutionOrigin,
@@ -220,6 +226,7 @@ from awesome_agent.extensions.mcp.manager import McpClient
 from awesome_agent.extensions.skills import (
     SkillCatalog,
     SkillLoader,
+    SkillPackageManager,
     discover_skills,
     register_skill_tools,
 )
@@ -555,6 +562,12 @@ class _LocalApplicationBackend:
         credential_validator: CredentialValidator | None,
     ) -> None:
         self._paths = paths
+        self._skill_management = SkillManagementService(
+            SkillPackageManager(
+                home=paths.home,
+                skills_root=paths.skills_dir,
+            )
+        )
         self._workspace = workspace
         self._process_resources = resources
         self._environ = dict(environ or {})
@@ -634,6 +647,21 @@ class _LocalApplicationBackend:
         )
         self._bootstrap_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
+
+    async def list_skill_packages(self) -> SkillListResult:
+        return await self._skill_management.list()
+
+    async def install_skill_package(
+        self,
+        request: SkillInstallRequest,
+    ) -> SkillInstallResult:
+        return await self._skill_management.install(request)
+
+    async def remove_skill_package(
+        self,
+        request: SkillRemoveRequest,
+    ) -> SkillRemoveResult:
+        return await self._skill_management.remove(request)
 
     async def initialize_application(self) -> InitializeResult:
         async with self._bootstrap_lock:
@@ -2945,6 +2973,12 @@ class _LocalApplicationBackend:
         if catalog is not None:
             return catalog
         task = self._skill_catalog_task
+        if task is None:
+            await self._skill_management.recover()
+            catalog = self._skill_catalog
+            if catalog is not None:
+                return catalog
+            task = self._skill_catalog_task
         if task is None:
             bundled = Path(__file__).parents[1] / "extensions" / "skills" / "bundled"
             task = asyncio.create_task(

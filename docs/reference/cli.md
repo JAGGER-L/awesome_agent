@@ -1,19 +1,24 @@
 # CLI and keyboard reference
 
-The public `awesome` executable provides an Ink terminal interface and a
-headless single-Turn mode. The official
+The public `awesome` executable provides an Ink terminal interface, a headless
+single-Turn mode, and local User Skill package management. The official
 installers bundle a private Node.js 22.23.1 runtime, so an installer user does
 not need Node preinstalled. Running from source or installing the npm package
 directly requires Node.js 22.23.1 or newer. The Ink interface additionally
-requires interactive stdin and stdout; `awesome run` is the supported
-non-interactive surface. The client starts one private `awesome-core` process discovered through
-its launch environment; Core performs every model, state, and tool operation.
+requires interactive stdin and stdout; `awesome run` and non-prompting
+`awesome skills` commands are the supported non-interactive surfaces. The
+client starts one private `awesome-core` process discovered through its launch
+environment; Core performs every model, state, tool, and Skill-package
+operation.
 
 ## Launch syntax
 
 ```text
 Usage: awesome [--continue | --resume [thread_id]]
        awesome run <prompt> [--new | --thread <id>] [options]
+       awesome skills list
+       awesome skills install <local-directory-or-zip> [--replace]
+       awesome skills remove <name> [--yes]
 
 Options:
   --continue            Resume the most recent thread in this workspace
@@ -29,6 +34,13 @@ Headless run options:
   --permission-mode <request_approval|accept_edits|full_access>
                          Select the process-local permission mode
   --allow-network        Declare network intent for this process only
+
+Skill management:
+  list                   List installed User Skills
+  install <path>         Install a local directory or ZIP as a User Skill
+  --replace              Replace an installed Skill with the same name
+  remove <name>          Remove an installed User Skill
+  --yes                  Confirm removal without an interactive prompt
 ```
 
 | Invocation | Result |
@@ -39,18 +51,79 @@ Headless run options:
 | `awesome --resume <thread_id>` | Resume one exact or accepted abbreviated Thread ID. |
 | `awesome run "<prompt>"` | Run one Turn in a new Thread and print its final answer. |
 | `awesome run "<prompt>" --thread <id>` | Run one Turn in the exact existing Thread. |
+| `awesome skills list` | List valid installed User Skill packages by name. |
+| `awesome skills install <path>` | Validate, stage, and publish one local directory or ZIP with a no-replace rename. |
+| `awesome skills install <path> --replace` | Replace an installed package through a recoverable quarantine transaction. |
+| `awesome skills remove <name> [--yes]` | Quarantine and remove one installed User Skill, prompting unless `--yes` is present. |
 | `awesome -V`, `awesome --version` | Print the numeric product version and exit. |
 | `awesome -h`, `awesome --help` | Print help and exit. |
 
 Interactive launch flags cannot be combined. Headless options apply only after
 `run`; `--new` and `--thread` are mutually exclusive. No other public launch
 flags are accepted. Unknown or malformed arguments print the same usage
-contract to stderr and exit with code 2.
+contract to stderr and exit with code 2. `skills list`, `skills install`, and
+`skills remove --yes` do not require a TTY. A removal without `--yes` requires
+interactive stdin and defaults to No; non-interactive use without `--yes` is
+rejected before Core starts.
 
 The startup directory is the workspace. Trust, local state compatibility, and
 Core/TUI protocol compatibility are resolved before normal input is admitted.
 See [files and state](files-and-state.md) and
 [Protocol v4](protocol.md).
+
+## Local Skill package management
+
+Skill package commands start the same private Core but call their dedicated
+Protocol v4 RPC before `initialize`. They do not enter Ink, create a Thread or
+Turn, load a model, or expose package management as an Agent tool. The command
+keeps stdout empty on every nonzero exit and writes bounded diagnostics to
+stderr. If an install, replacement, or removal RPC succeeds but Core does not
+shut down cleanly, stderr reports both facts: the package change completed and
+requires a restart, while process cleanup failed. The command exits with code 1;
+do not retry that mutation blindly.
+
+```text
+awesome skills list
+awesome skills install ./review-skill
+awesome skills install ./review-skill.zip --replace
+awesome skills remove review-skill
+awesome skills remove review-skill --yes
+```
+
+`list` reports only valid User packages under `<AWESOME_HOME>/skills`, sorted
+by name. Bundled and Workspace Skills remain visible through the in-product
+`/skills` catalog but are not installation targets.
+
+`install` accepts one local directory or ZIP. A relative source path is resolved
+from the launch directory. Core performs the package, manifest, path, link,
+size, entry-count, and duplicate-path checks; the Node CLI deliberately does
+not duplicate that security logic. Source traversal and installed-package
+cleanup also reject crossing filesystem or mount boundaries, including POSIX
+mount and bind boundaries; Windows volume mounts are covered by reparse-point
+rejection. For a fresh name, the package is fully staged and validated before
+one same-directory no-replace rename publishes it to the absent target. An
+existing name fails unless `--replace` is explicit.
+Replace is not one atomic replacement: Core records transaction phases, renames
+the current target to quarantine, then renames the stage to the target. Recovery
+rolls back before publication or rolls forward quarantine cleanup afterward.
+
+`remove` accepts one canonical Skill name. Core renames the target to quarantine,
+marks the removal published, and then deletes the quarantine; recovery restores
+the target before publication or finishes cleanup after publication. Without
+`--yes`, the concise `Remove Skill <name>? [y/N]` prompt is written to stderr and
+the response is read from interactive stdin; only `y` or `yes` continues. Piped
+or redirected input must use `--yes` or the command exits with code 2 without
+starting Core.
+
+Successful install, replace, and removal exit with code 0. A package or Core
+failure exits with code 1; malformed arguments and known startup prerequisites
+exit with code 2. The official command performs one pre-initialize RPC and
+closes its Core. Already initialized Sessions retain their immutable Skill
+catalog, so restart them before selecting or loading the changed package. A
+private client may instead mutate a still-uninitialized Core and then initialize
+that same process; initialization discovers the changed package tree. Remote
+registries, URLs, signatures, and automatic updates are not supported in this
+command family.
 
 ## Headless run
 

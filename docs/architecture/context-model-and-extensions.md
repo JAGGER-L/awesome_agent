@@ -247,6 +247,39 @@ across that individual checked open, but it does not compare ordinary nested
 directories or resource content with a discovery-time identity. A safe
 replacement completed before the resource read can therefore be observed.
 
+Local User package management is an Application use case, not an Agent tool or
+a second discovery implementation:
+
+```text
+awesome skills CLI
+  -> argument parsing + optional TTY confirmation
+  -> private Protocol v4 skill.list / skill.install / skill.remove
+  -> Application SkillManagementService
+  -> one blocking worker operation
+  -> SkillPackageManager validation + recoverable package transaction
+  -> <AWESOME_HOME>/skills
+```
+
+The package RPCs are admitted only while Application is exactly
+`UNINITIALIZED`; one Application-owned pre-initialize guard makes them mutually
+exclusive with each other and with `initialize`. The RPC itself never constructs
+a `WorkspaceRuntime`, Thread, Turn, graph, model, or Tool Executor and leaves the
+phase unchanged. The Node launcher owns only command syntax, stable output, and
+removal confirmation; Core alone owns manifest, archive, path, size, identity,
+locking, and recovery rules. The official CLI receives one bounded product
+result and closes the private Core. A different private client may mutate the
+same still-uninitialized Core and then initialize it; discovery sees the changed
+package. Once a Session is initialized, its catalog remains immutable and is
+never hot-updated.
+
+Fresh install publishes a fully validated stage to an absent target with one
+same-directory no-replace rename. Replace is a recoverable sequence of two
+forward renames—target to quarantine, then stage to target—not one atomic
+replacement. Remove likewise quarantines the target before published cleanup.
+The marker drives rollback before publication and roll-forward cleanup after
+publication. Caller cancellation waits for the owned worker to converge without
+a wall-clock cleanup deadline, then re-raises cancellation.
+
 `auto` freezes a deterministic catalog of at most 64 identities and exposes
 `load_skill` plus `read_skill_resource`; it does not execute a Skill. `off`
 freezes no Skill source and exposes neither tool. A named mode eagerly freezes

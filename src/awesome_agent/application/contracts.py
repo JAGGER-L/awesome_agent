@@ -99,6 +99,64 @@ class ProviderCredentialSetResult(BaseModel):
     code: str = Field(min_length=1, max_length=128)
 
 
+class SkillPackageSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
+    description: str = Field(min_length=1, max_length=500)
+
+
+class SkillListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    skills: tuple[SkillPackageSummary, ...] = Field(default=(), max_length=512)
+
+    @field_validator("skills")
+    @classmethod
+    def validate_skills(
+        cls,
+        value: tuple[SkillPackageSummary, ...],
+    ) -> tuple[SkillPackageSummary, ...]:
+        names = tuple(skill.name for skill in value)
+        if len(names) != len(set(names)) or names != tuple(sorted(names)):
+            raise ValueError("Installed Skills must be unique and name ordered.")
+        return value
+
+
+class SkillInstallRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    source_path: str = Field(min_length=1, max_length=4_096)
+    replace: bool = False
+
+    @field_validator("source_path")
+    @classmethod
+    def validate_source_path(cls, value: str) -> str:
+        if value != value.strip() or any(character in value for character in "\0\r\n"):
+            raise ValueError("Skill source path is invalid.")
+        return value
+
+
+class SkillInstallResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
+    status: Literal["installed", "replaced"]
+
+
+class SkillRemoveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
+
+
+class SkillRemoveResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")
+    status: Literal["removed"]
+
+
 class ProductError(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

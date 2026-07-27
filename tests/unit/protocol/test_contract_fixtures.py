@@ -31,6 +31,11 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetRequest,
     ProviderCredentialSetResult,
     ShutdownResult,
+    SkillInstallRequest,
+    SkillInstallResult,
+    SkillListResult,
+    SkillRemoveRequest,
+    SkillRemoveResult,
     ThreadListQuery,
     ThreadListResult,
     ThreadReadQuery,
@@ -63,6 +68,9 @@ def test_manifest_freezes_complete_protocol_inventory_and_hashes() -> None:
     )
     assert set(manifest["methods"]) == {
         "initialize",
+        "skill.list",
+        "skill.install",
+        "skill.remove",
         "application.getState",
         "thread.list",
         "thread.search",
@@ -115,6 +123,23 @@ class _FixtureFacade:
 
     async def get_state(self) -> ApplicationResult[ApplicationState]:
         return ApplicationResult[ApplicationState].model_validate(self._result)
+
+    async def list_skills(self) -> ApplicationResult[SkillListResult]:
+        return ApplicationResult[SkillListResult].model_validate(self._result)
+
+    async def install_skill(
+        self,
+        request: SkillInstallRequest,
+    ) -> ApplicationResult[SkillInstallResult]:
+        del request
+        return ApplicationResult[SkillInstallResult].model_validate(self._result)
+
+    async def remove_skill(
+        self,
+        request: SkillRemoveRequest,
+    ) -> ApplicationResult[SkillRemoveResult]:
+        del request
+        return ApplicationResult[SkillRemoveResult].model_validate(self._result)
 
     async def list_threads(
         self, query: ThreadListQuery
@@ -233,6 +258,30 @@ def test_provider_credential_fixtures_freeze_source_omission_contract() -> None:
     }:
         value = credential_cases[name]["result"]["value"]
         assert "source" not in value
+
+
+def test_skill_management_fixtures_expose_only_bounded_public_results() -> None:
+    cases = {
+        case["name"]: case
+        for case in _cases("methods.valid.json")
+        if str(case["method"]).startswith("skill.")
+    }
+
+    assert set(cases) == {
+        "skill.list",
+        "skill.install.installed",
+        "skill.install.replaced",
+        "skill.remove",
+    }
+    installed = cases["skill.install.installed"]["result"]["value"]
+    replaced = cases["skill.install.replaced"]["result"]["value"]
+    removed = cases["skill.remove"]["result"]["value"]
+    assert installed == {"name": "review", "status": "installed"}
+    assert replaced == {"name": "review", "status": "replaced"}
+    assert removed == {"name": "review", "status": "removed"}
+    encoded = json.dumps((installed, replaced, removed))
+    assert "source_path" not in encoded
+    assert "restart_required" not in encoded
 
 
 def test_thread_read_fixture_contains_discriminated_change_deltas() -> None:

@@ -8,12 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
+from awesome_agent.core.filesystem import (
+    DirectoryEntryLimitExceeded as _CoreDirectoryEntryLimitExceeded,
+)
 from awesome_agent.core.filesystem import DirectoryPin as _CoreDirectoryPin
 from awesome_agent.core.filesystem import FileIdentity as _CoreFileIdentity
 from awesome_agent.core.filesystem import MutationTargetChanged as _CoreTargetChanged
 from awesome_agent.core.filesystem import ReadRegularFile as _CoreReadRegularFile
 from awesome_agent.core.filesystem import UnsafeWorkspacePath as _CoreUnsafePath
 from awesome_agent.core.filesystem import WorkspaceFileTooLarge as _CoreFileTooLarge
+from awesome_agent.core.filesystem import bounded_directory_names as _bounded_names
 from awesome_agent.core.filesystem import lstat_child as _lstat_child
 from awesome_agent.core.filesystem import open_directory as _core_open_directory
 from awesome_agent.core.filesystem import read_regular_child as _core_read_regular_child
@@ -28,6 +32,10 @@ class FileChangedError(ValueError):
 
 
 class FileTooLargeError(ValueError):
+    pass
+
+
+class DirectoryEntryLimitError(ValueError):
     pass
 
 
@@ -60,6 +68,7 @@ class PinnedPlainDirectory:
         target: Path,
         *,
         expected_identities: tuple[FileIdentity, ...] | None = None,
+        mount_boundary: Path | None = None,
     ) -> None:
         self.anchor = lexical_absolute(anchor)
         self.target = lexical_absolute(target)
@@ -69,6 +78,19 @@ class PinnedPlainDirectory:
             raise UnsafePathError("Path escapes its trusted anchor.") from error
         self._parts = tuple(part for part in relative.parts if part != ".")
         self._expected_identities = expected_identities
+        self._mount_boundary = (
+            lexical_absolute(mount_boundary)
+            if mount_boundary is not None
+            else None
+        )
+        if self._mount_boundary is not None:
+            try:
+                self._mount_boundary.relative_to(self.anchor)
+                self.target.relative_to(self._mount_boundary)
+            except ValueError as error:
+                raise UnsafePathError(
+                    "Mount boundary must contain the target inside the anchor."
+                ) from error
         expected_count = len(self._parts) + 1
         if (
             expected_identities is not None
@@ -85,6 +107,7 @@ class PinnedPlainDirectory:
             root = _open_pinned_directory(
                 self.anchor,
                 expected_identity=_to_core_identity(root_expected),
+                establish_mount_boundary=(self._mount_boundary == self.anchor),
             )
             self._pins.append(root)
             current = root
@@ -94,6 +117,9 @@ class PinnedPlainDirectory:
                     parent=current,
                     name=part,
                     expected_identity=_to_core_identity(self._expected_at(index)),
+                    establish_mount_boundary=(
+                        self._mount_boundary == current.path / part
+                    ),
                 )
                 self._pins.append(current)
         except _CoreTargetChanged as error:
@@ -124,6 +150,10 @@ class PinnedPlainDirectory:
     def verify(self) -> None:
         try:
             self._directory.verify_reachable()
+        except _CoreUnsafePath as error:
+            raise UnsafePathError(
+                "Directory crossed its trusted mount boundary."
+            ) from error
         except (FileNotFoundError, OSError, _CoreTargetChanged) as error:
             raise FileChangedError("Directory changed while it was pinned.") from error
 
@@ -141,11 +171,29 @@ class PinnedPlainDirectory:
         self.verify()
         return names
 
+    def bounded_names(self, *, max_entries: int) -> tuple[str, ...]:
+        try:
+            return _bounded_names(self._directory, max_entries=max_entries)
+        except _CoreDirectoryEntryLimitExceeded as error:
+            raise DirectoryEntryLimitError(
+                "Directory exceeds the entry limit."
+            ) from error
+        except _CoreUnsafePath as error:
+            raise UnsafePathError(
+                "Directory crossed its trusted mount boundary."
+            ) from error
+        except (FileNotFoundError, OSError, _CoreTargetChanged) as error:
+            raise FileChangedError("Directory changed while it was pinned.") from error
+
     def child_status(self, name: str) -> os.stat_result:
         _validate_plain_name(name)
         self.verify()
         try:
             result = _lstat_child(self._directory, name)
+        except _CoreUnsafePath as error:
+            raise UnsafePathError(
+                "Directory crossed its trusted mount boundary."
+            ) from error
         except _CoreTargetChanged as error:
             raise FileChangedError("Directory changed while it was pinned.") from error
         self.verify()
@@ -285,12 +333,14 @@ def _open_pinned_directory(
     parent: _CoreDirectoryPin | None = None,
     name: str | None = None,
     expected_identity: _CoreFileIdentity | None = None,
+    establish_mount_boundary: bool = False,
 ) -> _CoreDirectoryPin:
     return _core_open_directory(
         path,
         parent=parent,
         name=name,
         expected_identity=expected_identity,
+        establish_mount_boundary=establish_mount_boundary,
     )
 
 

@@ -86,6 +86,33 @@ describe("parseCliIntent", () => {
         allowNetwork: false,
       },
     ],
+    [["skills", "list"], { kind: "skills", action: "list" }],
+    [
+      ["skills", "install", "./review-skill"],
+      {
+        kind: "skills",
+        action: "install",
+        sourcePath: "./review-skill",
+        replace: false,
+      },
+    ],
+    [
+      ["skills", "install", "review-skill.zip", "--replace"],
+      {
+        kind: "skills",
+        action: "install",
+        sourcePath: "review-skill.zip",
+        replace: true,
+      },
+    ],
+    [
+      ["skills", "remove", "review-skill"],
+      { kind: "skills", action: "remove", name: "review-skill", yes: false },
+    ],
+    [
+      ["skills", "remove", "review-skill", "--yes"],
+      { kind: "skills", action: "remove", name: "review-skill", yes: true },
+    ],
   ] as const)("parses %j", (argv, expected) => {
     expect(parseCliIntent([...argv])).toEqual(expected);
   });
@@ -124,6 +151,21 @@ describe("parseCliIntent", () => {
       "full_access",
     ],
     ["run", "prompt", "--allow-network", "--allow-network"],
+    ["skills"],
+    ["skills", "unknown"],
+    ["skills", "list", "extra"],
+    ["skills", "install"],
+    ["skills", "install", "--replace"],
+    ["skills", "install", ""],
+    ["skills", "install", " skill"],
+    ["skills", "install", "skill\npath"],
+    ["skills", "install", "skill", "--replace", "--replace"],
+    ["skills", "install", "skill", "--yes"],
+    ["skills", "remove"],
+    ["skills", "remove", "Review"],
+    ["skills", "remove", "review_skill"],
+    ["skills", "remove", "review", "--yes", "--yes"],
+    ["skills", "remove", "review", "--replace"],
   ])("rejects invalid arguments %j", (...argv) => {
     expect(() => parseCliIntent(argv)).toThrow(LaunchArgumentError);
   });
@@ -139,6 +181,11 @@ describe("parseCliIntent", () => {
     expect(CLI_HELP).toContain("--trust-workspace");
     expect(CLI_HELP).toContain("--permission-mode");
     expect(CLI_HELP).toContain("--allow-network");
+    expect(CLI_HELP).toContain("awesome skills list");
+    expect(CLI_HELP).toContain(
+      "awesome skills install <local-directory-or-zip> [--replace]",
+    );
+    expect(CLI_HELP).toContain("awesome skills remove <name> [--yes]");
     expect(CLI_HELP).toContain("-V, --version");
     expect(CLI_HELP).toContain("-h, --help");
     expect(CLI_HELP).not.toMatch(
@@ -153,10 +200,16 @@ describe("parseCliIntent", () => {
     expect(() =>
       parseCliIntent(["run", "prompt", "--thread", "t".repeat(129)]),
     ).toThrow(LaunchArgumentError);
+    expect(() =>
+      parseCliIntent(["skills", "install", "s".repeat(4_097)]),
+    ).toThrow(LaunchArgumentError);
   });
 
   it("does not expose headless execution as an interactive LaunchIntent", () => {
     expect(() => parseLaunchIntent(["run", "prompt"])).toThrow(
+      LaunchArgumentError,
+    );
+    expect(() => parseLaunchIntent(["skills", "list"])).toThrow(
       LaunchArgumentError,
     );
   });

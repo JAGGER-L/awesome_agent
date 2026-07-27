@@ -28,6 +28,7 @@ Awesome 是一个运行在终端中的 AI 编程助手。它能够理解代码�
 - 以确定性的文本或 JSON 输出非交互运行一个 Agent Turn；
 - 在 Request approval、Accept edits 和 Thread 范围的 Full access 之间切换；
 - 使用 Skills、MCP 工具、本地 Memory 和 Mem0 Cloud 扩展能力；
+- 无需打开交互式聊天即可列出、安装、替换和移除经过校验的本地 User Skill 包；
 - 通过可选且带引用的 Tavily 集成搜索和提取公共 Web 内容；
 - 使用 DeepSeek 和 Kimi 模型。
 
@@ -86,6 +87,9 @@ awesome --continue
 awesome --resume
 awesome --resume <thread_id>
 awesome run "Analyze the test failure" --trust-workspace
+awesome skills list
+awesome skills install ./review-api
+awesome skills remove review-api --yes
 awesome --version
 awesome --help
 ```
@@ -95,6 +99,12 @@ awesome --help
 `--thread <id>` 可指定现有 Thread。信任、权限检查、取消以及同一套私有 Core/Application
 生命周期仍然生效；存在未解决 interaction 时会退出，不会打印部分回答。完整选项和退出码
 见 [CLI 参考](docs/reference/cli.zh-CN.md)。
+
+`awesome skills` 是不进入聊天界面的独立 User Skills 包管理入口。可以从本地包目录或 ZIP 安装；
+添加 `--replace` 可替换已有包，无人值守移除则使用 `remove --yes`。未提供 `--yes` 时，
+只有交互式终端会执行确认。官方包命令是一次性的，并会关闭其私有 Core。已经初始化的
+Awesome Session 会保留不可变 Skill catalog，因此选择或加载变更后的包之前应重启该 Session。
+完整包格式和安全契约见 [Skills](docs/extensions/skills.zh-CN.md)。
 
 如果启动时发现未完成的 Turn，Awesome 会先询问再继续。已验证的本地 checkpoint
 默认提供 Retry；如果 shell 或 MCP 调用结果不确定，则默认提供 Abort，并且绝不会

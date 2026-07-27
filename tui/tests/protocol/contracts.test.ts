@@ -58,6 +58,92 @@ describe("protocol v4 handshake", () => {
   });
 });
 
+describe("protocol v4 Skill package management contracts", () => {
+  it("accepts strict pre-initialize Skill requests and closed mutation results", () => {
+    expect(methodSchemas["skill.list"].params.safeParse({}).success).toBe(true);
+    expect(
+      methodSchemas["skill.install"].params.safeParse({
+        source_path: "./review.zip",
+        replace: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      methodSchemas["skill.install"].params.safeParse({
+        source_path: "./review.zip",
+      }).success,
+    ).toBe(true);
+    expect(
+      methodSchemas["skill.remove"].params.safeParse({ name: "review" })
+        .success,
+    ).toBe(true);
+    expect(
+      methodSchemas["skill.install"].value.safeParse({
+        name: "review",
+        status: "replaced",
+      }).success,
+    ).toBe(true);
+    expect(
+      methodSchemas["skill.remove"].value.safeParse({
+        name: "review",
+        status: "removed",
+      }).success,
+    ).toBe(true);
+    expect(
+      methodSchemas["skill.remove"].value.safeParse({
+        name: "review",
+        status: "deleted",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects unsafe paths, malformed names, unknown fields, and unordered lists", () => {
+    const install = methodSchemas["skill.install"].params;
+    expect(
+      install.safeParse({ source_path: " review.zip ", replace: false })
+        .success,
+    ).toBe(false);
+    expect(
+      install.safeParse({ source_path: "review\n.zip", replace: false })
+        .success,
+    ).toBe(false);
+    expect(
+      install.safeParse({
+        source_path: "review.zip",
+        replace: false,
+        validate_package: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      methodSchemas["skill.remove"].params.safeParse({ name: "Review_Skill" })
+        .success,
+    ).toBe(false);
+
+    const list = methodSchemas["skill.list"].value;
+    const ordered = {
+      skills: [
+        { name: "alpha", description: "Alpha workflow" },
+        { name: "review", description: "Review workflow" },
+      ],
+    };
+    expect(list.safeParse(ordered).success).toBe(true);
+    expect(
+      list.safeParse({ skills: [...ordered.skills].reverse() }).success,
+    ).toBe(false);
+    expect(
+      list.safeParse({ skills: [ordered.skills[0], ordered.skills[0]] })
+        .success,
+    ).toBe(false);
+    expect(
+      list.safeParse({
+        skills: Array.from({ length: 513 }, (_, index) => ({
+          name: `skill-${String(index).padStart(3, "0")}`,
+          description: "Bounded Skill",
+        })),
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("protocol v4 Web and citation contracts", () => {
   const citation = {
     id: "S1",

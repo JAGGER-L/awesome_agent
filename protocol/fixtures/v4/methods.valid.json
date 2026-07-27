@@ -59,6 +59,66 @@
       }
     },
     {
+      "method": "skill.list",
+      "name": "skill.list",
+      "params": {},
+      "result": {
+        "ok": true,
+        "value": {
+          "skills": [
+            {
+              "description": "Review code safely",
+              "name": "review"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "method": "skill.install",
+      "name": "skill.install.installed",
+      "params": {
+        "replace": false,
+        "source_path": "C:\\packages\\review"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "name": "review",
+          "status": "installed"
+        }
+      }
+    },
+    {
+      "method": "skill.install",
+      "name": "skill.install.replaced",
+      "params": {
+        "replace": true,
+        "source_path": "C:\\packages\\review.zip"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "name": "review",
+          "status": "replaced"
+        }
+      }
+    },
+    {
+      "method": "skill.remove",
+      "name": "skill.remove",
+      "params": {
+        "name": "review"
+      },
+      "result": {
+        "ok": true,
+        "value": {
+          "name": "review",
+          "status": "removed"
+        }
+      }
+    },
+    {
       "method": "application.getState",
       "name": "application.get_state",
       "params": {},

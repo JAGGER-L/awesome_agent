@@ -41,6 +41,9 @@ Python object，这里仍是最终不变量边界。
 | 方法 | 用途 |
 | --- | --- |
 | `initialize` | 协商身份并执行启动/bootstrap |
+| `skill.list` | 在初始化前列出有效的已安装 User Skill 包 |
+| `skill.install` | 在初始化前校验并安装或替换一个本地 User Skill 包 |
+| `skill.remove` | 在初始化前移除一个已安装 User Skill 包 |
 | `application.getState` | 读取权威 Application 状态 |
 | `thread.list` | 分页读取工作区 Threads |
 | `thread.search` | 分页读取 Workspace 隔离的会话 substring match |
@@ -97,7 +100,12 @@ TypeScript exhaustive switch 会在编译时暴露遗漏的 case。
 
 ```text
 UNINITIALIZED
+  -> skill.* starts: PREINITIALIZE_ACTIVE
   -> initialize starts: INITIALIZING
+
+PREINITIALIZE_ACTIVE（guard；BootstrapPhase 仍为 UNINITIALIZED）
+  -> owned worker 收敛后的 result/error/cancellation: UNINITIALIZED
+  -> 另一个 skill.* 或 initialize: reject
 
 INITIALIZING
   -> ready result: READY
@@ -117,10 +125,16 @@ Host 在 dispatch 前把 method 映射到封闭的 `ApplicationOperation` 集合
 查询 admission decision。它只负责把拒绝转换到 wire；不会维护另一套 phase enum，也不会
 检查序列化 request/result payload 来推进 readiness。
 
-进入 `READY` 之前，普通请求会收到稳定的 server-not-initialized 或 server-not-ready 错误。
-第二个并发 initialize 会收到 `initialization_in_progress`。Bootstrap 期间，只准入匹配的
-interaction、另一次 initialize、取消和 shutdown。畸形或 v3 initialize 绝不会推进
-Application phase。
+三个私有 `skill.*` method 是 plain `UNINITIALIZED` 状态下唯一看似普通但可用的方法。它们
+共用一个由 Application 持有的 pre-initialize guard，彼此互斥，也与 `initialize` 互斥，且绝不
+自行初始化 Application。一个请求完成后，私有 client 可以初始化同一个 Core，discovery 会
+观察到变更后的 User 包目录。官方 `awesome skills` CLI 则执行一个请求后关闭 Core。两条路径
+都不会热更新已经初始化的 Session 所持有的不可变 catalog。
+
+进入 `READY` 之前，其他普通请求会收到稳定的 server-not-initialized 或 server-not-ready
+错误。Initialization 一旦开始，就不再准入 `skill.*`。第二个并发 initialize 会收到
+`initialization_in_progress`；匹配的 bootstrap interaction、cancellation 与 shutdown 保留各自
+定义的 control path。畸形或 v3 initialize 绝不会推进 Application phase。
 
 进入 `READY` 后仍可重复初始化，因此界面重试可以观察当前快照，而不会创建第二个
 Application。这些所有权规则保留单一 Application-owned Protocol v4 request、result、status
