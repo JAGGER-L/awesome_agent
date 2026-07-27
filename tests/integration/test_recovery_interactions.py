@@ -411,7 +411,10 @@ def _recovery_events(sink: CollectingEventSink) -> list[Any]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", [None, "execute", "mcp.example.change"])
+@pytest.mark.parametrize(
+    "tool_name",
+    [None, "write_file", "edit_file", "delete", "execute", "mcp.example.change"],
+)
 async def test_checkpoint_retries_at_most_once_through_application_protocol(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -438,7 +441,7 @@ async def test_checkpoint_retries_at_most_once_through_application_protocol(
     assert required.payload.target == (
         f"unfinished Turn {turn.id}"
         if tool_name is None
-        else "uncertain external tool call"
+        else "uncertain side-effecting tool call"
     )
     state = _success_value(
         await dispatcher.dispatch(
@@ -498,8 +501,11 @@ async def test_checkpoint_retries_at_most_once_through_application_protocol(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["execute", "mcp.example.change"])
-async def test_uncertain_external_checkpoint_aborts_without_replay(
+@pytest.mark.parametrize(
+    "tool_name",
+    ["write_file", "edit_file", "delete", "execute", "mcp.example.change"],
+)
+async def test_uncertain_side_effecting_checkpoint_aborts_without_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     tool_name: str,
@@ -519,7 +525,7 @@ async def test_uncertain_external_checkpoint_aborts_without_replay(
     )
     [required] = _recovery_events(sink)
     assert required.turn_id == turn.id
-    assert required.payload.target == "uncertain external tool call"
+    assert required.payload.target == "uncertain side-effecting tool call"
 
     aborted = _success_value(
         await dispatcher.dispatch(

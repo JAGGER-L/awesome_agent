@@ -32,13 +32,13 @@ mutation；它无法让任意 shell 或 MCP 副作用变得可逆。
 
 Built-in 基线如下：
 
-| 工具 | Capability | 受管文件变更 |
-| --- | --- | --- |
-| `ls`、`read_file`、`glob`、`grep` | `workspace.read` | 无 |
-| `write_file`、`edit_file` | `workspace.write` | 记入 journal |
-| `delete` | `workspace.delete` | 记入 journal |
-| `execute` | `shell.execute` | 仅 observation |
-| `web_search`、`web_fetch`（启用且配置有效时） | `network.read` | 无；外部且不可重放 |
+| 工具 | Capability | 受管文件变更 | 重放安全性 |
+| --- | --- | --- | --- |
+| `ls`、`read_file`、`glob`、`grep` | `workspace.read` | 无 | replayable |
+| `write_file`、`edit_file` | `workspace.write` | 记入 journal | non-replayable |
+| `delete` | `workspace.delete` | 记入 journal | non-replayable |
+| `execute` | `shell.execute` | 仅 observation | non-replayable |
+| `web_search`、`web_fetch`（启用且配置有效时） | `network.read` | 无；外部 | non-replayable |
 
 Registry 可扩展，八个不是固定上限。MCP namespace 会以原子方式替换，名称形如
 `mcp.<server>.<tool>`。
@@ -99,13 +99,14 @@ admission 与 capability policy 回答不同问题：admission 判断这一项�
 ## 重放安全性
 
 Replay safety 是注册 metadata，而不是由恢复流程推断的属性。只有受管本地语义能够证明
-重复调用安全的 built-in 才可标记为 replayable。MCP 调用以及其它外部或未分类作用均为
-non-replayable。`web_search` 与 `web_fetch` 都被明确标为 non-replayable，因此 dispatch 后
-崩溃会默认 Abort，不会重复一次可能计费或已被外部观察到的请求。恢复会在当前 Runtime Registry 中查找同名工具，并消费该注册项的
-metadata。Replayable 工作可以继续；non-replayable、metadata 缺失或未知时会 fail closed，
-进入恢复 interaction，绝不自动重试。用户可以显式选择 Retry，而不是默认的 Abort。因此，
-同名工具的契约变更必须按 checkpoint compatibility 变更管理。Executor 与恢复流程都不
-维护另一份特殊工具名列表。
+重复调用安全的 built-in 才可标记为 replayable；读取工具满足这一条件。文件修改工具不
+满足：崩溃后再次 edit、overwrite 或 delete 可能作用于新的文件系统状态，即使 Change
+Journal 已经记录首次作用。因此它们属于 non-replayable，MCP、Web、shell 与其它外部或
+未分类作用同样如此。Dispatch 后崩溃会默认 Abort，不会重复该操作。恢复会在当前 Runtime
+Registry 中查找同名工具，并消费该注册项的 metadata。Replayable 工作可以继续；
+non-replayable、metadata 缺失或未知时会 fail closed，进入恢复 interaction，绝不自动重试。
+用户可以显式选择 Retry，而不是默认的 Abort。因此，同名工具的契约变更必须按 checkpoint
+compatibility 变更管理。Executor 与恢复流程都不维护另一份特殊工具名列表。
 
 ## 权限决策
 

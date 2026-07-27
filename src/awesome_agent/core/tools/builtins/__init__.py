@@ -260,7 +260,7 @@ def register_modifying_tools(
         read_only=False,
         describe=_field_describer(verb="Delete", operation="delete", field="path"),
         admit=admit_delete,
-        replay_safety=ToolReplaySafety.REPLAYABLE,
+        replay_safety=ToolReplaySafety.NON_REPLAYABLE,
     )
     _register(
         registry,
@@ -273,7 +273,7 @@ def register_modifying_tools(
         read_only=False,
         describe=_field_describer(verb="Edit", operation="edit", field="path"),
         admit=_path_admitter(must_exist=True, expected_kind="file"),
-        replay_safety=ToolReplaySafety.REPLAYABLE,
+        replay_safety=ToolReplaySafety.NON_REPLAYABLE,
     )
     if process_runner is not None:
         _register(
@@ -305,7 +305,7 @@ def register_modifying_tools(
         read_only=False,
         describe=_write_describer(workspace),
         admit=_write_admitter(workspace),
-        replay_safety=ToolReplaySafety.REPLAYABLE,
+        replay_safety=ToolReplaySafety.NON_REPLAYABLE,
     )
 
 

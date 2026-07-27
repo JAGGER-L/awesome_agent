@@ -1790,7 +1790,7 @@ class _LocalApplicationBackend:
             pending = self._interactions.create(
                 kind=InteractionKind.RECOVERY_DECISION,
                 prompt=(
-                    "A tool may have produced external side effects. Retry or abort "
+                    "A tool may have produced side effects. Retry or abort "
                     "this unfinished Turn?"
                     if uncertain
                     else "Resume this unfinished Turn from its verified checkpoint?"
@@ -1799,7 +1799,7 @@ class _LocalApplicationBackend:
                     "recover_uncertain_turn" if uncertain else "recover_unfinished_turn"
                 ),
                 target=(
-                    "uncertain external tool call"
+                    "uncertain side-effecting tool call"
                     if uncertain
                     else f"unfinished Turn {recovery.turn_id}"
                 ),

@@ -187,7 +187,9 @@ Change Journal 为内置文件 mutation 创建快照。shell 执行会记录一�
 
 ### Awesome 询问是否恢复未完成 Turn
 
-对于已验证的本地 checkpoint，Retry 排在第一位，并从冻结上下文继续。当 shell 或 MCP 调用可能已经执行时，Abort 排在第一位；Retry 可能重复剩余外部工作。决定前检查目标。Awesome 绝不会透明重放结果不确定的调用。
+对于已验证的本地 checkpoint，Retry 排在第一位，并从冻结上下文继续。当文件修改、shell、
+MCP 或 Web 调用可能已经执行时，Abort 排在第一位；Retry 可能重复剩余副作用。决定前检查
+受影响文件和外部目标。Awesome 绝不会透明重放结果不确定的调用。
 
 ### Awesome 要求重置本地状态
 

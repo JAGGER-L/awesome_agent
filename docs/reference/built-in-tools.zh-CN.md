@@ -165,6 +165,10 @@ Metadata 报告请求/实际范围、总行数和 truncation。包含 NUL、非 
 Journal 捕获，因此 `/diff`、`/undo`、crash reconciliation 和审计看到的是同一个修改边界。
 一个 ChangeSet 最多可包含 1,000 个 filesystem node 和 50 MiB 已捕获内容。
 
+`write_file`、`edit_file` 和 `delete` 都是 `non_replayable`。Journal 支持的可逆性不代表
+调用重放具有幂等性：崩溃后，用户或其它进程可能已经修改或重新创建同一路径。因此，这些
+调用的结果不确定时，恢复默认选择 Abort。
+
 ### `write_file`
 
 创建或原子替换 UTF-8 文件。

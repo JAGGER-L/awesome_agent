@@ -9,8 +9,8 @@ Awesome 不会用一条数据库记录来证明所有事实：
 | 记录 | 能证明什么 | 不能证明什么 |
 | --- | --- | --- |
 | Thread 与 Turn | 请求、终态、回答和用量 | 精确的文件系统状态 |
-| LangGraph checkpoint | 可恢复 Agent 循环停在何处 | 外部副作用是否发生 |
-| Change Journal | 观测到的内置文件前后状态和 shell 尝试 | shell 或 MCP 造成的任意影响 |
+| LangGraph checkpoint | 可恢复 Agent 循环停在何处 | 待处理的副作用工具是否已经执行 |
+| Change Journal | 观测到的内置文件前后状态和 shell 尝试 | 调用幂等性，以及 shell 或 MCP 造成的任意影响 |
 
 将这些记录分开，能够防止把会话中的“completed”标记误当成文件系统事务。
 
@@ -59,16 +59,21 @@ open --> applied ------> undone
 ```text
 未完成 Turn
       |
-      +-- checkpoint 与上下文已验证 --> Retry 是安全默认值
+      +-- 已验证且待处理工作可重放 -----> Retry 是安全默认值
       |
-      +-- 外部工具可能已经执行 -------> Abort 是安全默认值
+      +-- 不可重放工具可能已经执行 ----> Abort 是安全默认值
       |
       +-- checkpoint/上下文无效 -------> 以诊断失败
 ```
 
-对于已验证的本地 checkpoint，Retry 会从该 checkpoint 继续，而不会用当前文件重新构建不同的上下文。对于结果不确定的 shell 或 MCP 调用，Awesome 绝不会透明地重连、重放或假定失败。用户必须在“让这种不确定性保持可见的情况下重试剩余 Turn”和“中止 Turn”之间选择。
+对于已验证的本地 checkpoint，Retry 会从该 checkpoint 继续，而不会用当前文件重新构建
+不同的上下文。只有待处理工具的注册信息能够证明重复调用安全时，恢复才会自动继续。
+内置文件修改工具属于 non-replayable，因为崩溃后用户或其它进程可能修改同一路径。对于
+结果不确定的文件修改、shell、MCP 或 Web 调用，Awesome 绝不会透明重放或假定失败。
+用户必须在“让这种不确定性保持可见的情况下重试剩余 Turn”和“中止 Turn”之间选择。
 
-Abort 会把未完成 Turn 标记为失败，不再继续。它不会回滚外部系统，也不会擦除 Change Journal 证据。
+Abort 会把未完成 Turn 标记为失败，不再继续。它不会回滚文件系统或外部系统，也不会擦除
+Change Journal 证据。
 
 ## 启动状态兼容性
 
@@ -84,10 +89,10 @@ Ctrl+C 会请求有界清理，并保留原始取消结果。进程树终止会�
 
 ## 恢复检查清单
 
-1. 阅读精确提示，判断不确定性属于本地、文件系统、shell 还是 MCP。
-2. 在可用时检查 `/status`、`/diff` 和外部目标。
+1. 阅读精确提示，判断不确定性属于本地、文件系统、shell、MCP 还是 Web。
+2. 在可用时检查 `/status`、`/diff`、受影响文件和外部目标。
 3. 只有重放剩余逻辑工作安全时才选择 Retry。
-4. 当重复外部影响比未完成 Turn 更糟时，选择 Abort。
+4. 当重复副作用比未完成 Turn 更糟时，选择 Abort。
 5. 开始一个新 Turn，说明任何已经手动验证的状态。
 
 按症状和错误采取的步骤见[故障排查](../user-guide/troubleshooting.zh-CN.md)。存储细节和文件位置见[文件与状态](../reference/files-and-state.zh-CN.md)。

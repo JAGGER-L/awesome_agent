@@ -187,6 +187,11 @@ identities are captured through the Change Journal so `/diff`, `/undo`, crash
 reconciliation, and audit see the same mutation boundary. A ChangeSet can
 contain at most 1,000 filesystem nodes and 50 MiB of captured content.
 
+`write_file`, `edit_file`, and `delete` are `non_replayable`. Journal-backed
+reversibility does not make invocation replay idempotent: after a crash, a user
+or another process may have changed or recreated the same path. Recovery
+therefore defaults to Abort whenever one of these calls has an uncertain result.
+
 ### `write_file`
 
 Create or atomically replace a UTF-8 file.

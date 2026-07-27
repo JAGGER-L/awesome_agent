@@ -34,7 +34,7 @@ Thread 和 Turn。
 | shutdown | 空请求 | stopped 确认 | 干净地关闭资源 |
 
 所有生命周期都显式携带身份、不准入第二个前台 mutation、对预期 busy/failure 使用类型化
-状态、传播取消，并且绝不在没有用户决策的情况下重放结果不确定的外部 action。
+状态、传播取消，并且绝不在没有用户决策的情况下重放结果不确定的副作用 action。
 
 ## 启动与信任
 
@@ -267,9 +267,9 @@ Application 投影。自洽但无关的 checkpoint 不会被接受为权威。�
 
 对于中断的工具调用，恢复流程会在当前 Runtime Registry 中查找同名工具，并使用该注册项的
 replay-safety metadata；它不按具体工具名分支。经证明的本地 built-in 可以是 replayable。
-MCP 为 non-replayable，metadata 缺失或未知时 fail closed。这些情况绝不会自动重试：
-interaction 默认选择 Abort，而显式 Retry 可以继续旧 checkpoint 并重复 pending call。因此，
-变更同名工具契约时必须考虑 checkpoint compatibility。
+文件修改、MCP 和 Web 工具为 non-replayable，metadata 缺失或未知时 fail closed。这些情况
+绝不会自动重试：interaction 默认选择 Abort，而显式 Retry 可以继续旧 checkpoint 并重复
+pending call。因此，变更同名工具契约时必须考虑 checkpoint compatibility。
 
 这种恢复 Retry 与 `/retry [turn_id]` 不同。恢复可在显式批准后继续一个未完成 checkpoint；
 slash command 则要求终态 Turn，创建全新 Thread 与 Turn，并且绝不复用或复制来源 checkpoint。
@@ -303,7 +303,7 @@ shutdown request
 - 预期工具错误成为有界 Agent observation；
 - 意外图/工具错误会显式终止 Operation；
 - 一个 Operation 只产生一个终态生命周期事件；
-- 结果不确定的外部作用绝不会自动重放；
+- 结果不确定的副作用绝不会自动重放；
 - 持久化完成后事件交付失败会被记录，而不会改变已经完成的产品事实。
 
 ## 设计取舍
@@ -311,7 +311,7 @@ shutdown request
 - 串行前台工作限制吞吐量，却让审批、ChangeSet、取消和恢复拥有唯一明确的所有者。
 - 会话内 interaction 避免持久化过期提示，但重启后的会话必须从持久化事实重建恢复决策。
 - TUI 输入排队改善交互流程，却不承诺 Core 侧并行。
-- 显式不确定结果决策增加摩擦，以避免重复外部作用。
+- 显式不确定结果决策增加摩擦，以避免重复副作用。
 
 ## 源代码与测试索引
 

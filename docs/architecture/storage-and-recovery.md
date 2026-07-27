@@ -241,7 +241,7 @@ Recovery validates more than “JSON parses”:
 - context manifest shape, content hashes, token estimates, and transcript
   coverage;
 - whether final answer and termination fields form a legal state;
-- whether a pending tool can represent an uncertain external result.
+- whether a pending side-effecting tool can represent an uncertain result.
 
 An invalid checkpoint fails that Turn with a stable code. It is never repaired
 by guessing a missing graph transition.
@@ -376,15 +376,15 @@ The coordinator classifies an unfinished Turn:
 - completed valid graph state: finish product persistence and delete the
   checkpoint;
 - valid unfinished state: offer or perform the bounded resume flow;
-- uncertain `execute` or MCP boundary: require explicit Abort/Retry with Abort
-  first;
+- uncertain file mutation, `execute`, MCP, or Web boundary: require explicit
+  Abort/Retry with Abort first;
 - missing, corrupt, inconsistent, or unrecoverable state: mark failed with a
   stable diagnostic;
 - checkpoint belonging to an already-terminal Turn: remove stale checkpoint.
 
-Retry is never implied by opening a Thread. Replaying an uncertain shell or MCP
-call could duplicate an external effect, so the choice is bound to that Thread
-and Turn and must be made explicitly.
+Retry is never implied by opening a Thread. Replaying an uncertain file
+mutation, shell, MCP, or Web call could duplicate a side effect, so the choice
+is bound to that Thread and Turn and must be made explicitly.
 
 ## Change Journal durability
 
@@ -422,7 +422,7 @@ process-crash reconciliation, not whole-machine power-loss atomicity.
 | Provider credential evidence is invalid or cannot reconcile | journal/backup remains; runtime stays unpublished or fenced | fail with `recovery_required`; do not load the half-state |
 | mutation intent persists, effect uncertain | PendingMutation + blobs | verify, finalize, or roll back |
 | materialization source changes before commit | no destination rows | return conflict; explicitly retry the command |
-| shell/MCP transport fails after dispatch | conservative observation / uncertain tool state | explicit Abort or Retry |
+| side-effecting tool fails after dispatch | conservative observation / uncertain tool state | explicit Abort or Retry |
 | migration step fails and rolls back | fixed pre-migration SQLite backup | fail startup; preserve backup for manual recovery |
 | migration rollback cannot be proved | fixed backup plus fenced database worker | fail closed; require manual diagnosis |
 | state reset fresh initialization fails | renamed original directory | restore original namespace |

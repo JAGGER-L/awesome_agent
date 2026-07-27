@@ -69,14 +69,14 @@ async def test_baseline_tools_exist_without_fixing_total_tool_count(
         "write_file": ToolCapability.WORKSPACE_WRITE,
     }
     assert {name: registry.replay_safety(name) for name in baseline} == {
-        "delete": ToolReplaySafety.REPLAYABLE,
-        "edit_file": ToolReplaySafety.REPLAYABLE,
+        "delete": ToolReplaySafety.NON_REPLAYABLE,
+        "edit_file": ToolReplaySafety.NON_REPLAYABLE,
         "execute": ToolReplaySafety.NON_REPLAYABLE,
         "glob": ToolReplaySafety.REPLAYABLE,
         "grep": ToolReplaySafety.REPLAYABLE,
         "ls": ToolReplaySafety.REPLAYABLE,
         "read_file": ToolReplaySafety.REPLAYABLE,
-        "write_file": ToolReplaySafety.REPLAYABLE,
+        "write_file": ToolReplaySafety.NON_REPLAYABLE,
     }
     await database.aclose()
 

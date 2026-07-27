@@ -299,9 +299,10 @@ remain. Verify shell and MCP targets manually.
 ### Awesome asks whether to recover an unfinished Turn
 
 For a verified local checkpoint, Retry is listed first and continues from the
-frozen context. When a shell or MCP call may have acted, Abort is listed first;
-Retry may repeat remaining external work. Inspect the target before deciding.
-Awesome never transparently replays an uncertain call.
+frozen context. When a file mutation, shell, MCP, or Web call may have acted,
+Abort is listed first; Retry may repeat remaining side effects. Inspect affected
+files and external targets before deciding. Awesome never transparently replays
+an uncertain call.
 
 ### Awesome asks to reset local state
 

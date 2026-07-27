@@ -124,8 +124,9 @@ restart that Session before selecting or loading a changed package. See
 [Skills](docs/extensions/skills.md) for the package and safety contract.
 
 If startup finds an unfinished Turn, Awesome asks before continuing it. A
-verified local checkpoint offers Retry first; a shell or MCP call whose outcome
-is uncertain offers Abort first and is never replayed automatically.
+verified local checkpoint offers Retry first only when the pending tool is safe
+to repeat. An uncertain file mutation, shell command, MCP call, or Web request
+offers Abort first and is never replayed automatically.
 
 `/fork [turn_id]` materializes conversation history through a terminal Turn in
 a new Thread. `/retry [turn_id]` materializes the prefix before that Turn, then

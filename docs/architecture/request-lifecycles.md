@@ -38,7 +38,8 @@ Thread, and Turn.
 
 Across every lifecycle, identity is explicit, no second foreground mutation is
 admitted, expected busy/failure states are typed, cancellation is propagated,
-and an uncertain external action is never replayed without a user decision.
+and an uncertain side-effecting action is never replayed without a user
+decision.
 
 ## Startup and trust
 
@@ -308,9 +309,10 @@ Turns even if one fails.
 For an interrupted tool call, recovery looks up the same name in the current
 Runtime Registry and uses that registration's replay-safety metadata; it does
 not branch on concrete tool names. A proven local built-in may be replayable.
-MCP is non-replayable, and missing or unknown metadata fails closed. Those cases
-never retry automatically: the interaction defaults to Abort, while an
-explicit Retry may continue the old checkpoint and repeat the pending call.
+File mutation, MCP, and Web tools are non-replayable, and missing or unknown
+metadata fails closed. Those cases never retry automatically: the interaction
+defaults to Abort, while an explicit Retry may continue the old checkpoint and
+repeat the pending call.
 Changing a same-named tool contract must therefore account for checkpoint
 compatibility.
 
@@ -351,7 +353,7 @@ begun.
 - expected tool errors become bounded Agent observations;
 - unexpected graph/tool errors terminate the Operation visibly;
 - one Operation produces one terminal lifecycle event;
-- uncertain external outcomes are never replayed automatically;
+- uncertain side-effecting outcomes are never replayed automatically;
 - event-delivery failure after durable completion is logged rather than
   changing the already-completed product fact.
 
@@ -363,7 +365,7 @@ begun.
   session must reconstruct recovery decisions from durable facts.
 - TUI input queuing improves flow without promising Core-side parallelism.
 - Explicit uncertain-outcome decisions add friction in exchange for avoiding
-  duplicate external effects.
+  duplicate side effects.
 
 ## Source and test map
 

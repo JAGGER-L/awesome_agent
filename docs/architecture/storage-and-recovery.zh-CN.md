@@ -210,7 +210,7 @@ LangGraph checkpoint 以 Turn ID 为 key。可恢复 checkpoint 包含严格 `Ag
 - message role、tool-call/result 顺序和活动尾部索引；
 - 上下文 manifest 形态、内容 hash、token 估算和 transcript 覆盖；
 - final answer 与 termination 字段能否构成合法状态；
-- pending tool 能否表示结果不确定的外部操作。
+- pending tool 能否表示结果不确定的副作用操作。
 
 无效 checkpoint 会以稳定错误码使对应 Turn 失败。系统绝不会通过猜测缺失的图 transition
 来修复它。
@@ -323,12 +323,13 @@ Coordinator 会对未完成 Turn 分类：
 
 - 已完成且有效的图状态：完成产品持久化并删除 checkpoint；
 - 有效未完成状态：提供或执行有界 resume 流程；
-- 不确定的 `execute` 或 MCP 边界：要求显式 Abort/Retry，并把 Abort 放在首位；
+- 不确定的文件修改、`execute`、MCP 或 Web 边界：要求显式 Abort/Retry，并把 Abort 放在
+  首位；
 - 缺失、损坏、不一致或不可恢复状态：以稳定诊断标记失败；
 - 属于已终态 Turn 的 checkpoint：移除残留 checkpoint。
 
-打开 Thread 并不隐含 Retry。重放不确定的 shell 或 MCP 调用可能复制外部作用，因此选择
-必须绑定到该 Thread 和 Turn，并显式作出。
+打开 Thread 并不隐含 Retry。重放不确定的文件修改、shell、MCP 或 Web 调用可能复制副作用，
+因此选择必须绑定到该 Thread 和 Turn，并显式作出。
 
 ## Change Journal 持久性
 
@@ -360,7 +361,7 @@ SQLite 使用 WAL 和 `synchronous=NORMAL`。Blob 文件会在替换前同步，
 | Provider credential 证据无效或无法校正 | journal/backup 保留；runtime 不发布或保持 fenced | 以 `recovery_required` 失败；不加载半状态 |
 | mutation intent 持久化，作用不确定 | PendingMutation + blob | 校验、完成或回滚 |
 | materialization 来源在提交前改变 | 没有目标行 | 返回 conflict；显式重试命令 |
-| shell/MCP transport 调度后失败 | 保守 observation / 不确定工具状态 | 显式 Abort 或 Retry |
+| 副作用工具调度后失败 | 保守 observation / 不确定工具状态 | 显式 Abort 或 Retry |
 | migration step 失败并回滚 | 固定的 migration 前 SQLite backup | 启动失败；保留 backup 供手动恢复 |
 | 无法证明 migration rollback | 固定 backup 与被 fenced 的 database worker | fail closed；需要人工诊断 |
 | state reset 的全新初始化失败 | 已改名的原目录 | 恢复原 namespace |

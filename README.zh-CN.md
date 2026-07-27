@@ -106,9 +106,9 @@ awesome --help
 Awesome Session 会保留不可变 Skill catalog，因此选择或加载变更后的包之前应重启该 Session。
 完整包格式和安全契约见 [Skills](docs/extensions/skills.zh-CN.md)。
 
-如果启动时发现未完成的 Turn，Awesome 会先询问再继续。已验证的本地 checkpoint
-默认提供 Retry；如果 shell 或 MCP 调用结果不确定，则默认提供 Abort，并且绝不会
-自动重放该外部操作。
+如果启动时发现未完成的 Turn，Awesome 会先询问再继续。只有待处理工具可安全重复时，
+已验证的本地 checkpoint 才默认提供 Retry；如果文件修改、shell、MCP 或 Web 调用结果
+不确定，则默认提供 Abort，并且绝不会自动重放该操作。
 
 `/fork [turn_id]` 会把截至某个终态 Turn 的会话历史物化到新 Thread；
 `/retry [turn_id]` 会物化该 Turn 之前的前缀，再使用原 Turn 冻结的模型、Thinking、

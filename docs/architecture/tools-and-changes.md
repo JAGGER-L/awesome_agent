@@ -40,13 +40,13 @@ bounds handler cleanup without teaching the model about executor internals.
 
 The built-in baseline is:
 
-| Tool | Capability | Managed file changes |
-| --- | --- | --- |
-| `ls`, `read_file`, `glob`, `grep` | `workspace.read` | none |
-| `write_file`, `edit_file` | `workspace.write` | journaled |
-| `delete` | `workspace.delete` | journaled |
-| `execute` | `shell.execute` | observation only |
-| `web_search`, `web_fetch` (when enabled and configured) | `network.read` | none; external and non-replayable |
+| Tool | Capability | Managed file changes | Replay safety |
+| --- | --- | --- | --- |
+| `ls`, `read_file`, `glob`, `grep` | `workspace.read` | none | replayable |
+| `write_file`, `edit_file` | `workspace.write` | journaled | non-replayable |
+| `delete` | `workspace.delete` | journaled | non-replayable |
+| `execute` | `shell.execute` | observation only | non-replayable |
+| `web_search`, `web_fetch` (when enabled and configured) | `network.read` | none; external | non-replayable |
 
 The registry is extensible; eight is not a fixed maximum. MCP namespaces are
 replaced atomically with names such as `mcp.<server>.<tool>`.
@@ -122,16 +122,19 @@ summaries retain argument names, not raw argument values.
 
 Replay safety is registration metadata, not a property inferred by recovery.
 Only a built-in whose managed local semantics prove that a repeated call is
-safe may be marked replayable. MCP calls and other external or unclassified
-effects are non-replayable. Both `web_search` and `web_fetch` are explicitly
-non-replayable, so a crash after dispatch defaults to Abort instead of
-repeating a paid or externally observed request. Recovery looks up the same name in the current
-Runtime Registry and consumes that registration's metadata. Replayable work may
-resume; non-replayable, missing, or unknown metadata fails closed into a
-recovery interaction and is never retried automatically. The user may
-explicitly choose Retry instead of the default Abort. A change to a same-named
-tool's contract must therefore be managed as a checkpoint-compatibility change.
-Neither the Executor nor recovery keeps a parallel list of special tool names.
+safe may be marked replayable. Reads meet that requirement. File mutation tools
+do not: after a crash, repeating an edit, overwrite, or deletion could consume
+new filesystem state even though the Change Journal recorded the first effect.
+They are therefore non-replayable, as are MCP calls, Web requests, shell
+commands, and other external or unclassified effects. A crash after dispatch
+defaults to Abort instead of repeating the operation. Recovery looks up the
+same name in the current Runtime Registry and consumes that registration's
+metadata. Replayable work may resume; non-replayable, missing, or unknown
+metadata fails closed into a recovery interaction and is never retried
+automatically. The user may explicitly choose Retry instead of the default
+Abort. A change to a same-named tool's contract must therefore be managed as a
+checkpoint-compatibility change. Neither the Executor nor recovery keeps a
+parallel list of special tool names.
 
 ## Permission decision
 
