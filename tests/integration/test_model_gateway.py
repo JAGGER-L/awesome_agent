@@ -19,13 +19,11 @@ from awesome_agent.config import (
 )
 from awesome_agent.config.loader import SecretValues
 from awesome_agent.modeling import (
-    ModelGateway,
     ModelRequest,
-    RetryPolicy,
     SelectedModel,
     UserMessage,
 )
-from awesome_agent.providers import create_provider_mapping
+from awesome_agent.providers import managed_gateway_factory
 
 
 class AsyncEvents:
@@ -54,24 +52,23 @@ class AsyncEvents:
         )
 
 
-def _client(create: AsyncMock) -> AsyncOpenAI:
-    return cast(
+def _client(create: AsyncMock) -> tuple[AsyncOpenAI, AsyncMock]:
+    close = AsyncMock()
+    client = cast(
         AsyncOpenAI,
         cast(
             Any,
             SimpleNamespace(
-                chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+                chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+                close=close,
             ),
         ),
     )
-
-
-async def _no_sleep(delay: float) -> None:
-    del delay
+    return client, close
 
 
 @pytest.mark.asyncio
-async def test_both_configured_providers_share_one_networkless_gateway(
+async def test_managed_factory_routes_both_configured_providers_without_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     application = ApplicationConfig(
@@ -89,43 +86,52 @@ async def test_both_configured_providers_share_one_networkless_gateway(
     )
     deepseek_create = AsyncMock(return_value=AsyncEvents("deepseek"))
     kimi_create = AsyncMock(return_value=AsyncEvents("kimi"))
-    providers = create_provider_mapping(
-        application,
-        secrets,
-        models={
-            "deepseek": "deepseek/deepseek-v4-pro",
-            "kimi": "kimi/kimi-k2.5",
-        },
-        deepseek_client=_client(deepseek_create),
-        kimi_client=_client(kimi_create),
-    )
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "changed-after-composition")
-    monkeypatch.setenv("MOONSHOT_API_KEY", "changed-after-composition")
-    gateway = ModelGateway(
-        providers,
-        retry_policy=RetryPolicy(max_retries=0),
-        sleeper=_no_sleep,
-    )
+    deepseek_client, deepseek_close = _client(deepseek_create)
+    kimi_client, kimi_close = _client(kimi_create)
+    constructed: list[dict[str, object]] = []
+
+    def construct_client(**kwargs: object) -> AsyncOpenAI:
+        constructed.append(dict(kwargs))
+        return (
+            deepseek_client
+            if "deepseek" in str(kwargs["base_url"])
+            else kimi_client
+        )
+
     request = ModelRequest(
         messages=(UserMessage(content="hello"),),
         thinking_enabled=False,
     )
 
-    deepseek_turn = await gateway.complete(
-        SelectedModel(provider="deepseek", model="deepseek/deepseek-v4-pro"),
-        request,
-    )
-    kimi_turn = await gateway.complete(
-        SelectedModel(provider="kimi", model="kimi/kimi-k2.5"),
-        request,
-    )
+    async with managed_gateway_factory(
+        application,
+        secrets,
+        client_factory=construct_client,
+    ) as build:
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "changed-after-composition")
+        monkeypatch.setenv("MOONSHOT_API_KEY", "changed-after-composition")
+        deepseek_gateway = build("deepseek", "deepseek/deepseek-v4-pro")
+        kimi_gateway = build("kimi", "kimi/kimi-k2.5")
+        deepseek_turn = await deepseek_gateway.complete(
+            SelectedModel(provider="deepseek", model="deepseek/deepseek-v4-pro"),
+            request,
+        )
+        kimi_turn = await kimi_gateway.complete(
+            SelectedModel(provider="kimi", model="kimi/kimi-k2.5"),
+            request,
+        )
 
-    assert tuple(providers) == ("deepseek", "kimi")
     assert deepseek_turn.assistant.content == "deepseek"
     assert kimi_turn.assistant.content == "kimi"
+    assert [item["api_key"] for item in constructed] == [
+        "deepseek-original",
+        "kimi-original",
+    ]
     deepseek_call = deepseek_create.await_args
     kimi_call = kimi_create.await_args
     assert deepseek_call is not None
     assert kimi_call is not None
     assert deepseek_call.kwargs["model"] == "deepseek-v4-pro"
     assert kimi_call.kwargs["model"] == "kimi-k2.5"
+    deepseek_close.assert_awaited_once_with()
+    kimi_close.assert_awaited_once_with()

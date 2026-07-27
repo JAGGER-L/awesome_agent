@@ -52,6 +52,12 @@ def test_slash_commands_have_no_hidden_turn_submission_path() -> None:
     assert "submit_turn" not in extension_commands
 
 
+def test_turn_coordinator_has_no_second_post_answer_finalizer() -> None:
+    turns = Path("src/awesome_agent/application/turns.py").read_text(encoding="utf-8")
+
+    assert "post_answer_memory" not in turns
+
+
 def test_pending_input_is_not_a_core_or_storage_concept() -> None:
     roots = (
         Path("src/awesome_agent"),

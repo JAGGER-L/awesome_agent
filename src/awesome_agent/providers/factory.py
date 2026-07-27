@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import SecretStr
@@ -123,59 +122,6 @@ async def _close_provider_resources_preserving_primary(
         logger.warning(
             "Provider client cleanup failed while preserving the primary failure."
         )
-
-
-def create_provider_mapping(
-    application: ApplicationConfig,
-    secrets: SecretValues,
-    *,
-    models: Mapping[ProviderId, str] | None = None,
-    timeout_seconds: float = 60.0,
-    deepseek_client: Any | None = None,
-    kimi_client: Any | None = None,
-) -> dict[ProviderId, ModelProvider]:
-    catalog = ModelCatalog.from_application(application)
-    selections = dict(models or {})
-    unknown = set(selections) - set(catalog.provider_ids())
-    if unknown:
-        raise ModelCatalogError(
-            "unsupported_provider",
-            "Provider mapping contains an unsupported Provider.",
-        )
-    _require_secret_status_consistency(application, secrets)
-    providers: dict[ProviderId, ModelProvider] = {}
-    deepseek_key = _secret_value(secrets.deepseek_api_key)
-    if deepseek_key is not None:
-        model = selections.get("deepseek", catalog.default_for("deepseek"))
-        profile = catalog.profile(model)
-        if profile.provider != "deepseek":
-            raise ModelCatalogError(
-                "unsupported_model",
-                "DeepSeek composition requires a DeepSeek model.",
-            )
-        providers["deepseek"] = DeepSeekProvider(
-            api_key=deepseek_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            client=deepseek_client,
-        )
-    kimi_key = _secret_value(secrets.moonshot_api_key)
-    if kimi_key is not None:
-        model = selections.get("kimi", catalog.default_for("kimi"))
-        profile = catalog.profile(model)
-        if profile.provider != "kimi":
-            raise ModelCatalogError(
-                "unsupported_model",
-                "Kimi composition requires a Kimi model.",
-            )
-        providers["kimi"] = KimiProvider(
-            api_key=kimi_key,
-            model=model,
-            region=application.providers.kimi_region,
-            timeout_seconds=timeout_seconds,
-            client=kimi_client,
-        )
-    return providers
 
 
 def _require_secret_status_consistency(

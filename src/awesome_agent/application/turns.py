@@ -88,7 +88,6 @@ type RuntimeContextFactory = Callable[
     [Turn, str, ApplicationEventProjector],
     Awaitable[AgentRuntimeContext],
 ]
-type PostAnswerMemory = Callable[[AgentState], Awaitable[AgentState]]
 type TurnExtensionPreparer = Callable[[], Awaitable[None]]
 type ResumeClaim = Callable[[Turn], Awaitable[None]]
 type ResumeFinished = Callable[[], Awaitable[None]]
@@ -120,10 +119,6 @@ class RecoveryResult(BaseModel):
     error_code: str | None = None
 
 
-async def disabled_post_answer_memory(state: AgentState) -> AgentState:
-    return state
-
-
 async def disabled_turn_extension_preparer() -> None:
     return None
 
@@ -150,7 +145,6 @@ class TurnCoordinator:
         emitter: EventEmitter,
         checkpoints: TurnCheckpointStore,
         seal_changes: Callable[[str], Awaitable[None]],
-        post_answer_memory: PostAnswerMemory = disabled_post_answer_memory,
         reconcile_changes: Callable[[], Awaitable[None]] = (disabled_change_reconciler),
         turn_input_preparer: Callable[[Turn, str], None] = lambda turn, content: None,
         turn_extension_preparer: TurnExtensionPreparer = (
@@ -170,7 +164,6 @@ class TurnCoordinator:
         self._emitter = emitter
         self._checkpoints = checkpoints
         self._seal_changes = seal_changes
-        self._post_answer_memory = post_answer_memory
         self._reconcile_changes = reconcile_changes
         self._turn_input_preparer = turn_input_preparer
         self._turn_extension_preparer = turn_extension_preparer
@@ -699,7 +692,6 @@ class TurnCoordinator:
                 },
                 context=runtime,
             )
-            result = await self._post_answer_memory(result)
         except asyncio.CancelledError as cancellation:
             await self._finish_cancelled_turn(turn, projector)
             raise cancellation
