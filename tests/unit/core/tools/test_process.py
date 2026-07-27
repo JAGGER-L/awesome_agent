@@ -9,7 +9,7 @@ from contextlib import suppress
 from pathlib import Path
 from textwrap import dedent
 from time import monotonic
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import pytest
 
@@ -28,6 +28,94 @@ class _ProcessStat(NamedTuple):
     pgid: int
     session: int
     starttime: int
+
+
+class _PinnedWindowsProcess(NamedTuple):
+    pid: int
+    kernel32: Any
+    handle: int
+
+
+def _windows_api_assertion(operation: str, *, pid: int) -> AssertionError:
+    get_last_error = cast(
+        "Callable[[], int] | None",
+        getattr(ctypes, "get_last_error", None),
+    )
+    error_code = int(get_last_error()) if get_last_error is not None else 0
+    format_error = cast(
+        "Callable[[int], str] | None",
+        getattr(ctypes, "FormatError", None),
+    )
+    detail = (
+        str(format_error(error_code)).strip()
+        if format_error is not None and error_code
+        else "Win32 diagnostics unavailable"
+    )
+    return AssertionError(
+        f"{operation} failed for pid={pid} (WinError {error_code}: {detail})."
+    )
+
+
+def _pin_windows_process(pid: int) -> _PinnedWindowsProcess | None:
+    if os.name != "nt":
+        return None
+    win_dll = getattr(ctypes, "WinDLL", None)
+    if win_dll is None:
+        raise AssertionError("Win32 process APIs are unavailable.")
+    kernel32: Any = win_dll("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    open_process.restype = ctypes.c_void_p
+    wait_for_single_object = kernel32.WaitForSingleObject
+    wait_for_single_object.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    wait_for_single_object.restype = ctypes.c_uint32
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+    handle = open_process(0x00100000, 0, pid)
+    if not handle:
+        raise _windows_api_assertion("OpenProcess", pid=pid)
+    return _PinnedWindowsProcess(pid=pid, kernel32=kernel32, handle=int(handle))
+
+
+def _wait_for_pinned_windows_process_stop(
+    process: _PinnedWindowsProcess,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    result = int(
+        process.kernel32.WaitForSingleObject(
+            process.handle,
+            int(timeout * 1_000),
+        )
+    )
+    if result == 0x00000000:
+        return
+    if result == 0x00000102:
+        raise AssertionError(f"process remained alive: pid={process.pid}")
+    if result == 0xFFFFFFFF:
+        raise _windows_api_assertion("WaitForSingleObject", pid=process.pid)
+    raise AssertionError(
+        f"WaitForSingleObject returned {result:#x} for pid={process.pid}."
+    )
+
+
+def _assert_pinned_windows_process_running(process: _PinnedWindowsProcess) -> None:
+    result = int(process.kernel32.WaitForSingleObject(process.handle, 0))
+    if result == 0x00000102:
+        return
+    if result == 0x00000000:
+        raise AssertionError(f"process exited before timeout: pid={process.pid}")
+    if result == 0xFFFFFFFF:
+        raise _windows_api_assertion("WaitForSingleObject", pid=process.pid)
+    raise AssertionError(
+        f"WaitForSingleObject returned {result:#x} for pid={process.pid}."
+    )
+
+
+def _close_pinned_windows_process(process: _PinnedWindowsProcess | None) -> None:
+    if process is not None:
+        process.kernel32.CloseHandle(process.handle)
 
 
 def _posix_process_group(pid: int) -> int:
@@ -322,7 +410,20 @@ async def test_process_runner_times_out_and_terminates(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_runner_timeout_reaps_descendant(tmp_path: Path) -> None:
+async def test_process_runner_timeout_reaps_descendant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeout_scope: asyncio.Timeout | None = None
+    real_timeout = asyncio.timeout
+
+    def deferred_timeout(_: float) -> asyncio.Timeout:
+        nonlocal timeout_scope
+        assert timeout_scope is None
+        timeout_scope = real_timeout(None)
+        return timeout_scope
+
+    monkeypatch.setattr(asyncio, "timeout", deferred_timeout)
     descendant_pid_file = tmp_path / "timeout-descendant.pid"
     descendant_source = "import time; time.sleep(30)"
     parent_source = dedent(
@@ -346,16 +447,51 @@ async def test_process_runner_timeout_reaps_descendant(tmp_path: Path) -> None:
         """
     )
 
-    result = await ProcessRunner().run(
-        argv=[sys.executable, "-c", parent_source],
-        cwd=tmp_path,
-        environment=dict(os.environ),
-        timeout_seconds=0.5,
-        max_output_chars=1_000,
+    task = asyncio.create_task(
+        ProcessRunner().run(
+            argv=[sys.executable, "-c", parent_source],
+            cwd=tmp_path,
+            environment=dict(os.environ),
+            timeout_seconds=60,
+            max_output_chars=1_000,
+        )
     )
+    pinned_windows_process: _PinnedWindowsProcess | None = None
+    try:
+        descendant_pid = await asyncio.to_thread(
+            _wait_for_pid_file,
+            descendant_pid_file,
+        )
+        pinned_windows_process = _pin_windows_process(descendant_pid)
+        descendant_starttime = None
+        if pinned_windows_process is None and _PROC_SELF_STAT.is_file():
+            descendant_stat = _read_process_stat(descendant_pid)
+            assert descendant_stat is not None
+            descendant_starttime = descendant_stat.starttime
+        if pinned_windows_process is not None:
+            _assert_pinned_windows_process_running(pinned_windows_process)
+        else:
+            assert _process_is_running(
+                descendant_pid,
+                starttime=descendant_starttime,
+            )
+        assert timeout_scope is not None
+        timeout_scope.reschedule(asyncio.get_running_loop().time())
+        result = await asyncio.wait_for(task, timeout=15)
+        if pinned_windows_process is not None:
+            _wait_for_pinned_windows_process_stop(pinned_windows_process)
+        else:
+            _wait_for_process_stop(
+                descendant_pid,
+                starttime=descendant_starttime,
+            )
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        _close_pinned_windows_process(pinned_windows_process)
 
-    descendant_pid = _wait_for_pid_file(descendant_pid_file)
-    _wait_for_process_stop(descendant_pid)
     assert result.exit_code == -1
     assert result.timed_out is True
 
