@@ -204,8 +204,8 @@
     {
       "english_source": "docs/reference/files-and-state.md",
       "chinese_source": "docs/reference/files-and-state.zh-CN.md",
-      "english_sha256": "d77e35b8b84fe962afaf02d899a444435806899dc43c8c277f13584227fb9cfe",
-      "chinese_sha256": "ac2af618a40b0a5ea1dd43cf501c8728dd1714ab9fe4e43f3c1edd80d78c6b70"
+      "english_sha256": "8b4776b108b231d4d721e6b6005d529dce3d0be4a232e7f1fd8cb0f934047022",
+      "chinese_sha256": "26e60b619bf6e1fb1daa96b2dcf69d47932b61d57df8e9066a9452a361efbf9d"
     },
     {
       "english_source": "docs/reference/permission-modes.md",
@@ -246,8 +246,8 @@
     {
       "english_source": "docs/user-guide/configuration.md",
       "chinese_source": "docs/user-guide/configuration.zh-CN.md",
-      "english_sha256": "5ade3b25e3e8b4b601c8d5edfebd2149d0869ae288fe2bc42fd27483cca34f7c",
-      "chinese_sha256": "049fa9b0f3e0be4b4c3a3508a1d0708470c8729e5ca7cf0890cf016314f880fb"
+      "english_sha256": "e836054be2730135e25794e2d83699c71ce83fcd2c6075a35c0b4f4f10c7eeaf",
+      "chinese_sha256": "682d8394b27fe1b74e31c549e4cd49ddfe3e43610ef21b9082865a16b324ca4c"
     },
     {
       "english_source": "docs/user-guide/permissions.md",

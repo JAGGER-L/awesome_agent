@@ -230,11 +230,12 @@ discovery-time snapshot: safe resource replacements completed before a lazy
 read can be observed, while pinned package/`SKILL.md` replacement and unsafe
 resource traversal fail closed.
 
-`.awesome/config.yaml` is schema-validated after trust, but its current file
-read is not identity-pinned or size-bounded and may follow a link/reparse point.
-That is a known security-hardening gap, not the same guarantee as `AGENTS.md` or
-Workspace Skill loading. Treat a trusted workspace configuration as privileged
-input and see the [configuration reference](configuration.md#workspace-configuration).
+`.awesome/config.yaml` is schema-validated after trust and read through a
+bounded, no-follow, identity-pinned plain-file boundary. It accepts at most
+1 MiB of strict UTF-8 without NUL, and rejects links/reparse points, hard links,
+non-regular nodes, and identity changes during the read. Any violation fails
+configuration activation without following or truncating the input. See the
+[configuration reference](configuration.md#workspace-configuration).
 
 ## Application database
 

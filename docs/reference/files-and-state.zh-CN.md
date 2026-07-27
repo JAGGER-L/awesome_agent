@@ -192,10 +192,10 @@ Workspace Skills 会接受逐组成部分 anti-link 与身份检查。运行会�
 在 lazy read 前安全完成的资源替换可以被观察到，而固定的 package/`SKILL.md` 替换与不安全
 资源遍历会安全失败（fail closed）。
 
-`.awesome/config.yaml` 会在信任后经过 schema 验证，但当前文件读取没有绑定 identity 或限制
-大小，并且可能跟随 link/reparse point。这是已知安全加固缺口，不具备与 `AGENTS.md` 或
-Workspace Skill 加载相同的保证。请把受信任 Workspace 配置当作特权输入，并参阅
-[配置参考](configuration.zh-CN.md#workspace-配置)。
+`.awesome/config.yaml` 会在信任后经过 schema 验证，并通过有界、no-follow、绑定 identity
+的普通文件边界读取。它最多接受 1 MiB 不含 NUL 的严格 UTF-8 内容，并拒绝 link/reparse
+point、hard link、非普通节点和读取期间的身份变化。任何违规都会使配置激活失败，不会跟随
+或截断输入。参阅[配置参考](configuration.zh-CN.md#workspace-配置)。
 
 ## Application database
 

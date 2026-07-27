@@ -56,12 +56,13 @@ Workspace configuration is not read until trust is accepted. It cannot select
 a Provider, define credentials, or enable Memory. Its budget values can only
 restrict the user's values; the effective value is the lower of the two.
 
-Trust is currently the only filesystem admission boundary for this particular
-file: unlike `AGENTS.md` and Workspace Skills, the `.awesome/config.yaml` reader
-does not yet use a size-bounded no-follow open with post-open identity checking.
-Do not use a link/reparse point for it, and treat a trusted repository as able
-to supply a large or replaced YAML file. See the
-[reference limitation](../reference/configuration.md#workspace-configuration).
+After trust, `.awesome/config.yaml` is read through the same bounded no-follow
+boundary used for other Workspace-controlled inputs. The reader accepts one
+plain UTF-8 file up to 1 MiB, rejects NUL, links/reparse points, hard links, and
+non-regular nodes, and pins and rechecks directory and file identities. Unsafe,
+replaced, oversized, or invalid YAML fails configuration activation instead of
+being followed, truncated, or partially accepted. See the
+[configuration reference](../reference/configuration.md#workspace-configuration).
 
 ## How a Turn Is Resolved
 

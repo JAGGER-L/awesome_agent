@@ -34,7 +34,11 @@ Awesome 读取以下来源：
 
 接受信任前不会读取 Workspace 配置。它不能选择 Provider、定义凭据或启用 Memory。其预算值只能收紧用户值；有效值取两者中的较小者。
 
-当前，信任是该特定文件唯一的文件系统准入边界：与 `AGENTS.md` 和 Workspace Skills 不同，`.awesome/config.yaml` reader 尚未使用带大小限制、不跟随链接的 open，也没有在 open 后检查身份。不要为它使用 link/reparse point，并应将受信仓库视为能够提供大型或被替换的 YAML 文件。参见[参考手册中的限制](../reference/configuration.zh-CN.md#workspace-配置)。
+建立信任后，`.awesome/config.yaml` 会通过与其它 Workspace 控制输入相同的有界 no-follow
+边界读取。Reader 只接受一个不超过 1 MiB 的普通 UTF-8 文件，拒绝 NUL、link/reparse
+point、hard link 和非普通节点，并固定、重新检查目录与文件身份。不安全、被替换、超限或
+无效的 YAML 会使配置激活失败，而不会被跟随、截断或部分接受。参见
+[配置参考](../reference/configuration.zh-CN.md#workspace-配置)。
 
 ## 如何解析一个 Turn
 
