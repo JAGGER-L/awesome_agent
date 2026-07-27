@@ -4,6 +4,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Protocol, cast
 
+from awesome_agent.application.bootstrap import (
+    ApplicationBootstrap,
+    BootstrapRejection,
+)
 from awesome_agent.application.command_results import CommandOutcome
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
@@ -39,6 +43,11 @@ from awesome_agent.storage.compatibility import ApplicationStateUnavailable
 
 
 class ApplicationFacade(Protocol):
+    def bootstrap_rejection(
+        self,
+        operation: ApplicationOperation | None,
+    ) -> BootstrapRejection | None: ...
+
     async def initialize(self) -> ApplicationResult[InitializeResult]: ...
 
     async def get_state(self) -> ApplicationResult[ApplicationState]: ...
@@ -140,11 +149,37 @@ class LocalApplication:
         self._backend = backend
         self._middleware = middleware
         self._diagnostics_close = diagnostics_close
+        self._bootstrap = ApplicationBootstrap()
         self._initialize_result: ApplicationResult[InitializeResult] | None = None
         self._closed = False
 
+    def bootstrap_rejection(
+        self,
+        operation: ApplicationOperation | None,
+    ) -> BootstrapRejection | None:
+        return self._bootstrap.rejection(operation)
+
     async def initialize(self) -> ApplicationResult[InitializeResult]:
-        return await self._invoke(ApplicationOperation.INITIALIZE, self._initialize)
+        rejection = self._bootstrap.rejection(ApplicationOperation.INITIALIZE)
+        if rejection is not None:
+            return ApplicationResult.failure(
+                ProductError(
+                    code=ProductErrorCode.OPERATION_BUSY,
+                    message="Application initialization is in progress.",
+                    retryable=True,
+                )
+            )
+        transition = self._bootstrap.begin_initialize()
+        try:
+            result = await self._invoke(
+                ApplicationOperation.INITIALIZE,
+                self._initialize,
+            )
+        except BaseException:
+            self._bootstrap.abort_initialize(transition)
+            raise
+        self._bootstrap.complete_initialize(transition, result)
+        return result
 
     async def _initialize(self) -> ApplicationResult[InitializeResult]:
         if (
@@ -228,12 +263,16 @@ class LocalApplication:
         interaction_id: str,
         decision: str,
     ) -> ApplicationResult[InteractionResult]:
-        return await self._invoke(
+        transition = self._bootstrap.begin_interaction(interaction_id, decision)
+        result = await self._invoke(
             ApplicationOperation.RESPOND_INTERACTION,
             lambda: self._call(
                 lambda: self._backend.resolve_interaction(interaction_id, decision)
             ),
         )
+        if transition is not None:
+            self._bootstrap.complete_interaction(transition, result)
+        return result
 
     async def cancel_operation(
         self, operation_id: str

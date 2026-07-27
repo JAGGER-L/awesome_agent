@@ -312,9 +312,17 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
   串行化、interaction、取消、事件投影、恢复和组装。
 - **不负责：** 模型推理、图路由、工具实现或 UI 渲染。
 - **主要文件：** `application/facade.py`、`application/composition.py`、
-  `application/turns.py`、`application/operations.py`。
+  `application/bootstrap.py`、`application/turns.py`、
+  `application/operations.py`。
 - **依赖：** Agent Core、当前 adapter、Conversation、Storage、Core、Context、Extensions
   和 Memory。
+
+`LocalApplication` 持有唯一的 `ApplicationBootstrap`，Application 是
+`BootstrapPhase` 的唯一所有者。类型化 initialize 与 interaction 结果会推进或恢复该 phase；
+序列化的 protocol response 绝不是生命周期事实来源。stdio Host 只向 Application 查询某项
+operation 是否准入，并把拒绝转换成既有的 Protocol v3 握手错误；它既不维护并行 phase
+machine，也不解析 response payload 来推断 readiness。这次内部所有权迁移不会改变
+Protocol v3 的 request、result 或 error 形状。
 
 受信激活完成后，backend 会发布一个 frozen、slotted 的 `WorkspaceRuntime`。它是请求可见
 的快照，统一包含已解析配置以及组装后的 Conversation、Turn、command、tool、model

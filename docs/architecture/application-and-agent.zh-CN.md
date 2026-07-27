@@ -12,6 +12,7 @@ Awesome 将产品生命周期与推理执行分离。Application 回答的是：
 | 关注点 | Application | Agent |
 | --- | --- | --- |
 | 工作区信任与激活 | 负责 | 不检查 |
+| bootstrap phase 与 ready 前准入 | 负责 | 不检查 |
 | 已选择的 Thread 与生效配置 | 负责 | 接收冻结值 |
 | Turn 创建与终态 | 负责 | 返回图执行结果 |
 | 前台准入与取消 | 负责 | 配合取消 |
@@ -42,6 +43,7 @@ Protocol dispatcher
 Application 的职责被有意拆分到聚焦的模块中：
 
 - `facade.py`：稳定的界面契约与预期失败封装；
+- `bootstrap.py`：bootstrap phase 转移与 ready 前准入；
 - `composition.py`：激活与具体依赖装配；
 - `foreground.py` 和 `operations.py`：原子的前台所有权；
 - `turns.py`：Turn 执行、终结、取消与恢复；
@@ -52,6 +54,25 @@ Application 的职责被有意拆分到聚焦的模块中：
 
 `composition.py` 可能较大，因为它负责装配和启动顺序。它不能成为命令语义、图路由、
 任意结果构造或展示格式化的容器。
+
+### Bootstrap phase 所有权
+
+`LocalApplication` 持有一个具体的 `ApplicationBootstrap`；Protocol 或 UI 组件都不能改变
+`BootstrapPhase`。Coordinator 初始为 uninitialized。Initialize invocation 会在异步工作
+开始前把它移到 initializing，然后消费类型化 `ApplicationResult[InitializeResult]`：ready、
+trust-required 与 state-reset-required result 会选择对应 phase，失败或取消则恢复此前 phase。
+进入 ready 后重复 initialize 的全过程仍保持 ready，因此界面重试不会关闭已经激活的
+Application。
+
+Coordinator 还会把 bootstrap interaction 绑定到精确 identity。只有类型化 interaction result
+确认接受，并且 backend activation 已成功返回后，trust response 才能进入 ready。陈旧、
+拒绝、失败或被取消的 response 都不能推进 phase。接受 state reset 后，Application 仍保持
+non-ready，直到后续 initialize 完成。
+
+界面在 dispatch 前向 Application 查询提供商中立的 admission decision。stdio Host 会把拒绝
+映射成既有 Protocol v3 `-32002` diagnostic，但绝不维护第二套状态机，也不解析序列化的
+request/result payload 来推断 readiness。Cancellation 与 shutdown 在每个 phase 都保持准入。
+这是一次内部所有权变更：Protocol v3 的 wire shape、status value 和 error 语义均不变。
 
 ### Workspace runtime 快照
 

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from awesome_agent.application.bootstrap import BootstrapRejection
 from awesome_agent.application.command_results import (
     COMMAND_OUTCOME_ADAPTER,
     CommandOutcome,
@@ -35,6 +36,7 @@ from awesome_agent.application.contracts import (
     ThreadReadQuery,
     ThreadReadResult,
 )
+from awesome_agent.application.middleware import ApplicationOperation
 from awesome_agent.core.events import EventEnvelope, EventType
 from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
 from awesome_agent.version import PRODUCT_VERSION
@@ -96,6 +98,13 @@ def test_fixture_generator_is_byte_deterministic() -> None:
 
 
 class _FixtureFacade:
+    def bootstrap_rejection(
+        self,
+        operation: ApplicationOperation | None,
+    ) -> BootstrapRejection | None:
+        del operation
+        return None
+
     def __init__(self, result: dict[str, object]) -> None:
         self._result = ApplicationResult[dict[str, object]].model_validate(result)
 

@@ -347,9 +347,19 @@ as authority.
 - **Does not own:** model reasoning, graph routing, tool implementation, or UI
   rendering.
 - **Primary files:** `application/facade.py`, `application/composition.py`,
-  `application/turns.py`, `application/operations.py`.
+  `application/bootstrap.py`, `application/turns.py`,
+  `application/operations.py`.
 - **Dependencies:** Agent Core, current adapters, Conversation, Storage, Core,
   Context, Extensions, and Memory.
+
+`LocalApplication` holds the only `ApplicationBootstrap`, and Application is
+the sole owner of `BootstrapPhase`. Typed initialize and interaction outcomes
+advance or restore that phase; a serialized protocol response is never a
+lifecycle fact source. The stdio Host only asks Application whether an
+operation is admitted and translates a rejection into the existing Protocol
+v3 handshake error. It neither keeps a parallel phase machine nor parses
+response payloads to infer readiness. Protocol v3 request, result, and error
+shapes are unchanged by this internal ownership move.
 
 After trusted activation, the backend publishes one frozen, slotted
 `WorkspaceRuntime`. It is the request-visible snapshot of resolved

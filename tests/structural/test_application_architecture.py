@@ -14,6 +14,20 @@ def test_local_application_is_the_surface_facing_facade() -> None:
     )
 
 
+def test_local_application_uniquely_owns_bootstrap_state() -> None:
+    application = Path("src/awesome_agent/application")
+    owners = {
+        path.name
+        for path in application.glob("*.py")
+        if "ApplicationBootstrap()" in path.read_text(encoding="utf-8")
+    }
+    facade = (application / "facade.py").read_text(encoding="utf-8")
+
+    assert owners == {"facade.py"}
+    assert "def bootstrap_rejection(" in facade
+    assert "self._bootstrap.rejection(operation)" in facade
+
+
 def test_dispatcher_inventory_is_complete_and_composition_only_wires_it() -> None:
     core_commands = {
         name for name, owner in COMMAND_OWNERS.items() if owner is not CommandOwner.INK

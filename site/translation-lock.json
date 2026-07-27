@@ -6,8 +6,8 @@
     {
       "english_source": "ARCHITECTURE.md",
       "chinese_source": "ARCHITECTURE.zh-CN.md",
-      "english_sha256": "0bbb118a0231fe413c69f4279b7bb725fc90722bb9677c2196622b8ffe471285",
-      "chinese_sha256": "a49162fa62b1babbe15b8e75148a145bc73434ab4e065670fb7c99ff2d72daf5"
+      "english_sha256": "0bd8824cb73dba0951077fef482c9a0431c1e42ae8bc47994229b4343ab4212b",
+      "chinese_sha256": "cba1245ef19db6f17a28eb72fc3e99f725b5eec36d05d84ee6eb0eebf49f0ad7"
     },
     {
       "english_source": "README.md",
@@ -30,8 +30,8 @@
     {
       "english_source": "docs/architecture/application-and-agent.md",
       "chinese_source": "docs/architecture/application-and-agent.zh-CN.md",
-      "english_sha256": "89eefbaf3a719b3982dc83ad5e5629625f06942e9b9d3141ec01c14f90ec57da",
-      "chinese_sha256": "93a74cae17272362dea912e7d1366c56bc4a12525982ac832c8b809f995d9da0"
+      "english_sha256": "20c0324f675e17d94c8f7aaa50fa5b8063cd419e7e91c6de80aeae65aae74d0b",
+      "chinese_sha256": "d231772f9fd12d4a4d4ebd1a6c83ddc282b8c67573a854bbf6eb373a86cf765f"
     },
     {
       "english_source": "docs/architecture/context-model-and-extensions.md",
@@ -42,14 +42,14 @@
     {
       "english_source": "docs/architecture/protocol-and-tui.md",
       "chinese_source": "docs/architecture/protocol-and-tui.zh-CN.md",
-      "english_sha256": "1ce04d2bf9f21685aa0bc3bbef00bc25ad300f17de3bae59b69db2b9da77ccb3",
-      "chinese_sha256": "b48a9fba952ad9de1690d97aeaad608ab607c621882486ad7a8bfb4c423d22e4"
+      "english_sha256": "484a1c255b4d55d242ca584310041e46f09411416746b1b00016a62fa24e99f5",
+      "chinese_sha256": "a0561bbd31852b629691f3c4b7d464c8d80f0e96b9d891b3d6bdb307ada5660c"
     },
     {
       "english_source": "docs/architecture/request-lifecycles.md",
       "chinese_source": "docs/architecture/request-lifecycles.zh-CN.md",
-      "english_sha256": "7868a5ca91d11ccb2f592c31961b7fd9d0fea8d383aeee5d84045ff685578ff2",
-      "chinese_sha256": "1da088491e75ec459a65e3515fe5ffde289502a092fb40d34135d98e6d61cf84"
+      "english_sha256": "3ab2b23a8bab0d368e2e025e60084586ac7e1ec4b0bb78262223956370e1905b",
+      "chinese_sha256": "0756b74473fa2d58ca156dd9db18f4ff70b5ea80da6db54f6472e8e2d16d9b65"
     },
     {
       "english_source": "docs/architecture/security-and-dependencies.md",
@@ -216,8 +216,8 @@
     {
       "english_source": "docs/reference/protocol.md",
       "chinese_source": "docs/reference/protocol.zh-CN.md",
-      "english_sha256": "d00a9e2019edc7193d2418b3725b3c41d34cc163e147d1dc2714029fbc81d11e",
-      "chinese_sha256": "59bac52ff2118c0d8fa7135c08773b5bfbd3e04ac796b9bbe2176116c2ce616f"
+      "english_sha256": "00022a643f81481450d113754daf3f5cb6a07c54cc79d20f14989fca8cc2ad55",
+      "chinese_sha256": "d57ff01ef62d48f21773db7f402ac3049a801db3946498b6ca85dc57b37fefa7"
     },
     {
       "english_source": "docs/roadmap.md",

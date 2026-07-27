@@ -93,7 +93,9 @@ credential `api_key` explicitly reject null.
 
 ## Handshake state machine
 
-The Host begins `UNINITIALIZED`. `initialize` must use:
+Application's `ApplicationBootstrap` begins in `UNINITIALIZED`. The Host has no
+independent bootstrap phase: it queries Application admission and translates a
+rejection to the existing handshake error. `initialize` must use:
 
 ```json
 {
@@ -119,11 +121,15 @@ workspace presentation, capabilities, and one status:
 | Status | Meaning | Next action |
 | --- | --- | --- |
 | `ready` | Workspace and state are active. | Normal methods are admitted. |
-| `trust_required` | Repository-controlled input has not been trusted. | Resolve the supplied interaction; `trust` advances this Host to ready. |
+| `trust_required` | Repository-controlled input has not been trusted. | Resolve the supplied interaction; `trust` advances Application to ready. |
 | `state_reset_required` | Application state is older than schema 7. | Resolve reset/deny; after reset, initialize again. |
 
 Current capabilities are `threads`, `turns`, `direct_commands`, `commands`,
 `tools`, `skills`, `mcp`, `local_memory`, and `mem0_cloud`.
+
+The Host never parses a serialized result payload to advance readiness; typed
+initialize and interaction outcomes update Application first. This ownership
+is internal and does not change the Protocol v3 wire contract.
 
 Before ready, ordinary requests receive JSON-RPC `-32002` with diagnostic
 `server_not_initialized` or `server_not_ready`. While initialize is running, a

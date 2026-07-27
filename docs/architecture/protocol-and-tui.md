@@ -90,29 +90,42 @@ at compile time.
 
 ## Handshake state machine
 
-The stdio Host gates Application access:
+`LocalApplication` owns the only `ApplicationBootstrap` and the only mutable
+`BootstrapPhase`. The state machine is therefore an Application lifecycle
+component, not stdio Host state:
 
 ```text
 UNINITIALIZED
-  -> initialize in flight: INITIALIZING
-  -> ready result: READY
-  -> trust_required/state_reset_required: BOOTSTRAP_INTERACTION
-  -> failure: previous state
+  -> initialize starts: INITIALIZING
 
-BOOTSTRAP_INTERACTION
-  -> matching interaction.respond
-  -> trust accepted: READY
-  -> reset accepted: initialize again
+INITIALIZING
+  -> ready result: READY
+  -> trust_required result: TRUST_REQUIRED
+  -> state_reset_required result: STATE_RESET_REQUIRED
+  -> failure/cancellation: previous phase
+
+TRUST_REQUIRED
+  -> matching trust accepted after activation: READY
+
+STATE_RESET_REQUIRED
+  -> matching reset accepted: remain non-ready
+  -> initialize again
 ```
+
+Before dispatch, the Host maps the method to the closed
+`ApplicationOperation` set and asks Application for an admission decision. It
+only translates a rejection to the wire; it does not maintain another phase
+enum or inspect serialized request/result payloads to advance readiness.
 
 Before `READY`, ordinary requests receive a stable server-not-initialized or
 server-not-ready error. A second concurrent initialize receives
 `initialization_in_progress`. During bootstrap, only the matching interaction,
 another initialize, cancellation, and shutdown are admitted. A malformed or v2
-initialize never opens the gate.
+initialize never advances the Application phase.
 
 Initialization remains repeatable after `READY` so a surface retry can observe
-the current snapshot without creating a second Application.
+the current snapshot without creating a second Application. These ownership
+rules do not change any Protocol v3 request, result, status, or error shape.
 
 ## Framing and dispatch bounds
 

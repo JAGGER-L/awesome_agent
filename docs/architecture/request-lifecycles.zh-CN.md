@@ -70,8 +70,9 @@ denial。
 restore。更新、未知、损坏、不可读或锁定的状态都会安全停止，绝不会被静默删除。确认 reset
 后，会在 bootstrap lock、前台 interaction-resolution lease 和独占跨进程 state lease 下执行。
 
-进入 `ready` 前的失败会让协议握手保持关闭。状态分类详见
-[存储与恢复](storage-and-recovery.zh-CN.md)，握手 gate 详见
+进入 `ready` 前的失败会恢复或保持 Application-owned `ApplicationBootstrap` 的 non-ready
+phase。协议握手只是该事实的 admission projection，并会保持关闭。状态分类详见
+[存储与恢复](storage-and-recovery.zh-CN.md)，bootstrap admission 详见
 [协议与 TUI](protocol-and-tui.zh-CN.md)。
 
 ## 自然语言 Turn

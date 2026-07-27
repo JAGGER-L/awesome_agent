@@ -79,9 +79,11 @@ stops safely and is never silently deleted. A confirmed reset runs under the
 bootstrap lock, a foreground interaction-resolution lease, and an exclusive
 cross-process state lease.
 
-Failure before `ready` leaves the protocol handshake closed. See
+Failure before `ready` restores or leaves the Application-owned
+`ApplicationBootstrap` in a non-ready phase. The protocol handshake is only an
+admission projection of that fact and remains closed. See
 [Storage and recovery](storage-and-recovery.md) for state classification and
-[Protocol and TUI](protocol-and-tui.md) for the handshake gate.
+[Protocol and TUI](protocol-and-tui.md) for bootstrap admission.
 
 ## Natural-language Turn
 

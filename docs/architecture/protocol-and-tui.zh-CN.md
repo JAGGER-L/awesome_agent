@@ -76,27 +76,40 @@ TypeScript exhaustive switch 会在编译时暴露遗漏的 case。
 
 ## 握手状态机
 
-stdio Host 会控制 Application 访问：
+`LocalApplication` 持有唯一的 `ApplicationBootstrap` 和唯一可变的
+`BootstrapPhase`。因此，这套状态机属于 Application 生命周期组件，而不是 stdio Host
+状态：
 
 ```text
 UNINITIALIZED
-  -> initialize in flight: INITIALIZING
-  -> ready result: READY
-  -> trust_required/state_reset_required: BOOTSTRAP_INTERACTION
-  -> failure: previous state
+  -> initialize starts: INITIALIZING
 
-BOOTSTRAP_INTERACTION
-  -> matching interaction.respond
-  -> trust accepted: READY
-  -> reset accepted: initialize again
+INITIALIZING
+  -> ready result: READY
+  -> trust_required result: TRUST_REQUIRED
+  -> state_reset_required result: STATE_RESET_REQUIRED
+  -> failure/cancellation: previous phase
+
+TRUST_REQUIRED
+  -> matching trust accepted after activation: READY
+
+STATE_RESET_REQUIRED
+  -> matching reset accepted: remain non-ready
+  -> initialize again
 ```
+
+Host 在 dispatch 前把 method 映射到封闭的 `ApplicationOperation` 集合，并向 Application
+查询 admission decision。它只负责把拒绝转换到 wire；不会维护另一套 phase enum，也不会
+检查序列化 request/result payload 来推进 readiness。
 
 进入 `READY` 之前，普通请求会收到稳定的 server-not-initialized 或 server-not-ready 错误。
 第二个并发 initialize 会收到 `initialization_in_progress`。Bootstrap 期间，只准入匹配的
-interaction、另一次 initialize、取消和 shutdown。畸形或 v2 initialize 绝不会打开 gate。
+interaction、另一次 initialize、取消和 shutdown。畸形或 v2 initialize 绝不会推进
+Application phase。
 
 进入 `READY` 后仍可重复初始化，因此界面重试可以观察当前快照，而不会创建第二个
-Application。
+Application。这些所有权规则不会改变任何 Protocol v3 request、result、status 或 error
+shape。
 
 ## Frame 与调度边界
 

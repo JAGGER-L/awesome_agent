@@ -75,7 +75,8 @@ list/read pagination 字段和 credential `api_key` 会显式拒绝 null。
 
 ## 握手状态机
 
-Host 从 `UNINITIALIZED` 开始。`initialize` 必须使用：
+Application 的 `ApplicationBootstrap` 从 `UNINITIALIZED` 开始。Host 没有独立的 bootstrap
+phase；它会查询 Application admission，并把拒绝转换为既有握手错误。`initialize` 必须使用：
 
 ```json
 {
@@ -100,11 +101,14 @@ capability 和一种状态：
 | 状态 | 含义 | 下一步操作 |
 | --- | --- | --- |
 | `ready` | Workspace 和状态已激活。 | 允许普通 method。 |
-| `trust_required` | 由仓库控制的输入尚未获得信任。 | 解决提供的 interaction；`trust` 会让此 Host 进入 ready。 |
+| `trust_required` | 由仓库控制的输入尚未获得信任。 | 解决提供的 interaction；`trust` 会让 Application 进入 ready。 |
 | `state_reset_required` | Application 状态早于 schema 7。 | 解决 reset/deny；reset 后再次 initialize。 |
 
 当前 capability 是 `threads`、`turns`、`direct_commands`、`commands`、`tools`、`skills`、
 `mcp`、`local_memory` 和 `mem0_cloud`。
+
+Host 绝不会通过解析序列化 result payload 来推进 readiness；类型化 initialize 与 interaction
+结果会先更新 Application。这项所有权变更属于内部实现，不改变 Protocol v3 wire contract。
 
 Ready 前，普通 request 会收到 JSON-RPC `-32002`，diagnostic 为 `server_not_initialized` 或
 `server_not_ready`。Initialize 运行期间，第二次 initialize 会收到 `initialization_in_progress`。

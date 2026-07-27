@@ -175,6 +175,8 @@ def test_facade_and_concrete_class_freeze_exact_public_methods() -> None:
     )
     for concrete in ("SQLite", "Mcp", "Mem0"):
         assert concrete not in annotations
+    assert inspect.iscoroutinefunction(ApplicationFacade.bootstrap_rejection) is False
+    assert inspect.iscoroutinefunction(LocalApplication.bootstrap_rejection) is False
 
 
 @pytest.mark.asyncio
@@ -187,6 +189,103 @@ async def test_facade_initialization_and_shutdown_are_idempotent() -> None:
     assert _unwrap(await facade.shutdown()).stopped is True
 
     assert [name for name, _ in backend.calls] == ["initialize", "shutdown"]
+
+
+@pytest.mark.asyncio
+async def test_facade_sets_initializing_before_middleware_and_rolls_back_cancel() -> (
+    None
+):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingInitialize:
+        async def __call__(
+            self,
+            invocation: ApplicationInvocation,
+            next_call: ApplicationCall,
+        ) -> object:
+            if invocation.operation is ApplicationOperation.INITIALIZE:
+                entered.set()
+                await release.wait()
+            return await next_call(invocation)
+
+    backend = Backend()
+    facade = LocalApplication(backend, middleware=(BlockingInitialize(),))
+    initializing = asyncio.create_task(facade.initialize())
+    await asyncio.wait_for(entered.wait(), timeout=0.5)
+
+    blocked = facade.bootstrap_rejection(ApplicationOperation.GET_STATE)
+    assert blocked is not None
+    assert blocked.diagnostic_code == "server_not_ready"
+    duplicate = await facade.initialize()
+    assert duplicate.ok is False
+    assert duplicate.error is not None
+    assert duplicate.error.code is ProductErrorCode.OPERATION_BUSY
+    assert backend.calls == []
+
+    initializing.cancel("cancel-bootstrap")
+    with pytest.raises(asyncio.CancelledError) as cancellation:
+        await asyncio.wait_for(initializing, timeout=0.5)
+    assert cancellation.value.args == ("cancel-bootstrap",)
+    restored = facade.bootstrap_rejection(ApplicationOperation.GET_STATE)
+    assert restored is not None
+    assert restored.diagnostic_code == "server_not_initialized"
+
+
+@pytest.mark.asyncio
+async def test_malformed_middleware_initialize_result_rolls_back_phase() -> None:
+    class MalformedResult:
+        async def __call__(
+            self,
+            invocation: ApplicationInvocation,
+            next_call: ApplicationCall,
+        ) -> object:
+            del next_call
+            assert invocation.operation is ApplicationOperation.INITIALIZE
+            return object()
+
+    facade = LocalApplication(Backend(), middleware=(MalformedResult(),))
+
+    with pytest.raises(TypeError, match="invalid application result"):
+        await facade.initialize()
+
+    rejection = facade.bootstrap_rejection(ApplicationOperation.GET_STATE)
+    assert rejection is not None
+    assert rejection.diagnostic_code == "server_not_initialized"
+
+
+@pytest.mark.asyncio
+async def test_facade_bootstrap_transition_requires_exact_resolved_trust() -> None:
+    class TrustBackend(Backend):
+        async def initialize_application(self) -> InitializeResult:
+            self.calls.append(("initialize", None))
+            return InitializeResult(
+                product_version="0.1.0",
+                protocol_version=3,
+                status=InitializeStatus.TRUST_REQUIRED,
+                session_id="session_1",
+                interaction_id="interaction_trust",
+                workspace=WorkspacePresentation(display_path="C:\\workspace"),
+            )
+
+        async def resolve_interaction(
+            self,
+            interaction_id: str,
+            decision: str,
+        ) -> InteractionResult:
+            self.calls.append(("interaction", (interaction_id, decision)))
+            return InteractionResult(accepted=True, status="resolved")
+
+    facade = LocalApplication(TrustBackend())
+    initialized = _unwrap(await facade.initialize())
+    assert initialized.status is InitializeStatus.TRUST_REQUIRED
+    assert facade.bootstrap_rejection(ApplicationOperation.GET_STATE) is not None
+
+    _unwrap(await facade.respond_interaction("interaction_stale", "trust"))
+    assert facade.bootstrap_rejection(ApplicationOperation.GET_STATE) is not None
+
+    _unwrap(await facade.respond_interaction("interaction_trust", "trust"))
+    assert facade.bootstrap_rejection(ApplicationOperation.GET_STATE) is None
 
 
 @pytest.mark.asyncio

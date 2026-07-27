@@ -14,6 +14,7 @@ one cancellation point, one operation authority, and one checkpoint owner.
 | Concern | Application | Agent |
 | --- | --- | --- |
 | workspace trust and activation | owns | does not inspect |
+| bootstrap phase and pre-ready admission | owns | does not inspect |
 | selected Thread and effective config | owns | receives frozen values |
 | Turn creation and terminal status | owns | returns graph result |
 | foreground admission and cancellation | owns | cooperates with cancellation |
@@ -45,6 +46,7 @@ Protocol dispatcher
 Application responsibilities are deliberately split into focused modules:
 
 - `facade.py`: stable surface contract and expected failure envelope;
+- `bootstrap.py`: bootstrap phase transitions and pre-ready admission;
 - `composition.py`: activation and concrete dependency wiring;
 - `foreground.py` and `operations.py`: atomic foreground ownership;
 - `turns.py`: Turn execution, finalization, cancellation, and recovery;
@@ -56,6 +58,30 @@ Application responsibilities are deliberately split into focused modules:
 `composition.py` may be large because it owns wiring and startup sequencing. It
 must not become a home for command semantics, graph routes, arbitrary result
 construction, or presentation formatting.
+
+### Bootstrap phase ownership
+
+`LocalApplication` owns one concrete `ApplicationBootstrap`; no Protocol or UI
+component may mutate `BootstrapPhase`. The coordinator begins uninitialized.
+An initialize invocation moves it to initializing before asynchronous work
+starts, then consumes the typed `ApplicationResult[InitializeResult]`: ready,
+trust-required, and state-reset-required results select the corresponding
+phase, while failure or cancellation restores the previous phase. Repeating
+initialize after ready remains ready throughout, so a surface retry cannot
+close an already active Application.
+
+The coordinator also binds a bootstrap interaction to its exact identity. A
+trust response reaches ready only after the typed interaction result confirms
+acceptance and backend activation has returned successfully. A stale, denied,
+failed, or cancelled response cannot advance the phase. Accepting state reset
+keeps Application non-ready until a later initialize completes.
+
+Surfaces ask Application for a surface-neutral admission decision before
+dispatch. The stdio Host maps a rejection to the existing Protocol v3
+`-32002` diagnostics, but never keeps a second state machine or parses a
+serialized request/result payload to infer readiness. Cancellation and
+shutdown remain admitted in every phase. This is an internal ownership change:
+Protocol v3 wire shapes, status values, and error semantics are unchanged.
 
 ### Workspace runtime snapshot
 

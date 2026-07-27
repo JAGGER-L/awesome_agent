@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from awesome_agent.application.bootstrap import BootstrapRejection
 from awesome_agent.application.command_results import CommandOutcome
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
@@ -31,6 +32,7 @@ from awesome_agent.application.contracts import (
     ThreadReadResult,
     WorkspacePresentation,
 )
+from awesome_agent.application.middleware import ApplicationOperation
 from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
 from awesome_agent.protocol.jsonrpc import (
@@ -50,6 +52,13 @@ INITIALIZE_PARAMS = {
 class Facade:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
+
+    def bootstrap_rejection(
+        self,
+        operation: ApplicationOperation | None,
+    ) -> BootstrapRejection | None:
+        del operation
+        return None
 
     async def initialize(self) -> ApplicationResult[InitializeResult]:
         self.calls.append(("initialize", None))
