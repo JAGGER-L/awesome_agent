@@ -13,9 +13,9 @@ from pydantic import SecretStr
 from awesome_agent.config import (
     CredentialValidation,
     CredentialValidationStatus,
-    KimiRegion,
     ProviderName,
 )
+from awesome_agent.modeling import KimiRegion
 from awesome_agent.providers.deepseek import DEEPSEEK_OFFICIAL_BASE_URL
 from awesome_agent.providers.kimi import KIMI_OFFICIAL_BASE_URLS
 

@@ -37,12 +37,10 @@ from awesome_agent.config.loader import (
     read_user_config_document,
 )
 from awesome_agent.config.models import (
-    SUPPORTED_MODEL_IDS,
     ApplicationConfig,
     BudgetConfig,
     CredentialSelectionConfig,
     CredentialSource,
-    KimiRegion,
     McpServerDeclaration,
     MemoryConfig,
     ProjectBudgetConfig,
@@ -66,11 +64,11 @@ from awesome_agent.config.resolver import (
     resolve_turn_config,
 )
 from awesome_agent.config.writer import UserConfigWriter
+from awesome_agent.modeling import KimiRegion
 
 __all__ = [
     "CREDENTIAL_CATALOG",
     "CREDENTIAL_DESCRIPTORS",
-    "SUPPORTED_MODEL_IDS",
     "ApplicationConfig",
     "BudgetConfig",
     "ConfigSourcePaths",

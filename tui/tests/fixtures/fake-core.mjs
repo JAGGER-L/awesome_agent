@@ -37,6 +37,53 @@ const output = (value) => {
 };
 
 const application = (value) => ({ ok: true, value });
+const modelCatalog = {
+  providers: [
+    {
+      id: "deepseek",
+      credential_id: "deepseek",
+      supported_regions: [],
+      models: [
+        {
+          id: "deepseek/deepseek-v4-flash",
+          context_limit: 262144,
+          supports_tools: true,
+          supports_reasoning: true,
+          is_default: true,
+        },
+        {
+          id: "deepseek/deepseek-v4-pro",
+          context_limit: 262144,
+          supports_tools: true,
+          supports_reasoning: true,
+          is_default: false,
+        },
+      ],
+    },
+    {
+      id: "kimi",
+      credential_id: "kimi",
+      supported_regions: ["cn", "global"],
+      default_region: "cn",
+      models: [
+        {
+          id: "kimi/kimi-k2.6",
+          context_limit: 262144,
+          supports_tools: true,
+          supports_reasoning: true,
+          is_default: true,
+        },
+        {
+          id: "kimi/kimi-k2.5",
+          context_limit: 262144,
+          supports_tools: true,
+          supports_reasoning: true,
+          is_default: false,
+        },
+      ],
+    },
+  ],
+};
 const failure = (code) => ({
   ok: false,
   error: { code, message: `Safe ${code}.`, retryable: false, data: {} },
@@ -48,6 +95,7 @@ const applicationState = (threadId) => ({
   workspace: { display_path: process.cwd(), branch: "fake" },
   workspace_trusted: startupPhase === "ready",
   ...(threadId ? { current_thread_id: threadId } : {}),
+  model_catalog: modelCatalog,
   model_identity: {
     provider: "deepseek",
     configured_model: "deepseek/deepseek-v4-flash",

@@ -26,7 +26,7 @@ from awesome_agent.context.workspace_instructions import WorkspaceInstructionDia
 from awesome_agent.conversation.models import Thread, ThreadView
 from awesome_agent.core.changes import ChangeDelta
 from awesome_agent.core.tools.permissions import PermissionMode
-from awesome_agent.modeling.catalog import ModelIdentitySnapshot
+from awesome_agent.modeling.catalog import ModelCatalog, ModelIdentitySnapshot
 
 
 class ProductErrorCode(StrEnum):
@@ -195,6 +195,7 @@ class ApplicationState(BaseModel):
     workspace: WorkspacePresentation
     workspace_trusted: bool
     current_thread_id: str | None = Field(default=None, max_length=128)
+    model_catalog: ModelCatalog
     model_identity: ModelIdentitySnapshot | None = None
     thinking_enabled: bool = True
     skill_mode: str = Field(default="auto", min_length=1, max_length=64)

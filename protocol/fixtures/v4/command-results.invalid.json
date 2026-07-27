@@ -31,6 +31,56 @@
               "initialized": true,
               "mcp_status": [],
               "memory_status": {},
+              "model_catalog": {
+                "providers": [
+                  {
+                    "credential_id": "deepseek",
+                    "id": "deepseek",
+                    "models": [
+                      {
+                        "context_limit": 262144,
+                        "id": "deepseek/deepseek-v4-flash",
+                        "is_default": true,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      },
+                      {
+                        "context_limit": 262144,
+                        "id": "deepseek/deepseek-v4-pro",
+                        "is_default": false,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      }
+                    ],
+                    "supported_regions": []
+                  },
+                  {
+                    "credential_id": "kimi",
+                    "default_region": "cn",
+                    "id": "kimi",
+                    "models": [
+                      {
+                        "context_limit": 262144,
+                        "id": "kimi/kimi-k2.6",
+                        "is_default": true,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      },
+                      {
+                        "context_limit": 262144,
+                        "id": "kimi/kimi-k2.5",
+                        "is_default": false,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      }
+                    ],
+                    "supported_regions": [
+                      "cn",
+                      "global"
+                    ]
+                  }
+                ]
+              },
               "model_identity": {
                 "configured_model": "deepseek/deepseek-v4-flash",
                 "effective_model": "deepseek/deepseek-v4-flash",
@@ -224,6 +274,56 @@
               "initialized": true,
               "mcp_status": [],
               "memory_status": {},
+              "model_catalog": {
+                "providers": [
+                  {
+                    "credential_id": "deepseek",
+                    "id": "deepseek",
+                    "models": [
+                      {
+                        "context_limit": 262144,
+                        "id": "deepseek/deepseek-v4-flash",
+                        "is_default": true,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      },
+                      {
+                        "context_limit": 262144,
+                        "id": "deepseek/deepseek-v4-pro",
+                        "is_default": false,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      }
+                    ],
+                    "supported_regions": []
+                  },
+                  {
+                    "credential_id": "kimi",
+                    "default_region": "cn",
+                    "id": "kimi",
+                    "models": [
+                      {
+                        "context_limit": 262144,
+                        "id": "kimi/kimi-k2.6",
+                        "is_default": true,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      },
+                      {
+                        "context_limit": 262144,
+                        "id": "kimi/kimi-k2.5",
+                        "is_default": false,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      }
+                    ],
+                    "supported_regions": [
+                      "cn",
+                      "global"
+                    ]
+                  }
+                ]
+              },
               "model_identity": {
                 "configured_model": "deepseek/deepseek-v4-flash",
                 "effective_model": "deepseek/deepseek-v4-flash",
@@ -417,6 +517,56 @@
               "initialized": true,
               "mcp_status": [],
               "memory_status": {},
+              "model_catalog": {
+                "providers": [
+                  {
+                    "credential_id": "deepseek",
+                    "id": "deepseek",
+                    "models": [
+                      {
+                        "context_limit": 262144,
+                        "id": "deepseek/deepseek-v4-flash",
+                        "is_default": true,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      },
+                      {
+                        "context_limit": 262144,
+                        "id": "deepseek/deepseek-v4-pro",
+                        "is_default": false,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      }
+                    ],
+                    "supported_regions": []
+                  },
+                  {
+                    "credential_id": "kimi",
+                    "default_region": "cn",
+                    "id": "kimi",
+                    "models": [
+                      {
+                        "context_limit": 262144,
+                        "id": "kimi/kimi-k2.6",
+                        "is_default": true,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      },
+                      {
+                        "context_limit": 262144,
+                        "id": "kimi/kimi-k2.5",
+                        "is_default": false,
+                        "supports_reasoning": true,
+                        "supports_tools": true
+                      }
+                    ],
+                    "supported_regions": [
+                      "cn",
+                      "global"
+                    ]
+                  }
+                ]
+              },
               "model_identity": {
                 "configured_model": "deepseek/deepseek-v4-flash",
                 "effective_model": "deepseek/deepseek-v4-flash",

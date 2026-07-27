@@ -5,14 +5,17 @@ import { productErrorSchema } from "../../src/protocol/base.js";
 import { eventEnvelopeSchema } from "../../src/protocol/events.js";
 import { methodSchemas } from "../../src/protocol/methods.js";
 import {
+  applicationStateSchema,
   budgetSchema,
   citationSchema,
   threadEntrySchema,
   usageSummarySchema,
   workspaceInstructionDiagnosticSchema,
 } from "../../src/protocol/product-projections.js";
+import { modelCatalogSchema } from "../../src/protocol/model-catalog.js";
 import { PRODUCT_VERSION } from "../../src/version.js";
 import { loadFixtureCorpus } from "../contracts/fixture-loader.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 describe("protocol v4 handshake", () => {
   const params = {
@@ -286,6 +289,105 @@ describe("provider credential protocol", () => {
   });
 });
 
+describe("application Model Catalog protocol", () => {
+  it("requires the catalog on every ApplicationState", () => {
+    const { model_catalog: _catalog, ...withoutCatalog } = applicationState();
+    void _catalog;
+
+    expect(applicationStateSchema.safeParse(withoutCatalog).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects duplicate Provider and model identifiers", () => {
+    const duplicateProvider = freshModelCatalog();
+    duplicateProvider.providers.push(
+      structuredClone(catalogProvider(duplicateProvider, 0)),
+    );
+
+    const duplicateModel = freshModelCatalog();
+    catalogProvider(duplicateModel, 0).models.push(
+      structuredClone(catalogModel(duplicateModel, 0, 0)),
+    );
+
+    expect(modelCatalogSchema.safeParse(duplicateProvider).success).toBe(false);
+    expect(modelCatalogSchema.safeParse(duplicateModel).success).toBe(false);
+  });
+
+  it("rejects models whose Provider prefix or default declaration is invalid", () => {
+    const wrongPrefix = freshModelCatalog();
+    catalogModel(wrongPrefix, 0, 0).id = "kimi/deepseek-v4-flash";
+
+    const noDefault = freshModelCatalog();
+    for (const model of catalogProvider(noDefault, 0).models) {
+      model.is_default = false;
+    }
+
+    const multipleDefaults = freshModelCatalog();
+    for (const model of catalogProvider(multipleDefaults, 0).models) {
+      model.is_default = true;
+    }
+
+    expect(modelCatalogSchema.safeParse(wrongPrefix).success).toBe(false);
+    expect(modelCatalogSchema.safeParse(noDefault).success).toBe(false);
+    expect(modelCatalogSchema.safeParse(multipleDefaults).success).toBe(false);
+  });
+
+  it("rejects duplicate, missing, unsupported, and extraneous region defaults", () => {
+    const duplicateRegion = freshModelCatalog();
+    catalogProvider(duplicateRegion, 1).supported_regions = ["cn", "cn"];
+
+    const missingDefault = freshModelCatalog();
+    delete catalogProvider(missingDefault, 1).default_region;
+
+    const unsupportedDefault = freshModelCatalog();
+    catalogProvider(unsupportedDefault, 1).supported_regions = ["cn"];
+    catalogProvider(unsupportedDefault, 1).default_region = "global";
+
+    const extraneousDefault = freshModelCatalog();
+    catalogProvider(extraneousDefault, 0).default_region = "cn";
+
+    for (const catalog of [
+      duplicateRegion,
+      missingDefault,
+      unsupportedDefault,
+      extraneousDefault,
+    ]) {
+      expect(modelCatalogSchema.safeParse(catalog).success).toBe(false);
+    }
+  });
+
+  it("requires every catalog credential association to be published", () => {
+    const application = applicationState();
+    catalogProvider(application.model_catalog, 0).credential_id = "orphan";
+
+    expect(applicationStateSchema.safeParse(application).success).toBe(false);
+  });
+
+  it("rejects model identities outside the published catalog", () => {
+    const unknownProvider = applicationState();
+    requiredModelIdentity(unknownProvider).provider = "future";
+
+    const unknownConfiguredModel = applicationState();
+    requiredModelIdentity(unknownConfiguredModel).configured_model =
+      "deepseek/not-published";
+
+    const unknownEffectiveModel = applicationState();
+    const effectiveIdentity = requiredModelIdentity(unknownEffectiveModel);
+    effectiveIdentity.effective_model = "deepseek/not-published";
+    effectiveIdentity.fallback_active = true;
+    effectiveIdentity.fallback_from = "deepseek/deepseek-v4-flash";
+
+    for (const application of [
+      unknownProvider,
+      unknownConfiguredModel,
+      unknownEffectiveModel,
+    ]) {
+      expect(applicationStateSchema.safeParse(application).success).toBe(false);
+    }
+  });
+});
+
 describe("workspace change protocol", () => {
   it("accepts every structured change delta from the shared fixture", async () => {
     const corpus = await loadFixtureCorpus();
@@ -448,3 +550,84 @@ describe("startup state recovery protocol", () => {
     ).toBe(false);
   });
 });
+
+function applicationState() {
+  return applicationStateSchema.parse({
+    initialized: true,
+    session_id: "session_1",
+    workspace_key: "workspace_1",
+    workspace: { display_path: "E:\\workspace" },
+    workspace_trusted: true,
+    model_catalog: freshModelCatalog(),
+    model_identity: {
+      provider: "deepseek",
+      configured_model: "deepseek/deepseek-v4-flash",
+      effective_model: "deepseek/deepseek-v4-flash",
+      runtime_name: "Awesome Agent",
+      fallback_active: false,
+    },
+    thinking_enabled: false,
+    skill_mode: "auto",
+    permission_mode: "request_approval",
+    configuration_valid: true,
+    secret_status: {
+      deepseek_api_key: true,
+      moonshot_api_key: false,
+      mem0_api_key: false,
+    },
+    provider_credentials: {
+      deepseek: {
+        provider: "deepseek",
+        environment_variable: "DEEPSEEK_API_KEY",
+        environment_configured: true,
+        awesome_configured: false,
+        selected_source: "environment",
+      },
+      kimi: {
+        provider: "kimi",
+        environment_variable: "MOONSHOT_API_KEY",
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: null,
+      },
+      mem0: {
+        provider: "mem0",
+        environment_variable: "MEM0_API_KEY",
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: null,
+      },
+    },
+    memory_status: {},
+    mcp_status: [],
+    usage: {},
+    configuration_diagnostics: [],
+  });
+}
+
+function catalogProvider(
+  catalog: ReturnType<typeof freshModelCatalog>,
+  index: number,
+) {
+  const provider = catalog.providers[index];
+  if (!provider) throw new Error(`Provider fixture ${index} is missing`);
+  return provider;
+}
+
+function catalogModel(
+  catalog: ReturnType<typeof freshModelCatalog>,
+  providerIndex: number,
+  modelIndex: number,
+) {
+  const model = catalogProvider(catalog, providerIndex).models[modelIndex];
+  if (!model) throw new Error(`Model fixture ${modelIndex} is missing`);
+  return model;
+}
+
+function requiredModelIdentity(
+  application: ReturnType<typeof applicationState>,
+) {
+  const identity = application.model_identity;
+  if (!identity) throw new Error("Model identity fixture is missing");
+  return identity;
+}

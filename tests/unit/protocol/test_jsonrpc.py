@@ -35,6 +35,7 @@ from awesome_agent.application.contracts import (
 from awesome_agent.application.middleware import ApplicationOperation
 from awesome_agent.config import CredentialSource, SecretStatus
 from awesome_agent.core.events import EventEnvelope, EventType, WarningPayload
+from awesome_agent.modeling import MODEL_CATALOG
 from awesome_agent.protocol.jsonrpc import (
     JsonRpcDispatcher,
     event_notification,
@@ -83,6 +84,7 @@ class Facade:
                     display_path="C:\\workspace", branch="feature/auth"
                 ),
                 workspace_trusted=True,
+                model_catalog=MODEL_CATALOG,
                 configuration_valid=True,
                 secret_status=SecretStatus(),
             )

@@ -47,6 +47,7 @@ from awesome_agent.application.middleware import (
     ObservationalMiddleware,
 )
 from awesome_agent.config import CredentialSource, SecretStatus
+from awesome_agent.modeling import MODEL_CATALOG
 from awesome_agent.storage import ApplicationSQLiteUnavailable
 
 METHODS = {
@@ -87,6 +88,7 @@ class Backend:
             workspace_key="ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             workspace=WorkspacePresentation(display_path="C:\\workspace"),
             workspace_trusted=True,
+            model_catalog=MODEL_CATALOG,
             configuration_valid=True,
             secret_status=SecretStatus(),
         )

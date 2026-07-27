@@ -15,6 +15,7 @@ import {
   SubmissionCoordinator,
   type SubmissionEffects,
 } from "../../src/app/submission-coordinator.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 describe("SubmissionCoordinator", () => {
   it("correlates a fresh optimistic Turn with the accepted client identity", async () => {
@@ -284,6 +285,7 @@ function accepted(
 function applicationState(threadId: string) {
   return {
     current_thread_id: threadId,
+    model_catalog: freshModelCatalog(),
     permission_mode: "request_approval",
     provider_credentials: {},
   } as never;

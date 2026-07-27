@@ -17,6 +17,7 @@ import type {
   MethodValue,
 } from "../../src/protocol/methods.js";
 import type { CommandSelection } from "../../src/protocol/commands.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 type Call = { method: MethodName; params: MethodParams[MethodName] };
 
@@ -313,6 +314,7 @@ function applicationState({
     workspace_key: "workspace_1",
     workspace: { display_path: "E:\\projects\\awesome", branch: "main" },
     workspace_trusted: true,
+    model_catalog: freshModelCatalog(),
     ...(model === null ? {} : { model_identity: modelIdentity(model) }),
     thinking_enabled: false,
     skill_mode: "auto",
@@ -658,6 +660,25 @@ describe("trusted startup state machine", () => {
         readiness: "diagnostics_ready",
         diagnostic: { model, environmentVariable },
         safeCommands: SAFE_DIAGNOSTIC_COMMANDS,
+      },
+    );
+  });
+
+  it("resolves the selected Provider credential through the published catalog", async () => {
+    const application = applicationState({ deepseek: true, kimi: false });
+    const [deepseekProvider] = application.model_catalog.providers;
+    if (!deepseekProvider) throw new Error("DeepSeek fixture is missing");
+    deepseekProvider.credential_id = "kimi";
+    const { surface } = startupHarness({ application });
+
+    await expect(beginStartup(surface, { kind: "new" })).resolves.toMatchObject(
+      {
+        kind: "ready",
+        readiness: "diagnostics_ready",
+        diagnostic: {
+          model: "deepseek/deepseek-v4-flash",
+          environmentVariable: "MOONSHOT_API_KEY",
+        },
       },
     );
   });

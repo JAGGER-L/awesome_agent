@@ -64,7 +64,7 @@ from awesome_agent.core.events import CollectingEventSink
 from awesome_agent.core.workspace import WorkspaceTrustService, resolve_workspace
 from awesome_agent.extensions.mcp import McpServerConfig, McpServerStatus
 from awesome_agent.extensions.skills import SkillCatalog, discover_skills
-from awesome_agent.modeling import ModelGateway
+from awesome_agent.modeling import MODEL_CATALOG, ModelGateway
 from awesome_agent.paths import AwesomePaths
 from awesome_agent.storage import (
     ApplicationSchemaMismatch,
@@ -404,6 +404,7 @@ async def test_credential_recovery_precedes_the_first_real_config_load(
     assert before_initialize.value is not None
     assert before_initialize.value.initialized is False
     assert before_initialize.value.workspace_trusted is False
+    assert before_initialize.value.model_catalog is MODEL_CATALOG
     assert before_initialize.value.secret_status.deepseek_api_key is False
     assert before_initialize.value.provider_credentials.deepseek.configured is False
     assert observed_env_at_load == []
@@ -411,6 +412,10 @@ async def test_credential_recovery_precedes_the_first_real_config_load(
     initialized = await application.initialize()
 
     assert initialized.ok is True
+    initialized_state = await application.get_state()
+    assert initialized_state.ok is True
+    assert initialized_state.value is not None
+    assert initialized_state.value.model_catalog is MODEL_CATALOG
     assert observed_env_at_load
     assert all(content == previous_env.content for content in observed_env_at_load)
     assert writer.read().credentials.deepseek is CredentialSource.ENVIRONMENT
@@ -1219,7 +1224,8 @@ async def test_provider_configuration_replaces_the_runtime_snapshot(
     assert current is not original
     assert current.sources is updated_sources
     assert current.application_config is updated_config
-    assert current.model_catalog.default_model == "kimi/kimi-k2.6"
+    assert original.model_catalog is MODEL_CATALOG
+    assert current.model_catalog is MODEL_CATALOG
     assert original.application_config.providers.default_model is None
     assert current.turns is not original.turns
     assert current.command_dispatcher is not original.command_dispatcher

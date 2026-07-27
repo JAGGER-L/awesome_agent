@@ -6,6 +6,7 @@ import type {
   StartupResult,
   StartupThreadResult,
 } from "../../src/surface/startup.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 describe("StartupSessionController", () => {
   it("continues Trust with the exact interaction identity", async () => {
@@ -201,6 +202,7 @@ function readyThread(threadId: string): StartupThreadResult {
 function applicationState(threadId: string) {
   return {
     current_thread_id: threadId,
+    model_catalog: freshModelCatalog(),
     permission_mode: "request_approval",
     provider_credentials: {},
   } as never;

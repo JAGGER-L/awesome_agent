@@ -88,7 +88,7 @@ from awesome_agent.core.events import (
     WarningPayload,
 )
 from awesome_agent.core.tools.permissions import PermissionMode
-from awesome_agent.modeling import ModelIdentitySnapshot
+from awesome_agent.modeling import MODEL_CATALOG, ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -282,6 +282,7 @@ def _valid_methods() -> dict[str, object]:
                     workspace=workspace,
                     workspace_trusted=True,
                     current_thread_id=THREAD_ID,
+                    model_catalog=MODEL_CATALOG,
                     model_identity=ModelIdentitySnapshot.from_models(
                         configured_model="deepseek/deepseek-v4-flash",
                         effective_model="deepseek/deepseek-v4-flash",

@@ -15,6 +15,7 @@ import { RpcProtocolError } from "../../src/protocol/client.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
 import { StartupProductError } from "../../src/surface/startup.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 type ReadyApplication = Extract<
   StartupResult,
@@ -35,6 +36,7 @@ const readyApplication: ReadyApplication = {
   workspace_key: "workspace_1",
   workspace: { display_path: "E:\\workspace" },
   workspace_trusted: true,
+  model_catalog: freshModelCatalog(),
   model_identity: {
     provider: "deepseek",
     configured_model: "deepseek/deepseek-v4-flash",

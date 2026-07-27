@@ -77,16 +77,24 @@ mcp_servers:
 | `default_model` | 精选 model ID 或 `null` | `null` | 没有提供启动 model 时，新 Thread 的初始 model。 |
 | `kimi_region` | `cn` 或 `global` | `cn` | Provider adapter 使用的 Kimi API region。 |
 
-精选 model ID 为：
+静态、提供商中立的模型层级是唯一模型目录：
 
-- `deepseek/deepseek-v4-flash`
-- `deepseek/deepseek-v4-pro`
-- `kimi/kimi-k2.6`
-- `kimi/kimi-k2.5`
+```text
+ModelCatalog -> ProviderDescriptor -> ModelProfile
+```
 
-当前四个 profile 都宣告 262,144-token context window，以及 tool calling 和 reasoning 能力。
-精选列表使 Core 能绑定已知 capability 和 context limit，而不必信任任意 model 字符串。
-`/model` 会同时更新选中的 Thread 和该 User 默认值。
+| Provider | `credential_id` | 支持的 region（默认） | Model | Context | Tool | Reasoning | Provider 默认项 |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `deepseek` | `deepseek` | 无 | `deepseek/deepseek-v4-flash` | 262,144 | 是 | 是 | 是 |
+| `deepseek` | `deepseek` | 无 | `deepseek/deepseek-v4-pro` | 262,144 | 是 | 是 | 否 |
+| `kimi` | `kimi` | `cn`、`global`（`cn`） | `kimi/kimi-k2.6` | 262,144 | 是 | 是 | 是 |
+| `kimi` | `kimi` | `cn`、`global`（`cn`） | `kimi/kimi-k2.5` | 262,144 | 是 | 是 | 否 |
+
+策划该目录使 Core 能绑定已知 capability 和 context limit，而不必信任任意 model 字符串。
+Configuration 不构建或扩展 catalog：它记录 `providers.default_model` 和活动 Kimi region；
+Application 再把这些选择与当前 credential 存在性及已选 Thread 组合起来。`/model` 会同时更新
+选中的 Thread 和 User 默认值。只有恰好一个 Provider 的 credential 已配置且没有显式默认项
+时，才使用 Provider 内 catalog 默认项。
 
 如果没有设置默认值，Awesome 会选择唯一已配置 Provider 的默认 model。如果配置了零个或
 多个 Provider，就必须在 Agent Turn 开始前选择 model。
@@ -137,6 +145,9 @@ Provider 重试不会导致非幂等工具重复执行。
 | `enabled` | boolean | `false` | User 拥有的 Web enablement；Workspace 配置不能开启它。 |
 | `provider` | `tavily` | `tavily` | 静态 Web Provider 选择，与 model Provider 分离。 |
 | `blocked_domains` | 最多 128 个唯一、规范化的 ASCII hostname | `[]` | 作为 Tavily `exclude_domains` 发送；Workspace 可增加限制，但不能启用 Web。 |
+
+Web Provider selection 和 catalog concern 留在这个独立的 Web/config 边界。Tavily 绝不是
+model Provider，也不会进入 `ModelCatalog` 或 model selection。
 
 `enabled` 为 true 且 Tavily credential 与显式 proxy 有效时，runtime construction 会注册
 `web_search` 与 `web_fetch`；否则 `/web status` 会报告有界 diagnostic，且两个工具都不存在。

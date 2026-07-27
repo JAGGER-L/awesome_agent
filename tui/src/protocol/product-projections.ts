@@ -8,6 +8,10 @@ import {
   utcTimestampSchema,
 } from "./base.js";
 import { modelIdentitySchema } from "./identity.js";
+import {
+  modelCatalogSchema,
+  type ProviderDescriptor,
+} from "./model-catalog.js";
 
 const nonNegativeIntegerSchema = safeIntegerSchema.min(0);
 const positiveIntegerSchema = safeIntegerSchema.min(1);
@@ -139,30 +143,109 @@ const secretStatusSchema = z.strictObject({
   mem0_api_key: z.boolean(),
 });
 
-export const applicationStateSchema = z.strictObject({
-  initialized: z.boolean(),
-  session_id: identifierSchema,
-  workspace_key: identifierSchema,
-  workspace: workspacePresentationSchema,
-  workspace_trusted: z.boolean(),
-  current_thread_id: identifierSchema.optional(),
-  model_identity: modelIdentitySchema.optional(),
-  thinking_enabled: z.boolean(),
-  skill_mode: boundedText(1, 64),
-  active_operation_id: identifierSchema.optional(),
-  pending_interaction_id: identifierSchema.optional(),
-  permission_mode: permissionModeSchema,
-  workspace_instruction_diagnostic: workspaceInstructionDiagnosticSchema
-    .nullable()
-    .optional(),
-  configuration_valid: z.boolean(),
-  secret_status: secretStatusSchema,
-  provider_credentials: providerCredentialStatusesSchema,
-  memory_status: z.record(z.string(), jsonValueSchema),
-  mcp_status: z.array(z.record(z.string(), jsonValueSchema)),
-  usage: z.record(z.string(), z.number().finite().min(0)),
-  configuration_diagnostics: z.array(z.string()),
-});
+export const applicationStateSchema = z
+  .strictObject({
+    initialized: z.boolean(),
+    session_id: identifierSchema,
+    workspace_key: identifierSchema,
+    workspace: workspacePresentationSchema,
+    workspace_trusted: z.boolean(),
+    current_thread_id: identifierSchema.optional(),
+    model_catalog: modelCatalogSchema,
+    model_identity: modelIdentitySchema.optional(),
+    thinking_enabled: z.boolean(),
+    skill_mode: boundedText(1, 64),
+    active_operation_id: identifierSchema.optional(),
+    pending_interaction_id: identifierSchema.optional(),
+    permission_mode: permissionModeSchema,
+    workspace_instruction_diagnostic: workspaceInstructionDiagnosticSchema
+      .nullable()
+      .optional(),
+    configuration_valid: z.boolean(),
+    secret_status: secretStatusSchema,
+    provider_credentials: providerCredentialStatusesSchema,
+    memory_status: z.record(z.string(), jsonValueSchema),
+    mcp_status: z.array(z.record(z.string(), jsonValueSchema)),
+    usage: z.record(z.string(), z.number().finite().min(0)),
+    configuration_diagnostics: z.array(z.string()),
+  })
+  .superRefine((application, context) => {
+    const credentialStatuses = Object.values(application.provider_credentials);
+    for (const [
+      index,
+      provider,
+    ] of application.model_catalog.providers.entries()) {
+      if (
+        !credentialStatuses.some(
+          (status) => status.provider === provider.credential_id,
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["model_catalog", "providers", index, "credential_id"],
+          message: "Model Provider credential is not published by Application",
+        });
+      }
+    }
+
+    const identity = application.model_identity;
+    if (!identity) return;
+    const provider = application.model_catalog.providers.find(
+      (candidate) => candidate.id === identity.provider,
+    );
+    if (!provider) {
+      context.addIssue({
+        code: "custom",
+        path: ["model_identity", "provider"],
+        message: "Model identity Provider is absent from the catalog",
+      });
+      return;
+    }
+    const catalogModels = application.model_catalog.providers.flatMap(
+      (candidate) => candidate.models,
+    );
+    if (
+      !catalogModels.some((model) => model.id === identity.configured_model)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["model_identity", "configured_model"],
+        message: "Configured model is absent from the catalog",
+      });
+    }
+    if (
+      !provider.models.some((model) => model.id === identity.effective_model)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["model_identity", "effective_model"],
+        message: "Effective model does not belong to its catalog Provider",
+      });
+    }
+  });
+
+export type ProviderCredentialStatus = z.infer<
+  typeof providerCredentialStatusSchema
+>;
+
+export function modelProviderCredentialStatus(
+  application: z.infer<typeof applicationStateSchema>,
+  provider: ProviderDescriptor,
+): ProviderCredentialStatus | undefined {
+  return Object.values(application.provider_credentials).find(
+    (status) => status.provider === provider.credential_id,
+  );
+}
+
+export function credentialConfigured(
+  status: ProviderCredentialStatus | undefined,
+): boolean {
+  return status?.selected_source === "environment"
+    ? status.environment_configured
+    : status?.selected_source === "awesome"
+      ? status.awesome_configured
+      : false;
+}
 
 export const threadSchema = z.strictObject({
   id: identifierSchema,

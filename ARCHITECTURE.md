@@ -404,6 +404,10 @@ and cannot roll a ready runtime back. Candidate failure or cancellation closes
 only candidate resources and leaves the previously published runtime untouched.
 Provider and credential mutations use the same complete-candidate publication
 path, without repeating startup recovery, and preserve the selected Thread.
+The runtime's `model_catalog` is the frozen, provider-neutral `MODEL_CATALOG`;
+credential presence, configured defaults, active selection, and region remain
+dynamic Application/configuration state. Protocol v4 publishes those facts
+separately as `model_catalog`, `provider_credentials`, and `model_identity`.
 Foreground ownership, interactions, permission session, recovery delivery,
 checkpoint saver, the process-owned Application SQLite worker, state leases,
 and other process-lifetime resources remain in a separate Application
@@ -479,10 +483,23 @@ skipped when a loop budget is exhausted.
 ### Model Gateway
 
 - **Responsibility:** provider-neutral messages, tools, streaming events,
-  errors, usage, model selection, retry reporting, and supported adapter calls.
+  errors, usage, the sole supported model catalog, model selection, retry
+  reporting, and supported adapter calls.
 - **Does not own:** tools, graph state, or product lifecycle.
-- **Primary files:** `modeling/gateway.py`, `modeling/provider.py`,
-  `modeling/turns.py`, `providers/deepseek.py`, `providers/kimi.py`.
+- **Primary files:** `modeling/catalog.py`, `modeling/gateway.py`,
+  `modeling/provider.py`, `modeling/turns.py`, `providers/factory.py`,
+  `providers/deepseek.py`, `providers/kimi.py`.
+
+The static directory is `MODEL_CATALOG -> ProviderDescriptor -> ModelProfile`.
+It currently describes DeepSeek and Kimi, four models, their capabilities and
+262,144-token context limits, Provider-local defaults, Kimi's `cn`/`global`
+regions with `cn` as its default, and each Provider's `credential_id`.
+Application/configuration still owns credential presence and runtime default,
+model, and region selection. The catalog does not instantiate clients: the
+concrete factory, adapters, and official endpoints remain in `providers/`.
+Tavily selection and catalog concerns stay in the separate Web/configuration
+boundary and never enter `ModelCatalog`. There is no generic provider registry,
+DI container, or speculative third model Provider.
 
 ### Tool System
 
@@ -714,13 +731,13 @@ is the composition root and may depend on all concrete owners it wires.
 | --- | --- |
 | `agent` | `agent`, `core`, `modeling` |
 | `application` | `agent`, `application`, `config`, `context`, `conversation`, `core`, `extensions`, `memory`, `modeling`, `paths`, `providers`, `safety`, `storage`, `version`, `web` |
-| `config` | `config`, `core`, `paths` |
+| `config` | `config`, `core`, `modeling`, `paths` |
 | `context` | `context`, `conversation`, `core`, `memory`, `modeling` |
 | `conversation` | `config`, `conversation`, `core` |
 | `core` | `core`, `safety` |
 | `extensions` | `context`, `core`, `extensions` |
 | `memory` | `agent`, `config`, `core`, `memory`, `modeling`, `paths`, `safety` |
-| `modeling` | `config`, `modeling` |
+| `modeling` | `modeling` |
 | `protocol` | `application`, `core`, `paths`, `protocol`, `version` |
 | `providers` | `config`, `modeling`, `providers` |
 | `safety` | `modeling`, `safety` |
@@ -732,6 +749,11 @@ this exact adjacency table and for external-framework ownership. The TUI is a
 separate TypeScript process and reaches Python only through Protocol v4.
 The `memory` -> `agent` row is intentionally narrower than its package-level
 appearance: only `memory/finalization.py` may import `agent/finalization.py`.
+
+The package dependency arrow is therefore `config -> modeling`, never
+`modeling -> config`. Application composes the static model directory with
+dynamic configuration and credential state, then publishes that catalog
+through Protocol v4 so Ink does not copy model or Provider enumerations.
 
 Concrete providers and storage adapters are wired in
 `application/composition.py`. The Agent imports provider-neutral contracts, and
@@ -796,8 +818,9 @@ User-facing activity history stores bounded summaries.
 
 Current extension points are deliberately narrow:
 
-- new model adapters implement the existing provider contract and are composed
-  at the Application boundary;
+- a supported model or Provider is added to the static model catalog and the
+  concrete adapter factory, then composed at the Application boundary; this is
+  not a runtime registry or a reason to invent a third Provider;
 - new built-in or MCP tools enter the existing Registry/Policy/Executor path;
 - new Skills follow the current manifest schema and trusted discovery order;
 - a second external memory service must justify a shared provider abstraction;

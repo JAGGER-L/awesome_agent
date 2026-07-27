@@ -221,6 +221,7 @@ from awesome_agent.memory import (
 )
 from awesome_agent.memory.mem0_cloud import Mem0Client
 from awesome_agent.modeling import (
+    MODEL_CATALOG,
     GatewayFactory,
     ModelCatalog,
     ModelIdentitySnapshot,
@@ -744,6 +745,9 @@ class _LocalApplicationBackend:
             ),
             workspace_trusted=runtime is not None,
             current_thread_id=current_id,
+            model_catalog=(
+                runtime.model_catalog if runtime is not None else MODEL_CATALOG
+            ),
             model_identity=(
                 self._model_identity(current, runtime=runtime) if current else None
             ),
@@ -2122,10 +2126,15 @@ class _LocalApplicationBackend:
                 application_config = resolve_application_config(sources)
             else:
                 sources, application_config = configuration
+            model_catalog = MODEL_CATALOG
             base_gateway_factory = self._injected_gateway_factory
             if base_gateway_factory is None:
                 base_gateway_factory = await runtime_resources.enter_async_context(
-                    managed_gateway_factory(application_config, sources.secrets)
+                    managed_gateway_factory(
+                        application_config,
+                        sources.secrets,
+                        model_catalog=model_catalog,
+                    )
                 )
             gateway_factory = runtime_resources.bind_gateway_factory(
                 base_gateway_factory
@@ -2268,9 +2277,10 @@ class _LocalApplicationBackend:
                 candidate_mcp.aclose,
             )
 
-            model_catalog = ModelCatalog.from_application(application_config)
             context_model_limit = min(
-                profile.context_limit for profile in model_catalog.models
+                profile.context_limit
+                for descriptor in model_catalog.providers
+                for profile in descriptor.models
             )
             context_budget = calculate_context_budget(
                 application_config.budgets.total_context_tokens,
@@ -2530,6 +2540,7 @@ class _LocalApplicationBackend:
                 apply_configuration=self._apply_provider_configuration,
                 model_transaction_journal=self._provider_model_journal,
                 credential_transaction_journal=self._provider_credential_journal,
+                model_catalog=model_catalog,
                 clock=self._clock,
             )
 
@@ -2650,8 +2661,7 @@ class _LocalApplicationBackend:
     def _validate_workspace_runtime(self, candidate: WorkspaceRuntime) -> None:
         if candidate.conversation is not self._conversation:
             raise RuntimeError("Workspace runtime owns the wrong Conversation service.")
-        expected_catalog = ModelCatalog.from_application(candidate.application_config)
-        if candidate.model_catalog != expected_catalog:
+        if candidate.model_catalog is not MODEL_CATALOG:
             raise RuntimeError("Workspace runtime Model Catalog is inconsistent.")
         web_tools_registered = (
             candidate.tool_registry.resolve("web_fetch") is not None,
@@ -2836,18 +2846,6 @@ class _LocalApplicationBackend:
         runtime: WorkspaceRuntime | None = None,
     ) -> TurnConfig:
         runtime = runtime or self._require_runtime()
-        selected = resolve_turn_config(
-            runtime.application_config,
-            thread=ThreadConfigState(
-                model=thread.current_model,
-                thinking_enabled=thread.thinking_enabled,
-                skill_mode=thread.skill_mode,
-            ),
-            environ={},
-        )
-        model_context_limit = runtime.model_catalog.profile(
-            selected.model
-        ).context_limit
         return resolve_turn_config(
             runtime.application_config,
             thread=ThreadConfigState(
@@ -2856,7 +2854,6 @@ class _LocalApplicationBackend:
                 skill_mode=thread.skill_mode,
             ),
             environ={},
-            model_context_limit=model_context_limit,
         )
 
     def _model_identity(

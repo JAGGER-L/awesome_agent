@@ -9,6 +9,7 @@ import type { ConnectedSurface } from "../../src/surface/controller.js";
 import type { StartupResult } from "../../src/surface/startup.js";
 import { createSurfaceStore } from "../../src/state/store.js";
 import type { TranscriptBlock } from "../../src/transcript/model.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 function ready(title = "Feature auth"): StartupResult {
   const now = "2026-07-11T00:00:00Z";
@@ -22,6 +23,7 @@ function ready(title = "Feature auth"): StartupResult {
     workspace: { display_path: "/workspace" },
     workspace_trusted: true,
     current_thread_id: "thread_full",
+    model_catalog: freshModelCatalog(),
     model_identity: {
       provider: "deepseek",
       configured_model: "deepseek/deepseek-v4-flash",

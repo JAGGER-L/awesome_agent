@@ -56,6 +56,10 @@ import type { CancellationSnapshot } from "../lifecycle/cancellation.js";
 import type { ExitReason } from "../lifecycle/exit.js";
 import type { PendingInput } from "../pending-input/model.js";
 import {
+  credentialConfigured,
+  modelProviderCredentialStatus,
+} from "../protocol/product-projections.js";
+import {
   usePendingInputDrain,
   usePendingInputQueue,
 } from "../pending-input/use-pending-input-queue.js";
@@ -183,10 +187,16 @@ export function App({
         ),
       }
     : undefined;
+  const application = state.application;
   const providerSetupVisible =
     providerSetupRequired &&
-    !credentialConfigured(state.application?.provider_credentials.deepseek) &&
-    !credentialConfigured(state.application?.provider_credentials.kimi);
+    (application?.model_catalog.providers.every(
+      (provider) =>
+        !credentialConfigured(
+          modelProviderCredentialStatus(application, provider),
+        ),
+    ) ??
+      true);
 
   const runTerminalAction = useCallback(
     (action: () => Promise<void>) => {
@@ -818,22 +828,6 @@ export function App({
       />
     </>
   );
-}
-
-function credentialConfigured(
-  status:
-    | {
-        selected_source?: "environment" | "awesome" | null | undefined;
-        environment_configured: boolean;
-        awesome_configured: boolean;
-      }
-    | undefined,
-): boolean {
-  return status?.selected_source === "environment"
-    ? status.environment_configured
-    : status?.selected_source === "awesome"
-      ? status.awesome_configured
-      : false;
 }
 
 function memoryStateEnabled(

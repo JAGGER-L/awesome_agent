@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from awesome_agent.config.loader import SecretValues
 from awesome_agent.config.models import ApplicationConfig
 from awesome_agent.modeling import (
+    MODEL_CATALOG,
     GatewayFactory,
     ModelCatalog,
     ModelCatalogError,
@@ -37,13 +38,13 @@ async def managed_gateway_factory(
     *,
     timeout_seconds: float = 60.0,
     client_factory: ProviderClientFactory | None = None,
+    model_catalog: ModelCatalog = MODEL_CATALOG,
 ) -> AsyncIterator[GatewayFactory]:
     """Create one candidate-bound pool of reusable provider HTTP clients."""
 
     if timeout_seconds <= 0:
         raise ValueError("Provider timeout must be positive.")
     _require_secret_status_consistency(application, secrets)
-    catalog = ModelCatalog.from_application(application)
     construct_client = client_factory or AsyncOpenAI
     clients: dict[ProviderId, AsyncOpenAI] = {}
     resources = AsyncExitStack()
@@ -68,8 +69,8 @@ async def managed_gateway_factory(
             clients["kimi"] = kimi_client
 
         def build(provider: ProviderId, model: str) -> ModelGateway:
-            profile = catalog.profile(model)
-            if profile.provider != provider:
+            descriptor = model_catalog.provider_for_model(model)
+            if descriptor.id != provider:
                 raise ModelCatalogError(
                     "unsupported_model",
                     "Model selection does not belong to the requested Provider.",

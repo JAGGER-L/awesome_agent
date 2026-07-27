@@ -124,6 +124,29 @@ provider_id
 stream(ModelRequest) -> async ModelStreamEvent sequence
 ```
 
+frozen、提供商中立的模型目录只有一种形状和一个实例：
+
+```text
+MODEL_CATALOG
+  -> ProviderDescriptor
+       -> ModelProfile
+```
+
+它是受支持模型 identity、capability、context limit、Provider 内默认项、受支持 region 与
+credential 关联的唯一来源。当前目录恰好包含两个 Provider 和四个 model profile：
+
+| Provider | `credential_id` | Region（默认） | Model | Context | Tool | Reasoning | Provider 默认项 |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `deepseek` | `deepseek` | 无 | `deepseek/deepseek-v4-flash` | 262,144 | 是 | 是 | 是 |
+| `deepseek` | `deepseek` | 无 | `deepseek/deepseek-v4-pro` | 262,144 | 是 | 是 | 否 |
+| `kimi` | `kimi` | `cn`、`global`（`cn`） | `kimi/kimi-k2.6` | 262,144 | 是 | 是 | 是 |
+| `kimi` | `kimi` | `cn`、`global`（`cn`） | `kimi/kimi-k2.5` | 262,144 | 是 | 是 | 否 |
+
+Catalog 不表示 credential 已存在，也不选择活动 model 或 region。Credential 来源与存在性、
+`providers.default_model`、Thread 选择和已配置的 Kimi region 仍属于动态的
+Application/configuration state。Catalog 默认项只在恰好配置一个 model Provider 时作为
+确定性 fallback。
+
 具体 DeepSeek 与 Kimi 适配器位于 `providers/`，只由 Application 组装层实例化。
 它们将 SDK payload 转换为中立事件并规范化错误；Agent 和 Context 绝不导入 OpenAI
 client 或提供商适配器。
@@ -139,6 +162,20 @@ Application 状态。Candidate retirement 会关闭内部持有的 client；注�
 完成之前发生的可重试失败，会报告重试事件、保留取消，并要求恰好一个匹配的、已完成的
 模型 Turn。一旦文本、reasoning 或工具调用已经可见，透明重放会复制可观察工作，因此
 被禁止。
+
+Catalog 只描述受支持模型，不构造 client。具体 factory 与 adapter dispatch 仍位于
+`providers/`，显式保留官方 endpoint `https://api.deepseek.com`、
+`https://api.moonshot.cn/v1` 与 `https://api.moonshot.ai/v1`。这不是 provider registry 或
+DI container，也没有为了抽象而虚构第三个 model Provider。Web Provider selection 和
+catalog concern 留在独立的 Web/configuration 边界；Tavily Web search/fetch capability
+绝不会进入 `ModelCatalog`。
+
+Application 通过 Protocol v4 `ApplicationState` 发布 catalog，并与动态的
+`provider_credentials` 并列。TUI 会校验这些字段，并从中推导 startup 与 credential setup，
+不复制 model 或 Provider enum。Application 从同一 catalog 生成 `/model` 的
+`CommandSelection` option，TUI 只做通用渲染。在 Python 边界，依赖方向是
+`config -> modeling`；`modeling/` 不再导入 configuration。Application 将两者与具体
+Provider factory 组合起来。
 
 策划后的 catalog 是封闭的，不接受任意 provider/model 字符串。这会限制灵活性，但能让
 配置、能力、上下文上限、身份报告和测试就受支持的产品达成一致。

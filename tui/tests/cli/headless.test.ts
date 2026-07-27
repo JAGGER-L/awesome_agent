@@ -5,6 +5,7 @@ import { runHeadless } from "../../src/cli/headless.js";
 import type { ConnectedSurface } from "../../src/surface/controller.js";
 import { initialSurfaceState } from "../../src/state/reducer.js";
 import type { SurfaceState } from "../../src/state/model.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 describe("runHeadless", () => {
   it("prints only the durable assistant answer in text mode", async () => {
@@ -645,6 +646,7 @@ function applicationState(
     workspace: { display_path: "E:\\workspace" },
     workspace_trusted: true,
     current_thread_id: "thread_1",
+    model_catalog: freshModelCatalog(),
     ...(pendingInteractionId === undefined
       ? {}
       : { pending_interaction_id: pendingInteractionId }),

@@ -28,7 +28,6 @@ from awesome_agent.application.contracts import (
     ProviderCredentialSetStatus,
 )
 from awesome_agent.config import (
-    SUPPORTED_MODEL_IDS,
     ApplicationConfig,
     CredentialService,
     CredentialSource,
@@ -59,6 +58,7 @@ from awesome_agent.core.cancellation import (
     finish_cancellation_safe,
     run_cancellation_safe_blocking_call,
 )
+from awesome_agent.modeling import MODEL_CATALOG, ModelCatalog, ModelCatalogError
 
 type ProviderConfigurationSnapshot = tuple[LoadedConfigSources, ApplicationConfig]
 type PersistedModelConfiguration = tuple[
@@ -362,6 +362,7 @@ class ProviderConfigurationService:
         ],
         model_transaction_journal: ProviderModelTransactionJournal,
         credential_transaction_journal: ProviderCredentialTransactionJournal,
+        model_catalog: ModelCatalog = MODEL_CATALOG,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._conversation = conversation
@@ -374,6 +375,7 @@ class ProviderConfigurationService:
         self._apply_configuration = apply_configuration
         self._model_transaction_journal = model_transaction_journal
         self._credential_transaction_journal = credential_transaction_journal
+        self._model_catalog = model_catalog
         self._clock = clock or (lambda: datetime.now(UTC))
         self._recovery_required: ProviderConfigurationRecoveryRequired | None = None
         self._publication_generation = 0
@@ -525,36 +527,41 @@ class ProviderConfigurationService:
                     options=self._provider_options(),
                 ),
             )
-        provider = _provider(arguments[0])
-        if provider is None:
-            return _error("invalid_arguments", "Usage: /model [deepseek|kimi]")
-        status = _status(self._sources(), provider)
+        try:
+            descriptor = self._model_catalog.provider(arguments[0])
+        except ModelCatalogError:
+            return _error("invalid_arguments", self._model_usage())
+        provider = descriptor.id
+        status = _status(
+            self._sources(),
+            cast(CredentialService, descriptor.credential_id),
+        )
         if len(arguments) == 1:
             if not status.configured:
                 return self._secret_prompt(provider, action="add")
             thread = (await self._conversation.read_thread(thread_id)).thread
-            models = sorted(
-                model
-                for model in SUPPORTED_MODEL_IDS
-                if model.startswith(f"{provider}/")
-            )
+            models = self._model_catalog.models_for(provider)
             return interaction(
                 CommandSelection(
                     prompt=f"Select {_service_label(provider)} Model",
                     options=tuple(
                         CommandOption(
-                            value=model,
-                            label=model,
-                            selected=model == thread.current_model,
+                            value=profile.id,
+                            label=profile.id,
+                            selected=profile.id == thread.current_model,
                         )
-                        for model in models
+                        for profile in models
                     ),
                 ),
             )
         if len(arguments) != 2:
-            return _error("invalid_arguments", "Usage: /model [deepseek|kimi]")
+            return _error("invalid_arguments", self._model_usage())
         model = arguments[1]
-        if model not in SUPPORTED_MODEL_IDS or not model.startswith(f"{provider}/"):
+        try:
+            model_provider = self._model_catalog.provider_for_model(model)
+        except ModelCatalogError:
+            return _error("unsupported_model", "Selected model is not supported.")
+        if model_provider.id != provider:
             return _error("unsupported_model", "Selected model is not supported.")
         if not status.configured:
             return _error(
@@ -775,8 +782,12 @@ class ProviderConfigurationService:
     async def doctor(self) -> dict[str, str]:
         sources = self._sources()
         results: dict[str, str] = {}
-        for provider in ("deepseek", "kimi"):
-            status = _status(sources, provider)
+        for descriptor in self._model_catalog.providers:
+            provider = descriptor.id
+            status = _status(
+                sources,
+                cast(CredentialService, descriptor.credential_id),
+            )
             if not status.configured:
                 results[provider] = "missing"
                 continue
@@ -818,9 +829,15 @@ class ProviderConfigurationService:
         return tuple(options)
 
     def _provider_options(self) -> tuple[CommandOption, ...]:
+        options = {option.value: option for option in self._service_options()}
         return tuple(
-            option for option in self._service_options() if option.value != "mem0"
+            options[descriptor.credential_id]
+            for descriptor in self._model_catalog.providers
         )
+
+    def _model_usage(self) -> str:
+        providers = "|".join(self._model_catalog.provider_ids())
+        return f"Usage: /model [{providers}]"
 
     async def _select_source(
         self,
@@ -1307,14 +1324,6 @@ class ProviderConfigurationService:
                 help_url=_service_help_url(provider),
             ),
         )
-
-
-def _provider(value: str) -> ProviderName | None:
-    if value == "deepseek":
-        return "deepseek"
-    if value == "kimi":
-        return "kimi"
-    return None
 
 
 def _service(value: str) -> CredentialService | None:

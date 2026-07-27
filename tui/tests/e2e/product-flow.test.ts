@@ -20,6 +20,7 @@ import {
   connectSurface,
   type ConnectedSurface,
 } from "../../src/surface/controller.js";
+import { freshModelCatalog } from "../fixtures/model-catalog.js";
 import {
   beginStartup,
   respondStartupStateReset,
@@ -555,6 +556,7 @@ function applicationState(threadId: string) {
     workspace: { display_path: "E:/awesome" },
     workspace_trusted: true,
     current_thread_id: threadId,
+    model_catalog: freshModelCatalog(),
     model_identity: {
       provider: "deepseek",
       configured_model: "deepseek/deepseek-v4-flash",

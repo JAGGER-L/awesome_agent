@@ -163,11 +163,33 @@ rejected synchronously as invalid params and never start a process.
 ### `application.getState`
 
 The snapshot includes initialization/session/workspace identity and trust,
-selected Thread, model identity, Thinking/Skill/permission modes, active
-operation and pending interaction IDs, configuration validity/diagnostics,
-secret presence and credential source status, Memory/MCP summaries, usage, and
-the structured workspace-instruction diagnostic. Secret values are never part
-of state.
+selected Thread, the model catalog and model identity, Thinking/Skill/permission
+modes, active operation and pending interaction IDs, configuration
+validity/diagnostics, secret presence and credential source status, Memory/MCP
+summaries, usage, and the structured workspace-instruction diagnostic. Secret
+values are never part of state.
+
+`model_catalog` is the Protocol v4 projection of the static, provider-neutral
+`ModelCatalog -> ProviderDescriptor -> ModelProfile` directory. A Provider
+descriptor carries `id`, `credential_id`, `supported_regions`, optional
+`default_region`, and its model profiles. A model profile carries `id`,
+`context_limit`, `supports_tools`, `supports_reasoning`, and `is_default`.
+Provider and model IDs are unique, every model belongs to its Provider prefix,
+and each Provider has exactly one catalog default. The current value contains
+DeepSeek and Kimi with four models; Tavily Web Provider selection data remains
+in the separate Web/configuration boundary and never appears here.
+
+The static catalog is distinct from `provider_credentials` and
+`model_identity`: credential presence/source, configured default selection,
+active Thread selection, and Kimi region selection remain dynamic
+Application/configuration facts. Every model Provider's `credential_id` has a
+matching credential status, and all IDs in `model_identity` must resolve in the
+catalog.
+
+The TUI validates this snapshot and derives startup and provider setup from
+`model_catalog` plus `provider_credentials`; it has no copied model/Provider
+enumeration. `/model` choices are a `CommandSelection` produced by Application
+from the same catalog and rendered generically by the TUI.
 
 `workspace_instruction_diagnostic` is independent of `configuration_valid`.
 For example, an oversized `AGENTS.md` can be ignored and warned about without

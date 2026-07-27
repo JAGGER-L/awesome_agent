@@ -6,22 +6,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SUPPORTED_MODEL_IDS = frozenset(
-    {
-        "deepseek/deepseek-v4-flash",
-        "deepseek/deepseek-v4-pro",
-        "kimi/kimi-k2.6",
-        "kimi/kimi-k2.5",
-    }
-)
+from awesome_agent.modeling.catalog import MODEL_CATALOG, KimiRegion
+from awesome_agent.modeling.turns import ProviderId
 
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _ENV_NAME_PATTERN = re.compile(r"^[A-Z_][A-Z0-9_]*$")
-
-
-class KimiRegion(StrEnum):
-    CN = "cn"
-    GLOBAL = "global"
 
 
 class CredentialSource(StrEnum):
@@ -82,8 +71,13 @@ class ProviderConfig(BaseModel):
     @field_validator("default_model")
     @classmethod
     def validate_default_model(cls, value: str | None) -> str | None:
-        if value is not None and value not in SUPPORTED_MODEL_IDS:
-            raise ValueError("default_model must be a curated Provider/model id")
+        if value is not None:
+            try:
+                MODEL_CATALOG.profile(value)
+            except ValueError as error:
+                raise ValueError(
+                    "default_model must be a curated Provider/model id"
+                ) from error
         return value
 
 
@@ -322,7 +316,7 @@ class ApplicationConfig(BaseModel):
 class TurnConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    provider: Literal["deepseek", "kimi"]
+    provider: ProviderId
     model: str
     thinking_enabled: bool = True
     skill_mode: str = "auto"

@@ -354,8 +354,12 @@ provider client、内部创建的 Mem0 client 和 MCP，并按 MCP、Mem0、prov
 发生在发布之后，失败也不会回滚已 ready 的 runtime。Candidate 构建失败或取消只关闭候选
 资源，不影响此前发布的 runtime。Provider 与
 credential mutation 复用同一条完整 candidate 发布路径，但不重复 startup recovery，并保留
-已选择的 Thread。前台所有权、interaction、permission session、recovery delivery、
-checkpoint saver、进程级 Application SQLite worker、state lease 和其他进程生命周期资源
+已选择的 Thread。Runtime 的 `model_catalog` 是 frozen、提供商中立的 `MODEL_CATALOG`；
+credential 存在性、已配置默认项、活动选择与 region 仍是动态的
+Application/configuration state。Protocol v4
+通过 `model_catalog`、`provider_credentials` 和 `model_identity` 分别发布这些事实。
+前台所有权、interaction、permission session、recovery delivery、checkpoint saver、进程级
+Application SQLite worker、state lease 和其他进程生命周期资源
 仍由另一套 Application `AsyncExitStack` 持有，而不是 workspace snapshot 字段。一个有界
 FIFO worker thread 持有长期 Application database connection；面向 Application 的
 repository 只暴露 async method，SQLite 所有的值不会跨越该边界。
@@ -410,10 +414,20 @@ citations；ID 与值均相同的重复项会折叠，同一 ID 对应冲突值�
 ### Model Gateway
 
 - **职责：** 提供商中立 message、tool、streaming event、error、usage、模型选择、retry
-  报告和受支持 adapter 调用。
+  报告、唯一的受支持模型 catalog 和受支持 adapter 调用。
 - **不负责：** 工具、图状态或产品生命周期。
-- **主要文件：** `modeling/gateway.py`、`modeling/provider.py`、
-  `modeling/turns.py`、`providers/deepseek.py`、`providers/kimi.py`。
+- **主要文件：** `modeling/catalog.py`、`modeling/gateway.py`、
+  `modeling/provider.py`、`modeling/turns.py`、`providers/factory.py`、
+  `providers/deepseek.py`、`providers/kimi.py`。
+
+静态目录为 `MODEL_CATALOG -> ProviderDescriptor -> ModelProfile`。它当前描述 DeepSeek 和
+Kimi、四个模型、各自 capability 与 262,144-token context limit、Provider 内默认项、Kimi
+的 `cn`/`global` region（默认 `cn`），以及各 Provider 的 `credential_id`。
+Application/configuration 仍负责 credential 存在性以及运行时默认 model、活动 model 和 region
+选择。Catalog 不实例化 client：具体 factory、adapter 与官方 endpoint 仍位于 `providers/`。
+Tavily selection 和 catalog concern 留在独立的 Web/configuration 边界，绝不进入
+`ModelCatalog`。这里没有通用 provider registry、DI container，也没有虚构的第三个
+model Provider。
 
 ### 工具系统
 
@@ -601,13 +615,13 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | --- | --- |
 | `agent` | `agent`、`core`、`modeling` |
 | `application` | `agent`、`application`、`config`、`context`、`conversation`、`core`、`extensions`、`memory`、`modeling`、`paths`、`providers`、`safety`、`storage`、`version`、`web` |
-| `config` | `config`、`core`、`paths` |
+| `config` | `config`、`core`、`modeling`、`paths` |
 | `context` | `context`、`conversation`、`core`、`memory`、`modeling` |
 | `conversation` | `config`、`conversation`、`core` |
 | `core` | `core`、`safety` |
 | `extensions` | `context`、`core`、`extensions` |
 | `memory` | `agent`、`config`、`core`、`memory`、`modeling`、`paths`、`safety` |
-| `modeling` | `config`、`modeling` |
+| `modeling` | `modeling` |
 | `protocol` | `application`、`core`、`paths`、`protocol`、`version` |
 | `providers` | `config`、`modeling`、`providers` |
 | `safety` | `modeling`、`safety` |
@@ -618,6 +632,10 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 所有权的可执行来源。TUI 是独立 TypeScript 进程，只通过 Protocol v4 访问 Python。
 `memory` -> `agent` 这一行刻意采用比 package 级表象更窄的约束：仅允许
 `memory/finalization.py` 导入 `agent/finalization.py`。
+
+因此 package 依赖箭头是 `config -> modeling`，绝不是 `modeling -> config`。
+Application 将静态模型目录与动态 configuration、credential state 组装起来，再通过
+Protocol v4 发布 catalog，使 Ink 无需复制 model 或 Provider 枚举。
 
 具体 provider 与 storage adapter 在 `application/composition.py` 中装配。Agent 导入
 提供商中立契约，protocol 导入 Application facade，而不是各个子系统。
@@ -672,7 +690,8 @@ history 存储有界 summary。
 
 当前扩展点被有意保持得很窄：
 
-- 新 model adapter 实现现有 provider 契约，并在 Application 边界组装；
+- 受支持 model 或 Provider 同时加入静态模型 catalog 与具体 adapter factory，再在
+  Application 边界组装；这不是 runtime registry，也不要求虚构第三个 Provider；
 - 新 built-in 或 MCP tool 进入现有 Registry/Policy/Executor 路径；
 - 新 Skill 遵循当前 manifest schema 与受信发现顺序；
 - 第二个外部 memory service 必须证明共享 provider abstraction 的必要性；

@@ -52,13 +52,13 @@
     "warning"
   ],
   "files": {
-    "command-results.invalid.json": "5d282b4662d7c0961f1cf19f89ab3ff2d5f7e82503b70f36b346c4fb5d4df7ec",
-    "command-results.valid.json": "0ec5542a10d852104374e7eed389e4c876a364d527bafc5e17d783e4a08cceff",
+    "command-results.invalid.json": "144566d088bba076e840acdd8e876bf80901c190d09472a370e61b7c1f490237",
+    "command-results.valid.json": "7597d78382d3dbda11cdcdf8445612b8de6a41a6b42a3a628fbb3d37582e0c4e",
     "commands.json": "7012854231b98d216a93a70fc4b6c9b16e4af67b24adb0cf835e1ac5a0320f7b",
     "events.invalid.json": "c9fbbc2be594f30d3a4a80ff077ef6a2e6efcf1aaa2250bc77a01530fad32eb3",
     "events.valid.json": "0bc03cb963e49fc0dd9670efd14daf2aef375b673b56b89926e66b7f22bba805",
     "methods.invalid.json": "494ae4f89f29358d7c07cf5340e1f9f47a12352908ba5364a0412b1f73f0c02e",
-    "methods.valid.json": "7d3597d912289fdeed7466322efeed4fd603a2eb08a07888fedd2d9648bae80d",
+    "methods.valid.json": "650dc2f51e3b5d0248a7ee2db74ebb786f81bf9841763a26cb9811a1efb8b151",
     "results.failures.json": "39bab801b9896e10cf71a036312f71ebc7a2484456aa4612557efd9deb3355af"
   },
   "fixture_version": 1,

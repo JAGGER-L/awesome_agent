@@ -83,17 +83,26 @@ mcp_servers:
 | `default_model` | Curated model ID or `null` | `null` | Initial model for a new Thread when no startup model is supplied. |
 | `kimi_region` | `cn` or `global` | `cn` | Kimi API region used by the Provider adapter. |
 
-The curated model IDs are:
+The static, provider-neutral model hierarchy is the sole model directory:
 
-- `deepseek/deepseek-v4-flash`
-- `deepseek/deepseek-v4-pro`
-- `kimi/kimi-k2.6`
-- `kimi/kimi-k2.5`
+```text
+ModelCatalog -> ProviderDescriptor -> ModelProfile
+```
 
-All four current profiles advertise a 262,144-token context window plus tool
-calling and reasoning. Curating the list lets the Core bind known capabilities
-and context limits instead of trusting an arbitrary model string. `/model`
-updates both the selected Thread and this user default.
+| Provider | `credential_id` | Supported regions (default) | Model | Context | Tools | Reasoning | Provider default |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `deepseek` | `deepseek` | none | `deepseek/deepseek-v4-flash` | 262,144 | yes | yes | yes |
+| `deepseek` | `deepseek` | none | `deepseek/deepseek-v4-pro` | 262,144 | yes | yes | no |
+| `kimi` | `kimi` | `cn`, `global` (`cn`) | `kimi/kimi-k2.6` | 262,144 | yes | yes | yes |
+| `kimi` | `kimi` | `cn`, `global` (`cn`) | `kimi/kimi-k2.5` | 262,144 | yes | yes | no |
+
+Curating the directory lets Core bind known capabilities and context limits
+instead of trusting an arbitrary model string. Configuration does not build or
+extend the catalog: it records `providers.default_model` and the active Kimi
+region, while Application combines those choices with current credential
+presence and the selected Thread. `/model` updates both the selected Thread and
+the user default. The Provider-local catalog default is used only when exactly
+one Provider has a configured credential and no explicit default exists.
 
 If no default is set, Awesome selects the sole configured Provider's default
 model. If zero or multiple Providers are configured, a model must be chosen
@@ -153,6 +162,10 @@ retries do not make non-idempotent tools repeat.
 | `enabled` | boolean | `false` | User-owned Web enablement. Workspace configuration cannot turn it on. |
 | `provider` | `tavily` | `tavily` | Static Web Provider selection, separate from model Providers. |
 | `blocked_domains` | up to 128 unique normalized ASCII hostnames | `[]` | Domains sent as Tavily `exclude_domains`; the Workspace may add restrictions but cannot enable Web. |
+
+Web Provider selection and catalog concerns remain in this separate Web/config
+boundary. Tavily is never a model Provider and does not appear in
+`ModelCatalog` or model selection.
 
 When `enabled` is true and the Tavily credential and explicit proxy are valid,
 runtime construction registers `web_search` and `web_fetch`; otherwise `/web

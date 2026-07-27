@@ -269,7 +269,6 @@ def test_workspace_limits_can_only_reduce_user_limits() -> None:
         application,
         thread=ThreadConfigState(),
         environ={},
-        model_context_limit=180_000,
     )
 
     assert application.budgets == BudgetConfig(
@@ -282,7 +281,22 @@ def test_workspace_limits_can_only_reduce_user_limits() -> None:
         web_requests=3,
     )
     assert application.budgets.web_requests == 3
-    assert turn.budgets.total_context_tokens == 180_000
+    assert turn.budgets.total_context_tokens == 200_000
+
+
+def test_selected_catalog_profile_caps_total_context_tokens() -> None:
+    application = _application(
+        deepseek=True,
+        user_budgets=UserBudgetConfig(total_context_tokens=300_000),
+    )
+
+    turn = resolve_turn_config(
+        application,
+        thread=ThreadConfigState(),
+        environ={},
+    )
+
+    assert turn.budgets.total_context_tokens == 262_144
 
 
 def test_workspace_web_domains_only_add_restrictions() -> None:

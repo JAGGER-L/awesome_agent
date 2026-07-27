@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from awesome_agent.config.models import SUPPORTED_MODEL_IDS
+from awesome_agent.modeling import MODEL_CATALOG
 
 _MAX_JOURNAL_BYTES = 4 * 1024
 
@@ -49,8 +49,13 @@ class ProviderModelTransactionRecord(BaseModel):
     )
     @classmethod
     def validate_model(cls, value: str | None) -> str | None:
-        if value is not None and value not in SUPPORTED_MODEL_IDS:
-            raise ValueError("Journal model must be a curated Provider/model id.")
+        if value is not None:
+            try:
+                MODEL_CATALOG.profile(value)
+            except ValueError as error:
+                raise ValueError(
+                    "Journal model must be a curated Provider/model id."
+                ) from error
         return value
 
     @model_validator(mode="after")

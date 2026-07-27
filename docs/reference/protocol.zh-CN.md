@@ -139,10 +139,28 @@ Unicode string 长度。
 
 ### `application.getState`
 
-Snapshot 包含 initialization/session/workspace identity 与 trust、已选 Thread、model identity、
-Thinking/Skill/permission mode、活动 operation 与 pending interaction ID、配置有效性/diagnostic、
-secret presence 与 credential source 状态、Memory/MCP summary、usage，以及结构化
-workspace-instruction diagnostic。Secret value 从来不属于 state。
+Snapshot 包含 initialization/session/workspace identity 与 trust、已选 Thread、model catalog
+与 model identity、Thinking/Skill/permission mode、活动 operation 与 pending interaction ID、
+配置有效性/diagnostic、secret presence 与 credential source 状态、Memory/MCP summary、
+usage，以及结构化 workspace-instruction diagnostic。Secret value 从来不属于 state。
+
+`model_catalog` 是静态、提供商中立的
+`ModelCatalog -> ProviderDescriptor -> ModelProfile` 目录在 Protocol v4 上的 projection。
+Provider descriptor 包含 `id`、`credential_id`、`supported_regions`、可选
+`default_region` 及其 model profile。Model profile 包含 `id`、`context_limit`、
+`supports_tools`、`supports_reasoning` 和 `is_default`。Provider 与 model ID 唯一，每个
+model 都使用所属 Provider 前缀，且每个 Provider 恰好有一个 catalog 默认项。当前值包含
+DeepSeek、Kimi 和四个模型；Tavily Web Provider selection data 留在独立的
+Web/configuration 边界，绝不会出现在这里。
+
+静态 catalog 与 `provider_credentials`、`model_identity` 不同：credential 存在性/来源、
+已配置默认选择、活动 Thread 选择和 Kimi region 选择仍是动态的 Application/configuration
+事实。每个 model Provider 的 `credential_id` 都有匹配的 credential status，且
+`model_identity` 中的所有 ID 都必须能在 catalog 中解析。
+
+TUI 会校验该 snapshot，并从 `model_catalog` 与 `provider_credentials` 推导 startup 和
+provider setup；它没有复制 model/Provider 枚举。`/model` choice 是 Application 从同一
+catalog 生成的 `CommandSelection`，TUI 只做通用渲染。
 
 `workspace_instruction_diagnostic` 独立于 `configuration_valid`。例如，超大的 `AGENTS.md`
 可以被忽略并发出 warning，而不会使其他方面有效的 YAML 配置不可用。

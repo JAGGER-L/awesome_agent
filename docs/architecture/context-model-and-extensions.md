@@ -145,6 +145,31 @@ provider_id
 stream(ModelRequest) -> async ModelStreamEvent sequence
 ```
 
+The frozen, provider-neutral model directory has one shape and one instance:
+
+```text
+MODEL_CATALOG
+  -> ProviderDescriptor
+       -> ModelProfile
+```
+
+It is the sole source of supported model identities, capabilities, context
+limits, provider-local defaults, supported regions, and credential association.
+The current directory contains exactly two Providers and four model profiles:
+
+| Provider | `credential_id` | Regions (default) | Model | Context | Tools | Reasoning | Provider default |
+| --- | --- | --- | --- | ---: | --- | --- | --- |
+| `deepseek` | `deepseek` | none | `deepseek/deepseek-v4-flash` | 262,144 | yes | yes | yes |
+| `deepseek` | `deepseek` | none | `deepseek/deepseek-v4-pro` | 262,144 | yes | yes | no |
+| `kimi` | `kimi` | `cn`, `global` (`cn`) | `kimi/kimi-k2.6` | 262,144 | yes | yes | yes |
+| `kimi` | `kimi` | `cn`, `global` (`cn`) | `kimi/kimi-k2.5` | 262,144 | yes | yes | no |
+
+The catalog does not say that a credential is present or choose the active
+model or region. Credential source and presence, `providers.default_model`, the
+Thread selection, and the configured Kimi region remain dynamic
+Application/configuration state. A catalog default is only the deterministic
+fallback when exactly one model Provider is configured.
+
 Concrete DeepSeek and Kimi adapters live in `providers/` and are instantiated
 only by Application composition. They translate SDK payloads into neutral
 events and normalize errors; Agent and Context never import the OpenAI client
@@ -164,6 +189,22 @@ retries only a retryable failure that occurs before any visible output or
 completion, reports retry events, preserves cancellation, and requires exactly
 one matching completed model Turn. Once text, reasoning, or a tool call is
 visible, transparent replay would duplicate observable work and is forbidden.
+
+The catalog describes supported models; it does not construct clients. The
+concrete factory and adapter dispatch remain in `providers/`, with the explicit
+official endpoints `https://api.deepseek.com`, `https://api.moonshot.cn/v1`,
+and `https://api.moonshot.ai/v1`. This is not a provider registry or DI
+container, and no speculative third model Provider exists. Web Provider
+selection and catalog concerns remain in the separate Web/configuration
+boundary; Tavily Web search/fetch capability never appears in `ModelCatalog`.
+
+Application publishes the catalog through Protocol v4 `ApplicationState`
+beside dynamic `provider_credentials`. The TUI validates and derives startup
+and credential setup from those fields instead of copying a model or Provider
+enum. Application derives `/model` options from the same catalog as a
+`CommandSelection`, which the TUI renders generically. At the Python boundary,
+dependency direction is `config -> modeling`; `modeling/` no longer imports
+configuration. Application combines both with the concrete Provider factory.
 
 The curated catalog is closed rather than accepting arbitrary provider/model
 strings. This limits flexibility, but it lets configuration, capabilities,
