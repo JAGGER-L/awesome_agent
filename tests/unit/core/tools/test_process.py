@@ -19,6 +19,7 @@ from awesome_agent.core.tools.process import ProcessRunner
 
 _SIGKILL = cast(int, vars(signal).get("SIGKILL", signal.SIGTERM))
 _PROC_SELF_STAT = Path("/proc/self/stat")
+_TERMINAL_PROC_STATES = frozenset({"Z", "X", "x"})
 
 
 class _ProcessStat(NamedTuple):
@@ -47,16 +48,16 @@ def _posix_process_session(pid: int) -> int:
 def _read_process_stat(pid: int) -> _ProcessStat | None:
     try:
         raw = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
-        fields = raw[raw.rfind(")") + 1 :].split()
-        return _ProcessStat(
-            state=fields[0][:1],
-            ppid=int(fields[1]),
-            pgid=int(fields[2]),
-            session=int(fields[3]),
-            starttime=int(fields[19]),
-        )
-    except (IndexError, OSError, ValueError):
+    except FileNotFoundError:
         return None
+    fields = raw[raw.rfind(")") + 1 :].split()
+    return _ProcessStat(
+        state=fields[0][:1],
+        ppid=int(fields[1]),
+        pgid=int(fields[2]),
+        session=int(fields[3]),
+        starttime=int(fields[19]),
+    )
 
 
 def _process_details(pid: int) -> str:
@@ -91,19 +92,20 @@ def _process_is_running(pid: int, *, starttime: int | None = None) -> bool:
             return int(wait_for_single_object(handle, 0)) == 0x00000102
         finally:
             close_handle(handle)
+    if _PROC_SELF_STAT.is_file():
+        current = _read_process_stat(pid)
+        return (
+            current is not None
+            and current.state not in _TERMINAL_PROC_STATES
+            and (starttime is None or current.starttime == starttime)
+        )
     try:
         os.kill(pid, 0)
-    except OSError:
+    except ProcessLookupError:
         return False
-    status = Path("/proc") / str(pid) / "stat"
-    if status.exists():
-        current = _read_process_stat(pid)
-        if current is None:
-            return True
-        return current.state != "Z" and (
-            starttime is None or current.starttime == starttime
-        )
-    return starttime is None or not _PROC_SELF_STAT.is_file()
+    except PermissionError:
+        return True
+    return True
 
 
 def _wait_for_pid_file(path: Path, *, timeout: float = 5.0) -> int:
@@ -137,6 +139,98 @@ def _wait_for_process_stop(
         f"process remained alive: {_process_details(pid)}; "
         f"expected_starttime={starttime}"
     )
+
+
+def _use_fake_procfs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "self.stat"
+    marker.write_text("available", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "_PROC_SELF_STAT", marker)
+
+
+def test_read_process_stat_only_treats_a_missing_process_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(*args: object, **kwargs: object) -> str:
+        raise FileNotFoundError
+
+    def denied(*args: object, **kwargs: object) -> str:
+        raise PermissionError("stat denied")
+
+    def malformed(*args: object, **kwargs: object) -> str:
+        return "malformed"
+
+    monkeypatch.setattr(Path, "read_text", missing)
+    assert _read_process_stat(42) is None
+
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(PermissionError, match="stat denied"):
+        _read_process_stat(42)
+
+    monkeypatch.setattr(Path, "read_text", malformed)
+    with pytest.raises(IndexError):
+        _read_process_stat(42)
+
+
+def test_pinned_process_identity_is_absent_when_proc_stat_disappears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.name == "nt":
+        return
+    _use_fake_procfs(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys.modules[__name__], "_read_process_stat", lambda pid: None)
+
+    assert _process_is_running(42, starttime=100) is False
+
+
+@pytest.mark.parametrize(
+    ("state", "observed_starttime", "expected"),
+    [
+        ("R", 100, True),
+        ("S", 101, False),
+        ("Z", 100, False),
+        ("X", 100, False),
+        ("x", 100, False),
+    ],
+)
+def test_pinned_process_identity_requires_the_same_live_proc_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    observed_starttime: int,
+    expected: bool,
+) -> None:
+    if os.name == "nt":
+        return
+    _use_fake_procfs(tmp_path, monkeypatch)
+    snapshot = _ProcessStat(state, 1, 42, 42, observed_starttime)
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_read_process_stat",
+        lambda pid: snapshot,
+    )
+
+    assert _process_is_running(42, starttime=100) is expected
+
+
+def test_pinned_process_identity_does_not_hide_proc_permission_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.name == "nt":
+        return
+    _use_fake_procfs(tmp_path, monkeypatch)
+
+    def denied(pid: int) -> _ProcessStat | None:
+        raise PermissionError("stat denied")
+
+    monkeypatch.setattr(sys.modules[__name__], "_read_process_stat", denied)
+
+    with pytest.raises(PermissionError, match="stat denied"):
+        _process_is_running(42, starttime=100)
 
 
 @pytest.mark.asyncio
