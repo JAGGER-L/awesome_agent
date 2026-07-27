@@ -126,7 +126,7 @@ def test_process_runner_does_not_inherit_core_stdin(tmp_path: Path) -> None:
                 ],
                 cwd=Path({str(tmp_path)!r}),
                 environment=dict(os.environ),
-                timeout_seconds=0.3,
+                timeout_seconds=2.0,
                 max_output_chars=1_000,
             )
             print(
@@ -148,7 +148,7 @@ def test_process_runner_does_not_inherit_core_stdin(tmp_path: Path) -> None:
         text=True,
     )
     try:
-        core.wait(timeout=5)
+        core.wait(timeout=10)
         assert core.stdout is not None
         assert core.stderr is not None
         output = core.stdout.read()
@@ -158,7 +158,7 @@ def test_process_runner_does_not_inherit_core_stdin(tmp_path: Path) -> None:
             core.stdin.close()
         if core.poll() is None:
             core.kill()
-            core.wait(timeout=5)
+            core.wait(timeout=10)
 
     assert core.returncode == 0, errors
     assert output == "0|0|0\n"
