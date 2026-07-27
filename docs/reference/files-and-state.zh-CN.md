@@ -65,7 +65,7 @@ Awesome 将用户拥有的配置、可替换的 runtime 状态、Workspace 拥�
 当前文件以及 `application.jsonl.1` 至 `.4`；每个文件上限为 5 MiB。
 `<HOME>/logs/.application.jsonl.lock` 用于协调 writer，不属于这 5 个数据文件。
 
-每个 JSON line 使用相同的封闭 schema：`version`、`timestamp`、`session_id`、
+每个 JSON line 使用封闭的 record version `1`：`version`、`timestamp`、`session_id`、
 `correlation_id`、`operation`、`outcome`、`duration_ms`，以及可选的 `error_code` 与有界
 `usage`。Prompt、模型或 Tool 正文、query、URL、path、secret 和任意 request/result payload
 绝不会写入日志。写入是非阻塞、fail-open 的，因此记录缺失可能表示 queue 已满或本地日志

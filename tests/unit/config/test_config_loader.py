@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import awesome_agent.config.loader as config_loader
 import awesome_agent.core.safe_files as safe_files_module
 from awesome_agent.config import (
     ConfigurationInvalid,
@@ -314,6 +315,25 @@ def test_user_v1_is_upgraded_in_memory_without_rewriting_source(tmp_path: Path) 
     assert loaded.user.budgets.web_requests == 8
     assert loaded.user.web.enabled is False
     assert path.read_text(encoding="utf-8") == source
+
+
+def test_user_config_migrations_do_not_skip_an_unimplemented_future_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(config_loader, "USER_CONFIG_CURRENT", 3)
+
+    upgraded = config_loader._upgrade_user_config({"version": 1})
+
+    assert upgraded["version"] == 2
+
+
+def test_user_config_migrations_reject_versions_outside_the_readable_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source: dict[str, object] = {"version": 1}
+    monkeypatch.setattr(config_loader, "USER_CONFIG_READABLE_VERSIONS", (2,))
+
+    assert config_loader._upgrade_user_config(source) is source
 
 
 @pytest.mark.parametrize(

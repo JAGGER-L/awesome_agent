@@ -23,14 +23,16 @@ from awesome_agent.config.credentials import (
 )
 from awesome_agent.config.models import CredentialSource, SecretStatus
 from awesome_agent.context.workspace_instructions import WorkspaceInstructionDiagnostic
+from awesome_agent.contract_versions import (
+    PROTOCOL_VERSION as PROTOCOL_VERSION,
+)
+from awesome_agent.contract_versions import (
+    ProtocolVersion as ProtocolVersion,
+)
 from awesome_agent.conversation.models import Thread, ThreadView
 from awesome_agent.core.changes import ChangeDelta
 from awesome_agent.core.tools.permissions import PermissionMode
 from awesome_agent.modeling.catalog import ModelCatalog, ModelIdentitySnapshot
-
-type ProtocolVersion = Literal[4]
-
-PROTOCOL_VERSION: ProtocolVersion = 4
 
 
 class ProductErrorCode(StrEnum):

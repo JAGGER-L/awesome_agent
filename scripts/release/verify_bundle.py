@@ -20,6 +20,12 @@ from zipfile import ZipFile
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.release.compatibility_manifest import (
+    MAX_COMPATIBILITY_MANIFEST_BYTES,
+    CompatibilityManifestError,
+    ReleaseCompatibility,
+    verify_release_compatibility,
+)
 from scripts.release.contracts import (
     MAX_RELEASE_REQUIREMENTS_BYTES,
     ReleaseContractError,
@@ -117,6 +123,7 @@ def find_payload(archive: ZipFile, expected_version: str) -> str:
     required = {
         "LICENSE",
         "VERSION",
+        "compatibility.json",
         f"core/awesome_agent-{expected_version}-py3-none-any.whl",
         "core/requirements.lock",
         "tui/LICENSE",
@@ -288,6 +295,7 @@ def _verify_core_protocol_handshake(
     cwd: Path,
     home: Path,
     expected_version: str,
+    expected_protocol_version: int,
 ) -> None:
     cwd.mkdir(parents=True, exist_ok=False)
     home.mkdir(parents=True, exist_ok=False)
@@ -339,7 +347,7 @@ def _verify_core_protocol_handshake(
             identifier=1,
             method="initialize",
             params={
-                "protocol_version": 4,
+                "protocol_version": expected_protocol_version,
                 "client_name": "awesome",
                 "client_version": expected_version,
             },
@@ -348,7 +356,7 @@ def _verify_core_protocol_handshake(
             _protocol_response(frames, identifier=1)
         )
         if (
-            initialized.get("protocol_version") != 4
+            initialized.get("protocol_version") != expected_protocol_version
             or initialized.get("product_version") != expected_version
             or initialized.get("status") != "trust_required"
         ):
@@ -416,7 +424,10 @@ def _verify_core_install(
     wheel: Path,
     requirements: Path,
     expected_version: str,
+    compatibility: ReleaseCompatibility,
 ) -> None:
+    if compatibility.product_version != expected_version:
+        raise BundleVerificationError("bundle compatibility product is invalid")
     environment = core / ".verification-environment"
     uv = resolve_executable("uv")
     _run_core_check(
@@ -508,6 +519,8 @@ assert any((scripts / name).is_file() for name in entrypoints)
             "-I",
             str(storage_contract),
             expected_version,
+            str(compatibility.application_schema_migration_floor),
+            str(compatibility.application_schema_current),
             str(environment),
             str(core / ".storage-contract"),
         ],
@@ -523,6 +536,7 @@ assert any((scripts / name).is_file() for name in entrypoints)
         cwd=core / ".protocol-workspace",
         home=core / ".protocol-home",
         expected_version=expected_version,
+        expected_protocol_version=compatibility.protocol_version,
     )
 
 
@@ -572,7 +586,10 @@ def _verify_tui(tui: Path, expected_version: str) -> None:
         raise BundleVerificationError("TUI version check failed")
 
 
-def verify_release_bundle(bundle: Path, expected_version: str) -> None:
+def verify_release_bundle(
+    bundle: Path,
+    expected_version: str,
+) -> None:
     verify_release_assets(bundle.parent, expected_version)
     if not bundle.is_file():
         raise BundleVerificationError("bundle is missing")
@@ -581,6 +598,31 @@ def verify_release_bundle(bundle: Path, expected_version: str) -> None:
         try:
             with ZipFile(bundle) as archive:
                 prefix = find_payload(archive, expected_version)
+                compatibility_member = f"{prefix}compatibility.json"
+                if (
+                    archive.getinfo(compatibility_member).file_size
+                    > MAX_COMPATIBILITY_MANIFEST_BYTES
+                ):
+                    raise BundleVerificationError(
+                        "bundle compatibility manifest is invalid"
+                    )
+                with archive.open(compatibility_member) as stream:
+                    compatibility_content = stream.read(
+                        MAX_COMPATIBILITY_MANIFEST_BYTES + 1
+                    )
+                if len(compatibility_content) > MAX_COMPATIBILITY_MANIFEST_BYTES:
+                    raise BundleVerificationError(
+                        "bundle compatibility manifest is invalid"
+                    )
+                try:
+                    compatibility = verify_release_compatibility(
+                        compatibility_content,
+                        product_version=expected_version,
+                    )
+                except CompatibilityManifestError as error:
+                    raise BundleVerificationError(
+                        "bundle compatibility manifest is invalid"
+                    ) from error
                 archive.extractall(root)
         except BundleVerificationError:
             raise
@@ -632,6 +674,7 @@ def verify_release_bundle(bundle: Path, expected_version: str) -> None:
             wheels[0],
             requirements,
             expected_version,
+            compatibility,
         )
         _verify_tui(payload / "tui", expected_version)
 

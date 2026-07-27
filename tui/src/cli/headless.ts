@@ -1,5 +1,9 @@
 import type { ConnectedSurface } from "../surface/controller.js";
 import {
+  HEADLESS_JSON_SCHEMA,
+  HEADLESS_JSON_VERSION,
+} from "../contract-versions.js";
+import {
   beginStartup,
   type StartupResult,
   type StartupThreadResult,
@@ -257,8 +261,8 @@ async function executeHeadless(
     stdout:
       intent.format === "json"
         ? `${JSON.stringify({
-            version: 2,
-            type: "awesome.run.result",
+            version: HEADLESS_JSON_VERSION,
+            type: HEADLESS_JSON_SCHEMA,
             thread_id: threadId,
             turn_id: turn.id,
             text: entry.content,

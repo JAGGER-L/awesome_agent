@@ -26,6 +26,15 @@ from scripts.release.build_bundle import (
     validate_license_files,
     validate_version_files,
 )
+from scripts.release.contract_versions import (
+    ContractVersions,
+    ContractVersionsError,
+    check_generated_bindings,
+    decode_json_object,
+    exact_object,
+    load_contract_versions,
+    render_json_object,
+)
 
 
 class ReleaseIdentityError(RuntimeError):
@@ -53,6 +62,8 @@ _GITHUB_REPOSITORY = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})/[A-Za-z0-9_.-]{1,100}\Z"
 )
 _GIT_OBJECT_ID = re.compile(r"[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\Z")
+_MAX_FIXTURE_MANIFEST_BYTES = 128 * 1024
+_MAX_FIXTURE_FILE_BYTES = 1024 * 1024
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -69,25 +80,32 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _validate_repository_version_surfaces(root: Path, version: str) -> None:
+def _validate_repository_version_surfaces(
+    root: Path,
+    version: str,
+    protocol_version: int,
+) -> None:
     try:
         project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-        manifest = json.loads(
-            (root / "protocol" / "fixtures" / "v4" / "manifest.json").read_text(
-                encoding="utf-8"
-            )
-        )
         protocol_en = (root / "docs" / "reference" / "protocol.md").read_text(
             encoding="utf-8"
         )
         protocol_zh = (root / "docs" / "reference" / "protocol.zh-CN.md").read_text(
             encoding="utf-8"
         )
+        catalog_docs = tuple(
+            (root / relative).read_text(encoding="utf-8")
+            for relative in (
+                "docs/development/release.md",
+                "docs/development/release.zh-CN.md",
+                "docs/reference/README.md",
+                "docs/reference/README.zh-CN.md",
+            )
+        )
     except (
         OSError,
         UnicodeDecodeError,
         tomllib.TOMLDecodeError,
-        json.JSONDecodeError,
     ) as error:
         raise ReleaseIdentityError(
             "release version surfaces are missing or invalid"
@@ -101,27 +119,190 @@ def _validate_repository_version_surfaces(root: Path, version: str) -> None:
         raise ReleaseIdentityError(
             "Python version metadata is not sourced from VERSION"
         )
-    if manifest.get("protocol_version") != 4:
-        raise ReleaseIdentityError("Protocol fixture major must remain v4")
-    if manifest.get("product_version") != version:
-        raise ReleaseIdentityError(
-            "Protocol fixture product version does not match VERSION"
-        )
-
     expected_docs = (
         (
             protocol_en,
+            f"# Private Core/TUI protocol v{protocol_version}",
+            f"Protocol version **{protocol_version}**",
             f"product version is **{version}**",
+            f'"protocol_version": {protocol_version}',
             f'"client_version": "{version}"',
+            f"`protocol/fixtures/v{protocol_version}/`",
         ),
-        (protocol_zh, f"产品版本是 **{version}**", f'"client_version": "{version}"'),
+        (
+            protocol_zh,
+            f"# 私有 Core/TUI protocol v{protocol_version}",
+            f"Protocol 版本 **{protocol_version}**",
+            f"产品版本是 **{version}**",
+            f'"protocol_version": {protocol_version}',
+            f'"client_version": "{version}"',
+            f"`protocol/fixtures/v{protocol_version}/`",
+        ),
     )
     if any(
-        version_statement not in content or example not in content
-        for content, version_statement, example in expected_docs
+        any(expected not in document[0] for expected in document[1:])
+        for document in expected_docs
     ):
         raise ReleaseIdentityError(
-            "Protocol documentation version does not match VERSION"
+            "Protocol documentation identity does not match release compatibility"
+        )
+    if any("contract-versions.json" not in document for document in catalog_docs):
+        raise ReleaseIdentityError("contract catalog documentation is incomplete")
+
+
+def _validate_contract_catalog_documentation(
+    root: Path,
+    contracts: ContractVersions,
+) -> None:
+    try:
+        reference_en = (root / "docs" / "reference" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        reference_zh = (
+            root / "docs" / "reference" / "README.zh-CN.md"
+        ).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as error:
+        raise ReleaseIdentityError(
+            "contract catalog documentation is missing or invalid"
+        ) from error
+
+    def readable(versions: tuple[int, ...]) -> str:
+        return "{" + ", ".join(str(version) for version in versions) + "}"
+
+    zh_comma = "\N{FULLWIDTH COMMA}"
+    zh_semicolon = "\N{FULLWIDTH SEMICOLON}"
+    expected_documents = (
+        (
+            reference_en,
+            f"private Core/TUI Protocol version `{contracts.protocol_version}`;",
+            f"event envelope version `{contracts.event_envelope_version}`;",
+            "Application diagnostic log record version "
+            f"`{contracts.application_log_version}`;",
+            "Application SQLite schema version "
+            f"`{contracts.application_schema_current}`, with migration floor "
+            f"`{contracts.application_schema_migration_floor}`;",
+            f"user configuration version `{contracts.user_config_current}`, "
+            "with readable versions "
+            f"`{readable(contracts.user_config_readable_versions)}`;",
+            f"workspace configuration version `{contracts.workspace_config_current}`, "
+            "with readable versions "
+            f"`{readable(contracts.workspace_config_readable_versions)}`;",
+            f"UI preferences schema version `{contracts.ui_preferences_current}`, "
+            "with readable versions "
+            f"`{readable(contracts.ui_preferences_readable_versions)}`;",
+            f"headless JSON result version `{contracts.headless_json_version}`;",
+            f"Thread export version `{contracts.thread_export_version}`",
+        ),
+        (
+            reference_zh,
+            "私有 Core/TUI Protocol 版本 "
+            f"`{contracts.protocol_version}`{zh_semicolon}",
+            f"event envelope 版本 `{contracts.event_envelope_version}`{zh_semicolon}",
+            "Application diagnostic log record 版本 "
+            f"`{contracts.application_log_version}`{zh_semicolon}",
+            "Application SQLite schema 版本 "
+            f"`{contracts.application_schema_current}`{zh_comma}迁移下限为 "
+            f"`{contracts.application_schema_migration_floor}`{zh_semicolon}",
+            f"user 配置版本 `{contracts.user_config_current}`{zh_comma}"
+            "可读取版本集合为 "
+            f"`{readable(contracts.user_config_readable_versions)}`{zh_semicolon}",
+            f"workspace 配置版本 `{contracts.workspace_config_current}`{zh_comma}"
+            "可读取版本集合为 "
+            f"`{readable(contracts.workspace_config_readable_versions)}`{zh_semicolon}",
+            f"UI preferences schema 版本 `{contracts.ui_preferences_current}`"
+            f"{zh_comma}"
+            "可读取版本集合为 "
+            f"`{readable(contracts.ui_preferences_readable_versions)}`{zh_semicolon}",
+            f"headless JSON result 版本 `{contracts.headless_json_version}`"
+            f"{zh_semicolon}",
+            f"Thread export 版本 `{contracts.thread_export_version}`",
+        ),
+    )
+    if any(
+        any(expected not in document[0] for expected in document[1:])
+        for document in expected_documents
+    ):
+        raise ReleaseIdentityError(
+            "contract catalog documentation does not match the version catalog"
+        )
+
+
+def _read_bounded_fixture(path: Path, maximum_bytes: int, label: str) -> bytes:
+    try:
+        with path.open("rb") as stream:
+            content = stream.read(maximum_bytes + 1)
+    except OSError as error:
+        raise ContractVersionsError(f"{label} is unavailable") from error
+    if len(content) > maximum_bytes:
+        raise ContractVersionsError(f"{label} exceeds its size limit")
+    return content
+
+
+def _validate_protocol_fixtures(
+    root: Path,
+    product_version: str,
+    contracts: ContractVersions,
+) -> None:
+    directory = (
+        root
+        / "protocol"
+        / "fixtures"
+        / f"v{contracts.protocol_version}"
+    )
+    manifest_path = directory / "manifest.json"
+    try:
+        manifest_content = _read_bounded_fixture(
+            manifest_path,
+            _MAX_FIXTURE_MANIFEST_BYTES,
+            "Protocol fixture manifest",
+        )
+        manifest = exact_object(
+            decode_json_object(
+                manifest_content,
+                maximum_bytes=_MAX_FIXTURE_MANIFEST_BYTES,
+                label="Protocol fixture manifest",
+            ),
+            {
+                "command_owners",
+                "event_types",
+                "files",
+                "fixture_version",
+                "methods",
+                "product_version",
+                "protocol_version",
+            },
+            "Protocol fixture manifest",
+        )
+        event_content = _read_bounded_fixture(
+            directory / "events.valid.json",
+            _MAX_FIXTURE_FILE_BYTES,
+            "Protocol event fixture",
+        )
+        events = decode_json_object(
+            event_content,
+            maximum_bytes=_MAX_FIXTURE_FILE_BYTES,
+            label="Protocol event fixture",
+        ).get("events")
+    except (OSError, ContractVersionsError) as error:
+        raise ReleaseIdentityError("Protocol fixture manifest is invalid") from error
+    if manifest_content != render_json_object(manifest):
+        raise ReleaseIdentityError("Protocol fixture manifest is not canonical")
+    if (
+        manifest["product_version"] != product_version
+        or manifest["protocol_version"] != contracts.protocol_version
+    ):
+        raise ReleaseIdentityError("Protocol fixture identity does not match catalog")
+    if (
+        not isinstance(events, list)
+        or not events
+        or any(
+            not isinstance(event, dict)
+            or event.get("version") != contracts.event_envelope_version
+            for event in events
+        )
+    ):
+        raise ReleaseIdentityError(
+            "Protocol event envelopes do not match the contract catalog"
         )
 
 
@@ -334,9 +515,17 @@ def check_release_identity(root: Path, policy: TagPolicy) -> str:
         validate_version_files(root, version)
         validate_installer_files(root, version)
         validate_license_files(root)
-    except BundleError as error:
+        contracts = load_contract_versions(root)
+        check_generated_bindings(root, contracts)
+    except (BundleError, ContractVersionsError) as error:
         raise ReleaseIdentityError(str(error)) from error
-    _validate_repository_version_surfaces(root, version)
+    _validate_protocol_fixtures(root, version, contracts)
+    _validate_repository_version_surfaces(
+        root,
+        version,
+        contracts.protocol_version,
+    )
+    _validate_contract_catalog_documentation(root, contracts)
 
     head_commit = _git_output(root, "rev-parse", "--verify", "HEAD")
     assert head_commit is not None

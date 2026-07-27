@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from awesome_agent.contract_versions import (
+    APPLICATION_SCHEMA_CURRENT,
+    APPLICATION_SCHEMA_MIGRATION_FLOOR,
+)
 from awesome_agent.storage.state_lease import StateLease, StateLeaseMode
 
 type MigrationParameters = Sequence[object] | Mapping[str, object]
@@ -186,7 +190,7 @@ class ApplicationMigrationRegistry:
         return self.path_from(self.floor) is not None
 
 
-APPLICATION_SCHEMA_FLOOR = 7
+APPLICATION_SCHEMA_FLOOR = APPLICATION_SCHEMA_MIGRATION_FLOOR
 
 
 def _migrate_schema_7_to_8(connection: ApplicationMigrationConnection) -> None:
@@ -195,7 +199,7 @@ def _migrate_schema_7_to_8(connection: ApplicationMigrationConnection) -> None:
 
 APPLICATION_MIGRATIONS = ApplicationMigrationRegistry(
     floor=APPLICATION_SCHEMA_FLOOR,
-    current=8,
+    current=APPLICATION_SCHEMA_CURRENT,
     migrations=(ApplicationMigration(7, 8, _migrate_schema_7_to_8),),
 )
 

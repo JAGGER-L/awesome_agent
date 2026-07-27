@@ -8,8 +8,11 @@ byte。
 ## Release 不变量
 
 - `VERSION` 是唯一手工维护的产品版本来源。
+- `contract-versions.json` 是相互独立的公共契约版本的唯一手工维护目录；它会为两种
+  语言的 runtime consumer 生成精确、无依赖的 Python 与 TypeScript 投影。
 - Python metadata、TUI package/lock/generated source、Protocol fixture manifest、
-  installer、archive name 与内嵌 payload 都与 `VERSION` 一致。
+  installer、archive name 与内嵌 payload 都与 `VERSION` 一致；bundle 内的
+  compatibility manifest 则把该版本与精确的 contract catalog 组合起来。
 - 根目录、Python wheel 与 TUI 的 package metadata 和 license 文件都声明并携带同一份
   MIT license。授权正文必须精确一致；只有单独一行 copyright 可以变化。
 - Release revision 位于 `main`，且精确 `GITHUB_SHA` 上由 GitHub Actions 生成的最新
@@ -35,6 +38,7 @@ dist/release/
 Archive 包含唯一、确定性的顶层目录，其中有：
 
 - `VERSION`；
+- `compatibility.json`，用于记录相互独立的公共契约所组成的规范 release identity；
 - 根目录 MIT `LICENSE`；
 - 已校验的 pure-Python Awesome wheel；
 - 一份精确、带 SHA-256 hash 的生产 requirements lock；
@@ -63,14 +67,22 @@ launcher 都替换完成后，才通过删除 `.install-transaction` 提交。`a
    npm --prefix tui run version:sync
    ```
 
-3. 更新根目录两个 installer 中的版本常量。
-4. 重新生成 Protocol fixture，使 manifest 记录产品版本：
+3. 如果本次 release 改变了序列化契约，更新 `contract-versions.json`，并用下面第一条
+   命令重新生成语言 binding。每次 release 都用第二条命令检查已提交 binding 是最新的：
+
+   ```powershell
+   uv run python scripts/release/contract_versions.py --write
+   uv run python scripts/release/contract_versions.py
+   ```
+
+4. 更新根目录两个 installer 中的版本常量。
+5. 重新生成 Protocol fixture，使 manifest 记录产品版本：
 
    ```powershell
    uv run python scripts/generate_protocol_fixtures.py
    ```
 
-5. 获取仓库 tag，证明 candidate 版本尚未使用，并验证所有版本与 license 表面一致：
+6. 获取仓库 tag，证明 candidate 版本尚未使用，并验证所有版本与 license 表面一致：
 
    ```powershell
    git fetch --tags origin
@@ -81,13 +93,20 @@ launcher 都替换完成后，才通过删除 `.install-transaction` 提交。`a
    因此开发者 checkout 必须先 fetch tag。确定性的 PR CI 无法证明一个没有对应本地 tag 的
    GitHub Release 不存在；发布前仍需检查 Releases 页面，并在仓库设置中保护版本 tag
    namespace。
-6. 从已接受变更准备 GitHub Release note，包括用户可见行为、安全边界、配置/状态兼容性
+7. 从已接受变更准备 GitHub Release note，包括用户可见行为、安全边界、配置/状态兼容性
    和已知限制。
-7. 检查每一处版本相关 diff。Feature branch 不应包含意外版本变更。
+8. 检查每一处版本相关 diff。Feature branch 不应包含意外版本变更。
 
 Protocol version 与 Application schema version 相互独立。仅在线缆不兼容变更时递增
 Protocol；只有持久化语义不能安全读取时才递增 Application schema。两者都不能取代唯一
 产品版本。
+
+因此，release identity 是一组 tuple，而不是重复使用同一个数字。
+`contract-versions.json` 管理独立演进的标识，`VERSION` 管理产品 release。Builder 会把
+两者组合成 `compatibility.json`，其中包含 Protocol 与 event-envelope 版本、Application
+diagnostic-log 版本、Application schema current/migration-floor、user/workspace/UI 配置
+可读取版本的精确集合、headless JSON identity 和 Thread export identity。Release
+review 校验这组 tuple，而不会强制这些值相等。
 
 ## 2. 运行确定性 release gate
 
@@ -136,14 +155,17 @@ uv run python scripts/release/verify_bundle.py `
 ```
 
 Builder 会从精确 Git commit time 派生 `SOURCE_DATE_EPOCH`，创建 wheel、导出 hashed
-requirement、检查版本一致性与 TUI output、拒绝禁止内容、组装确定性 ZIP、复制 installer，
-并写入 checksum。Packaging test 证明 Hatch 在同一个 source epoch 下会生成相同 wheel
-byte；两个 CI run 之间的最终依据仍是 asset checksum 比较，而不是环境变量本身。
+requirement、检查版本一致性、生成的 contract binding 与 TUI output，把 `VERSION` 和
+contract catalog 组合起来，拒绝禁止内容、组装确定性 ZIP、复制 installer，并写入
+checksum。Packaging test 证明 Hatch 在同一个 source epoch 下会生成相同 wheel byte；
+两个 CI run 之间的最终依据仍是 asset checksum 比较，而不是环境变量本身。
 
 Verifier 检查：
 
 - release-directory inventory 与所有 checksum；
 - archive path safety、member inventory 与 payload version；
+- closed、bounded、canonical 的 `compatibility.json`；其中声明的 Protocol 版本驱动已安装
+  Core handshake，Application schema identity 驱动已安装 wheel 的 storage verification；
 - wheel filename、metadata、compatibility、entry point、RECORD hash、import origin，
   以及不存在 editable 或非生产 content；
 - 精确 hashed dependency requirement 与隔离安装；
@@ -156,6 +178,9 @@ Verifier 检查：
 
 验证必须在 build wheel 和解压后的 payload 上运行。Fallback 到 editable checkout 会证明
 错误的 artifact，因此会被拒绝。
+因此，Protocol 与 Application schema 字段具备可执行的 artifact probe。其余字段构成严格
+的 release inventory：gate 会校验数据形状，并在存在 runtime binding 时校验对应生成投影，
+但 verifier 不会声称已经对每种格式完成 runtime compatibility proof。
 
 ## 4. 收集可选 live 证据
 
@@ -371,7 +396,7 @@ fail closed。
 - tag 前支持 host candidate result、tagged-asset checksum 比较、必要的 tagged-asset smoke
   重跑，以及 rollout recheck；
 - 未验证证据与残余风险；
-- state/protocol 兼容说明；
+- 生成的 compatibility-manifest tuple，以及 state/Protocol 兼容说明；
 - 精确已发布 asset inventory。
 
 不要包含 secret value、私有机器 path、原始 provider response 或无界 CI log。

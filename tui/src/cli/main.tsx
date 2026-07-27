@@ -20,6 +20,7 @@ import { Picker } from "../components/Picker.js";
 import { StateResetPrompt } from "../components/StateResetPrompt.js";
 import { ThemeProvider } from "../components/theme.js";
 import { TrustPrompt } from "../components/TrustPrompt.js";
+import { UI_PREFERENCES_CURRENT } from "../contract-versions.js";
 import { CoreSpawnError } from "../core/errors.js";
 import type { CoreLaunchOptions } from "../core/process.js";
 import { CancellationController } from "../lifecycle/cancellation.js";
@@ -633,7 +634,7 @@ function RunningCliApplication({
         setTheme: setThemePreference,
         saveTheme: async (selected) =>
           await savePreferences(awesomeHome, {
-            schema_version: 1,
+            schema_version: UI_PREFERENCES_CURRENT,
             theme: selected,
           }),
       }),

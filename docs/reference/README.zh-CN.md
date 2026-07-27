@@ -28,11 +28,25 @@
 Awesome 有多个相互独立的版本：
 
 - `VERSION` 和包 metadata 中的产品版本；
-- 配置文档版本 `1`；
-- Application SQLite schema 版本 `7`；
-- 私有 Core/TUI protocol 版本 `3`；
+- 私有 Core/TUI Protocol 版本 `4`；
 - event envelope 版本 `1`；
-- UI preferences schema 版本 `1`。
+- Application diagnostic log record 版本 `1`；
+- Application SQLite schema 版本 `8`，迁移下限为 `7`；
+- user 配置版本 `2`，可读取版本集合为 `{1, 2}`；
+- workspace 配置版本 `1`，可读取版本集合为 `{1}`；
+- UI preferences schema 版本 `1`，可读取版本集合为 `{1}`；
+- headless JSON result 版本 `2`；
+- Thread export 版本 `1`，由 JSON document 与 Markdown marker 共用。
+
+该目录覆盖跨进程 wire contract、用户可编辑持久格式、Application database、公开的机器可读
+输出，以及文档化的结构化日志。同一 release 内使用的 recovery marker 和其他内部实现记录
+不会纳入。
 
 其中一个版本相同，并不意味着其他版本兼容。尤其是，私有 protocol 握手同时要求 protocol
-v3 和完全一致的已安装产品版本，以便独立升级的 Core 与 TUI 组件能够明确失败。
+v4 和完全一致的已安装产品版本，以便独立升级的 Core 与 TUI 组件能够明确失败。
+`contract-versions.json` 是这些契约标识的机器可读目录；生成的 Python 与 TypeScript 常量让
+运行时代码无需读取 JSON。一次发布会把该目录与 `VERSION` 组合到生成的
+`compatibility.json` 中；它不会强制这些数字相等，也不会在每次产品发布时递增所有格式版本。
+
+目录文档和 bundle 内的兼容性清单目前各自使用 envelope 版本 `1`。这些 metadata 版本只管理
+各自的文档形状，不是上述运行时契约元组中的新增条目。

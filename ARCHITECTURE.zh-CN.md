@@ -81,6 +81,7 @@ awesome_agent/
 │   ├── safety/         # 脱敏 helper
 │   ├── storage/        # 嵌入式 SQLite 与 checkpoint adapter
 │   ├── web/            # Core 提供商中立 Web port 的 Tavily HTTP adapter
+│   ├── contract_versions.py # 生成的无依赖 contract identifier
 │   ├── paths.py        # AWESOME_HOME 路径所有权
 │   └── version.py      # 产品版本 reader
 ├── tui/                # Ink + React 展示 package
@@ -89,6 +90,7 @@ awesome_agent/
 ├── tests/              # unit、integration、E2E、packaging、structural
 ├── install.sh
 ├── install.ps1
+├── contract-versions.json # 手工维护的公共 contract-version 目录
 ├── pyproject.toml
 └── VERSION
 ```

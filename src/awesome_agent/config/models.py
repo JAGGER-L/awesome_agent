@@ -6,6 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from awesome_agent.contract_versions import (
+    USER_CONFIG_CURRENT,
+    WORKSPACE_CONFIG_CURRENT,
+    WORKSPACE_CONFIG_READABLE_VERSIONS,
+    UserConfigVersion,
+    WorkspaceConfigVersion,
+)
 from awesome_agent.modeling.catalog import MODEL_CATALOG, KimiRegion
 from awesome_agent.modeling.turns import ProviderId
 
@@ -215,7 +222,7 @@ class UserMcpServerConfig(McpServerDeclaration):
 class UserConfigDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    version: Literal[2] = 2
+    version: UserConfigVersion = USER_CONFIG_CURRENT
     providers: ProviderConfig = Field(default_factory=ProviderConfig)
     credentials: CredentialSelectionConfig = Field(
         default_factory=CredentialSelectionConfig
@@ -248,7 +255,7 @@ class UserConfigDocument(BaseModel):
 class WorkspaceConfigDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    version: Literal[1] = 1
+    version: WorkspaceConfigVersion = WORKSPACE_CONFIG_CURRENT
     budgets: ProjectBudgetConfig = Field(default_factory=ProjectBudgetConfig)
     web: ProjectWebConfig = Field(default_factory=ProjectWebConfig)
     skills: SkillConfig = Field(default_factory=SkillConfig)
@@ -257,8 +264,8 @@ class WorkspaceConfigDocument(BaseModel):
     @field_validator("version", mode="before")
     @classmethod
     def validate_version_type(cls, value: object) -> object:
-        if type(value) is not int:
-            raise ValueError("version must be an integer")
+        if type(value) is not int or value not in WORKSPACE_CONFIG_READABLE_VERSIONS:
+            raise ValueError("version must be a readable integer")
         return value
 
     @field_validator("mcp_servers")

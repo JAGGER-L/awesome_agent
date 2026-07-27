@@ -83,6 +83,7 @@ awesome_agent/
 │   ├── safety/         # redaction helpers
 │   ├── storage/        # embedded SQLite and checkpoint adapters
 │   ├── web/            # Tavily HTTP adapter for Core's provider-neutral Web port
+│   ├── contract_versions.py # generated dependency-free contract identifiers
 │   ├── paths.py        # AWESOME_HOME path ownership
 │   └── version.py      # product version reader
 ├── tui/                # Ink + React presentation package
@@ -91,6 +92,7 @@ awesome_agent/
 ├── tests/              # unit, integration, E2E, packaging, structural
 ├── install.sh
 ├── install.ps1
+├── contract-versions.json # manually maintained public contract-version catalog
 ├── pyproject.toml
 └── VERSION
 ```

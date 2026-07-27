@@ -1,1 +1,1 @@
-export const PROTOCOL_VERSION = 4 as const;
+export { PROTOCOL_VERSION } from "../contract-versions.js";

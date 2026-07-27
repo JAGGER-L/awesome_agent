@@ -36,6 +36,10 @@ from awesome_agent.config.models import (
     UserMcpServerConfig,
     WorkspaceConfigDocument,
 )
+from awesome_agent.contract_versions import (
+    USER_CONFIG_CURRENT,
+    USER_CONFIG_READABLE_VERSIONS,
+)
 from awesome_agent.core.safe_files import (
     FileChangedError,
     FileTooLargeError,
@@ -391,10 +395,9 @@ def _load_secrets(
     )
 
 
-def _upgrade_user_config(document: dict[str, object]) -> dict[str, object]:
-    version = document.get("version", 1)
-    if type(version) is not int or version != 1:
-        return document
+def _upgrade_user_config_v1_to_v2(
+    document: dict[str, object],
+) -> dict[str, object]:
     legacy = _UserConfigDocumentV1.model_validate(document)
     upgraded = legacy.model_dump(mode="python")
     upgraded["version"] = 2
@@ -424,4 +427,27 @@ def _upgrade_user_config(document: dict[str, object]) -> dict[str, object]:
             "blocked_domains": [],
         },
     )
+    return upgraded
+
+
+_USER_CONFIG_MIGRATIONS: Mapping[
+    int,
+    Callable[[dict[str, object]], dict[str, object]],
+] = {1: _upgrade_user_config_v1_to_v2}
+
+
+def _upgrade_user_config(document: dict[str, object]) -> dict[str, object]:
+    version = document.get("version", 1)
+    if type(version) is not int or version not in USER_CONFIG_READABLE_VERSIONS:
+        return document
+    upgraded = document
+    while version < USER_CONFIG_CURRENT:
+        migration = _USER_CONFIG_MIGRATIONS.get(version)
+        if migration is None:
+            return upgraded
+        upgraded = migration(upgraded)
+        next_version = upgraded.get("version")
+        if type(next_version) is not int or next_version != version + 1:
+            raise RuntimeError("user config migration did not advance by one version")
+        version = next_version
     return upgraded

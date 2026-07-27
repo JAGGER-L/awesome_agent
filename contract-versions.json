@@ -1,0 +1,44 @@
+{
+  "application_log": {
+    "version": 1
+  },
+  "application_schema": {
+    "current": 8,
+    "migration_floor": 7
+  },
+  "event_envelope": {
+    "version": 1
+  },
+  "headless_json": {
+    "schema": "awesome.run.result",
+    "version": 2
+  },
+  "protocol": {
+    "version": 4
+  },
+  "schema": "awesome.contract-versions",
+  "thread_export": {
+    "json_schema": "awesome.thread-export",
+    "version": 1
+  },
+  "ui_preferences": {
+    "current": 1,
+    "readable_versions": [
+      1
+    ]
+  },
+  "user_config": {
+    "current": 2,
+    "readable_versions": [
+      1,
+      2
+    ]
+  },
+  "version": 1,
+  "workspace_config": {
+    "current": 1,
+    "readable_versions": [
+      1
+    ]
+  }
+}

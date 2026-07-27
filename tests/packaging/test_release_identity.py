@@ -6,21 +6,32 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import replace
 from email.message import Message
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.release import check_identity as identity_checker
-from scripts.release.build_bundle import BundleError, validate_license_files
+from scripts.release.build_bundle import (
+    BundleError,
+    read_version,
+    validate_license_files,
+)
 from scripts.release.check_identity import (
     ReleaseIdentityError,
     TagPolicy,
     observe_tag_state,
     validate_required_check_runs,
     validate_tag_state,
+)
+from scripts.release.contract_versions import (
+    ContractVersionsError,
+    check_generated_bindings,
+    load_contract_versions,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +55,148 @@ def _write_license_fixture(root: Path) -> None:
 
 def test_repository_license_surfaces_are_one_mit_contract() -> None:
     assert validate_license_files(ROOT) == (ROOT / "LICENSE").read_bytes()
+
+
+def test_repository_release_identity_matches_contract_catalog() -> None:
+    version = read_version(ROOT)
+    contracts = load_contract_versions(ROOT)
+
+    check_generated_bindings(ROOT, contracts)
+    identity_checker._validate_protocol_fixtures(ROOT, version, contracts)
+    identity_checker._validate_repository_version_surfaces(
+        ROOT,
+        version,
+        contracts.protocol_version,
+    )
+    identity_checker._validate_contract_catalog_documentation(ROOT, contracts)
+
+
+def test_protocol_fixture_gate_rejects_event_catalog_drift() -> None:
+    version = read_version(ROOT)
+    contracts = load_contract_versions(ROOT)
+
+    with pytest.raises(ReleaseIdentityError, match="event envelopes"):
+        identity_checker._validate_protocol_fixtures(
+            ROOT,
+            version,
+            replace(contracts, event_envelope_version=2),
+        )
+
+
+def test_release_identity_uses_catalog_protocol_without_a_v4_constant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[Path, str, int]] = []
+    monkeypatch.setattr(identity_checker, "read_version", lambda _: "1.3.0")
+    monkeypatch.setattr(identity_checker, "validate_version_files", lambda *_: None)
+    monkeypatch.setattr(identity_checker, "validate_installer_files", lambda *_: {})
+    monkeypatch.setattr(identity_checker, "validate_license_files", lambda *_: b"")
+    monkeypatch.setattr(
+        identity_checker,
+        "load_contract_versions",
+        lambda *_: SimpleNamespace(protocol_version=7),
+    )
+    monkeypatch.setattr(identity_checker, "check_generated_bindings", lambda *_: None)
+    monkeypatch.setattr(
+        identity_checker,
+        "_validate_protocol_fixtures",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        identity_checker,
+        "_validate_repository_version_surfaces",
+        lambda root, version, protocol: observed.append((root, version, protocol)),
+    )
+    monkeypatch.setattr(
+        identity_checker,
+        "_validate_contract_catalog_documentation",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        identity_checker,
+        "_git_output",
+        lambda *_args, **_kwargs: "a" * 40,
+    )
+    monkeypatch.setattr(
+        identity_checker,
+        "observe_tag_state",
+        lambda *_: identity_checker.ObservedTagState(exists=False, commit=None),
+    )
+
+    assert (
+        identity_checker.check_release_identity(tmp_path, TagPolicy.ABSENT) == "1.3.0"
+    )
+    assert observed == [(tmp_path.resolve(), "1.3.0", 7)]
+
+
+def test_contract_catalog_documentation_rejects_non_protocol_drift() -> None:
+    contracts = load_contract_versions(ROOT)
+
+    with pytest.raises(ReleaseIdentityError, match="version catalog"):
+        identity_checker._validate_contract_catalog_documentation(
+            ROOT,
+            replace(contracts, application_log_version=2),
+        )
+
+
+def test_protocol_fixture_reader_bounds_the_file_read(tmp_path: Path) -> None:
+    fixture = tmp_path / "fixture.json"
+    fixture.write_bytes(b"x" * 9)
+
+    with pytest.raises(ContractVersionsError, match="size limit"):
+        identity_checker._read_bounded_fixture(fixture, 8, "test fixture")
+
+
+def test_protocol_document_identity_uses_dynamic_compatibility_version(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\ndynamic = ["version"]\n[tool.hatch.version]\npath = "VERSION"\n',
+        encoding="utf-8",
+    )
+    reference = tmp_path / "docs" / "reference"
+    reference.mkdir(parents=True)
+    protocol_en = (
+        "# Private Core/TUI protocol v7\n"
+        "Protocol version **7**; product version is **1.3.0**.\n"
+        '```json\n{"protocol_version": 7, "client_version": "1.3.0"}\n```\n'
+        "`protocol/fixtures/v7/`\n"
+    )
+    protocol_zh = (
+        "# 私有 Core/TUI protocol v7\n"
+        "Protocol 版本 **7**。产品版本是 **1.3.0**。\n"
+        '```json\n{"protocol_version": 7, "client_version": "1.3.0"}\n```\n'
+        "`protocol/fixtures/v7/`\n"
+    )
+    (reference / "protocol.md").write_text(protocol_en, encoding="utf-8")
+    (reference / "protocol.zh-CN.md").write_text(protocol_zh, encoding="utf-8")
+    development = tmp_path / "docs" / "development"
+    development.mkdir()
+    for relative in (
+        development / "release.md",
+        development / "release.zh-CN.md",
+        reference / "README.md",
+        reference / "README.zh-CN.md",
+    ):
+        relative.write_text("`contract-versions.json`\n", encoding="utf-8")
+
+    identity_checker._validate_repository_version_surfaces(
+        tmp_path,
+        "1.3.0",
+        7,
+    )
+
+    (reference / "protocol.md").write_text(
+        protocol_en.replace('"protocol_version": 7', '"protocol_version": 4'),
+        encoding="utf-8",
+    )
+    with pytest.raises(ReleaseIdentityError, match="documentation identity"):
+        identity_checker._validate_repository_version_surfaces(
+            tmp_path,
+            "1.3.0",
+            7,
+        )
 
 
 @pytest.mark.parametrize(

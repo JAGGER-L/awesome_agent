@@ -34,6 +34,14 @@ and the same product version as Core. A v3 client fails explicitly even if its
 product version matches. Protocol and product versions answer different
 questions: wire compatibility versus release identity.
 
+The numeric contract identity is not copied manually between the two
+processes. `contract-versions.json` generates dependency-free literal bindings
+in `src/awesome_agent/contract_versions.py` and
+`tui/src/contract-versions.ts`; runtime code imports those bindings and never
+loads the catalog. `VERSION` remains the separate product-version owner. A
+release combines both sources into its artifact-only `compatibility.json`
+tuple instead of forcing their numbers to match.
+
 Request IDs are JSON/JavaScript-safe integers or 1–128 Unicode-scalar strings
 without unpaired UTF-16 surrogates. Numeric IDs must be integral, finite,
 non-Boolean, and within `-(2^53 - 1)..2^53 - 1`. Optional fields are omitted
@@ -97,6 +105,8 @@ invalid fixtures under `protocol/fixtures/v4/`. TypeScript Zod schemas validate
 the same corpus.
 
 ```text
+contract-versions.json
+  -> generated Python + TypeScript literal bindings
 Python Pydantic contracts
   -> generated v4 fixtures + manifest hashes
   -> TypeScript strict Zod schemas

@@ -5,7 +5,8 @@ JSON-RPC 2.0 通信。该 protocol 是内部组件边界，不是远程 API：�
 authentication scheme、compatibility proxy，也不承诺第三方客户端可以独立混用不同版本。
 
 Protocol 版本 **4** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.3.0**。Event
-envelope 有独立版本 **1**。
+envelope 有独立版本 **1**。两个 contract identifier 都来自
+`contract-versions.json`；产品值仍来自 `VERSION`。
 
 ## 进程与传输
 

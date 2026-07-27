@@ -8,7 +8,8 @@ versions independently.
 
 Protocol version **4** is paired with the exact installed product version. The
 current repository product version is **1.3.0**. Event envelopes have their own
-version **1**.
+version **1**. Both contract identifiers come from `contract-versions.json`;
+the product value continues to come from `VERSION`.
 
 ## Process and transport
 

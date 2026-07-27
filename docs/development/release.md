@@ -9,8 +9,14 @@ already verified elsewhere.
 ## Release invariants
 
 - `VERSION` is the only manually maintained product version source.
+- `contract-versions.json` is the only manually maintained catalog of the
+  independently versioned public contracts. Its generated Python and
+  TypeScript bindings are exact, dependency-free projections for each
+  language's runtime consumers.
 - Python metadata, TUI package/lock/generated source, Protocol fixture manifest,
-  installers, archive name, and embedded payload agree with `VERSION`.
+  installers, archive name, and embedded payload agree with `VERSION`; the
+  bundled compatibility manifest combines that version with the exact contract
+  catalog.
 - Root, Python wheel, and TUI package metadata and license files all declare and
   carry the same MIT license. The grant text is exact; only the single copyright
   line may vary.
@@ -39,6 +45,8 @@ dist/release/
 The archive contains one deterministic top-level directory with:
 
 - `VERSION`;
+- `compatibility.json`, the canonical release identity for independently
+  versioned public contracts;
 - the root MIT `LICENSE`;
 - the validated pure-Python Awesome wheel;
 - an exact, SHA-256-hashed production requirements lock;
@@ -72,14 +80,24 @@ Release version.
    npm --prefix tui run version:sync
    ```
 
-3. Update the version constants in both root installers.
-4. Regenerate Protocol fixtures so the manifest records the product version:
+3. If this release changes a serialized contract, update
+   `contract-versions.json` and regenerate its language bindings with the first
+   command below. In every release, verify that the checked-in bindings are
+   current with the second command:
+
+   ```powershell
+   uv run python scripts/release/contract_versions.py --write
+   uv run python scripts/release/contract_versions.py
+   ```
+
+4. Update the version constants in both root installers.
+5. Regenerate Protocol fixtures so the manifest records the product version:
 
    ```powershell
    uv run python scripts/generate_protocol_fixtures.py
    ```
 
-5. Fetch the repository tags and prove that the candidate version is unused and
+6. Fetch the repository tags and prove that the candidate version is unused and
    that every version and license surface agrees:
 
    ```powershell
@@ -93,16 +111,25 @@ Release version.
    tag cannot be proven absent in deterministic PR CI; confirm the Releases page
    before publication, and protect the version-tag namespace in repository
    settings.
-6. Prepare GitHub Release notes from accepted changes, including user-visible
+7. Prepare GitHub Release notes from accepted changes, including user-visible
    behavior, security boundaries, configuration/state compatibility, and known
    limitations.
-7. Inspect every version-related diff. A feature branch should not contain an
+8. Inspect every version-related diff. A feature branch should not contain an
    accidental version change.
 
 Protocol version and Application schema version are independent. Increment
 Protocol only for an incompatible wire change. Increment Application schema
 only when persisted semantics cannot be read safely. Neither replaces the need
 for a unique product version.
+
+The release identity is therefore a tuple rather than one repeated number.
+`contract-versions.json` owns the independently evolving identifiers, while
+`VERSION` owns the product release. The builder combines them into
+`compatibility.json`, including Protocol and event-envelope versions,
+Application diagnostic-log version, Application schema
+current/migration-floor values, exact readable user/workspace/UI configuration
+versions, headless JSON identity, and Thread export identity. Release
+review verifies the tuple; it does not make those values equal.
 
 ## 2. Run deterministic release gates
 
@@ -155,16 +182,21 @@ uv run python scripts/release/verify_bundle.py `
 ```
 
 The builder itself derives `SOURCE_DATE_EPOCH` from the exact Git commit time,
-creates the wheel, exports the hashed requirements, checks version agreement and
-TUI output, rejects forbidden content, assembles a deterministic ZIP, copies
-installers, and writes checksums. Packaging tests prove that Hatch produces the
-same wheel bytes for the same source epoch. The final authority between two CI
-runs is still the asset checksum comparison, not the environment variable.
+creates the wheel, exports the hashed requirements, checks version agreement,
+generated contract bindings, and TUI output, combines `VERSION` with the
+contract catalog, rejects forbidden content, assembles a deterministic ZIP,
+copies installers, and writes checksums. Packaging tests prove that Hatch
+produces the same wheel bytes for the same source epoch. The final authority
+between two CI runs is still the asset checksum comparison, not the environment
+variable.
 
 The verifier checks:
 
 - release-directory inventory and all checksums;
 - archive path safety, member inventory, and payload version;
+- the closed, bounded, canonical `compatibility.json`, whose declared Protocol
+  version drives the installed-Core handshake and whose Application schema
+  identity drives installed-wheel storage verification;
 - wheel filename, metadata, compatibility, entry points, RECORD hashes, import
   origins, and absence of editable or non-production content;
 - exact hashed dependency requirements and isolated installation;
@@ -179,6 +211,11 @@ The verifier checks:
 
 Verification must operate on the built wheel and extracted payload. A fallback
 to the editable checkout would prove the wrong artifact and is rejected.
+Protocol and Application schema fields therefore have executable artifact
+probes. The remaining manifest fields form a strict release inventory: their
+shape is checked and, where a runtime binding exists, that generated projection
+is checked too; the verifier does not claim a runtime compatibility proof for
+each format.
 
 ## 4. Collect optional live evidence
 
@@ -422,7 +459,8 @@ Retain in the GitHub Release or maintainer handoff:
 - pre-tag supported-host candidate results, tagged-asset checksum comparison,
   any required tagged-asset smoke rerun, and rollout recheck;
 - unverified evidence and residual risk;
-- state/protocol compatibility notes;
+- the generated compatibility-manifest tuple and state/Protocol compatibility
+  notes;
 - exact published asset inventory.
 
 Do not include secret values, private machine paths, raw provider responses, or

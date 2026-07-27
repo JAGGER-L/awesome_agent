@@ -11,7 +11,13 @@ from pytest import MonkeyPatch
 
 import awesome_agent
 from awesome_agent.application.commands import COMMAND_OWNERS, CommandName
-from awesome_agent.application.contracts import PROTOCOL_VERSION
+from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION as APPLICATION_PROTOCOL_VERSION,
+)
+from awesome_agent.contract_versions import (
+    APPLICATION_SCHEMA_CURRENT,
+    PROTOCOL_VERSION,
+)
 from awesome_agent.protocol import PROTOCOL_VERSION as EXPORTED_PROTOCOL_VERSION
 from awesome_agent.storage import APPLICATION_SCHEMA_VERSION
 from awesome_agent.version import PRODUCT_VERSION
@@ -219,8 +225,20 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
     )
 
 
-def test_protocol_version_has_application_owned_sources() -> None:
-    assert PROTOCOL_VERSION == EXPORTED_PROTOCOL_VERSION == 4
+def test_protocol_version_has_one_catalog_and_generated_bindings() -> None:
+    catalog = json.loads(
+        (REPOSITORY_ROOT / "contract-versions.json").read_text(encoding="utf-8")
+    )
+    assert catalog["schema"] == "awesome.contract-versions"
+    assert catalog["version"] == 1
+    assert "product" not in catalog
+    assert catalog["protocol"] == {"version": 4}
+    assert (
+        PROTOCOL_VERSION
+        == APPLICATION_PROTOCOL_VERSION
+        == EXPORTED_PROTOCOL_VERSION
+        == catalog["protocol"]["version"]
+    )
 
     owners = {
         path.relative_to(ROOT).as_posix()
@@ -242,7 +260,12 @@ def test_protocol_version_has_application_owned_sources() -> None:
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
         )
     }
-    assert owners == {"application/contracts.py"}
+    assert owners == {"contract_versions.py"}
+
+    assert "PROTOCOL_VERSION" in _from_imports(
+        ROOT / "application" / "contracts.py",
+        "awesome_agent.contract_versions",
+    )
 
     application_contract = "awesome_agent.application.contracts"
     for consumer in (
@@ -267,8 +290,12 @@ def test_protocol_version_has_application_owned_sources() -> None:
 
     tui_protocol_version = TUI_ROOT / "src" / "protocol" / "version.ts"
     assert tui_protocol_version.read_text(encoding="utf-8") == (
-        "export const PROTOCOL_VERSION = 4 as const;\n"
+        'export { PROTOCOL_VERSION } from "../contract-versions.js";\n'
     )
+    tui_contracts = (TUI_ROOT / "src" / "contract-versions.ts").read_text(
+        encoding="utf-8"
+    )
+    assert "export const PROTOCOL_VERSION = 4 as const;" in tui_contracts
     methods = (TUI_ROOT / "src" / "protocol" / "methods.ts").read_text(
         encoding="utf-8"
     )
@@ -290,7 +317,7 @@ def test_application_schema_identity_is_independent_from_product_version() -> No
         ROOT / "storage" / "migrations.py",
     )
 
-    assert APPLICATION_SCHEMA_VERSION == 8
+    assert APPLICATION_SCHEMA_VERSION == APPLICATION_SCHEMA_CURRENT == 8
     for owner in schema_owners:
         assert not any(
             imported == "awesome_agent.version"

@@ -16,6 +16,10 @@ from awesome_agent.application.command_results import (
     UsageCommandPayload,
 )
 from awesome_agent.application.contracts import ApplicationResult, ApplicationState
+from awesome_agent.contract_versions import (
+    APPLICATION_LOG_VERSION,
+    ApplicationLogVersion,
+)
 from awesome_agent.conversation import UsageSummary
 from awesome_agent.core.contracts import MAX_JSON_SAFE_INTEGER, JsonSafeInteger
 
@@ -78,7 +82,7 @@ class ApplicationObservation(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    version: Literal[1] = 1
+    version: ApplicationLogVersion = APPLICATION_LOG_VERSION
     timestamp: datetime
     session_id: str = Field(
         pattern=r"^session_[A-Za-z0-9]+$",

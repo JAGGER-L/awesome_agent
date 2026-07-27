@@ -10,6 +10,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from awesome_agent.contract_versions import (
+    EVENT_ENVELOPE_VERSION,
+    EventEnvelopeVersion,
+)
 from awesome_agent.core.contracts import JsonSafeInteger
 
 _MAX_LIFECYCLE_HISTORY = 4_096
@@ -260,7 +264,7 @@ _TURN_TERMINALS = _TURN_TYPES - {EventType.TURN_STARTED}
 class EventEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    version: Literal[1] = 1
+    version: EventEnvelopeVersion = EVENT_ENVELOPE_VERSION
     event_id: str = Field(pattern=r"^event_[A-Za-z0-9]+$", max_length=128)
     sequence: JsonSafeInteger = Field(ge=1)
     session_id: str = Field(min_length=1, max_length=128)

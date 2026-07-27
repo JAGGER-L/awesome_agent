@@ -90,6 +90,7 @@ npm pack ./tui --dry-run
 ### 6. Protocol v4 fixtures
 
 ```powershell
+uv run python scripts/release/contract_versions.py
 uv run python scripts/generate_protocol_fixtures.py --check
 ```
 

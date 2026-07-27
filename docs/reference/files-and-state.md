@@ -71,7 +71,7 @@ and Thread history. Awesome retains at most the current file plus
 `<HOME>/logs/.application.jsonl.lock` coordinates writers and is not one of
 those five data files.
 
-Every JSON line uses the same closed schema: `version`, `timestamp`,
+Every JSON line uses closed record version `1`: `version`, `timestamp`,
 `session_id`, `correlation_id`, `operation`, `outcome`, `duration_ms`, and
 optional `error_code` and bounded `usage`. Prompts, model or Tool bodies,
 queries, URLs, paths, secrets, and arbitrary request/result payloads are never

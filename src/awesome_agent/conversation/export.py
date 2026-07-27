@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 from typing import Literal
 
+from awesome_agent.contract_versions import (
+    THREAD_EXPORT_JSON_SCHEMA,
+    THREAD_EXPORT_VERSION,
+)
 from awesome_agent.conversation.models import (
     AssistantEntryMetadata,
     ThreadEntry,
@@ -13,9 +17,6 @@ from awesome_agent.conversation.models import (
 from awesome_agent.core.citations import Citation
 
 type ThreadExportFormat = Literal["markdown", "json"]
-
-_EXPORT_VERSION = 1
-
 
 def render_thread_export(view: ThreadView, *, format: ThreadExportFormat) -> str:
     if format == "json":
@@ -29,7 +30,7 @@ def _render_json(view: ThreadView) -> str:
     thread = view.thread
     payload = {
         "entries": [_json_entry(entry) for entry in _ordered_entries(view)],
-        "schema": "awesome.thread-export",
+        "schema": THREAD_EXPORT_JSON_SCHEMA,
         "thread": {
             "created_at": thread.created_at.isoformat(),
             "current_model": thread.current_model,
@@ -45,7 +46,7 @@ def _render_json(view: ThreadView) -> str:
             "title_source": thread.title_source.value,
             "updated_at": thread.updated_at.isoformat(),
         },
-        "version": _EXPORT_VERSION,
+        "version": THREAD_EXPORT_VERSION,
     }
     return (
         json.dumps(
@@ -78,7 +79,7 @@ def _render_markdown(view: ThreadView) -> str:
     lines = [
         f"# {_markdown_inline(thread.title)}",
         "",
-        "<!-- awesome-thread-export:v1 -->",
+        f"<!-- awesome-thread-export:v{THREAD_EXPORT_VERSION} -->",
         "",
         f"- Thread ID: `{_markdown_code(thread.id)}`",
         f"- Created: `{thread.created_at.isoformat()}`",

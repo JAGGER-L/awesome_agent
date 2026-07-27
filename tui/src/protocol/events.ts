@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { EVENT_ENVELOPE_VERSION } from "../contract-versions.js";
 import {
   boundedText,
   interactionDecisionSchema,
@@ -244,7 +245,7 @@ const turnTypes = new Set<EventType>([
 
 export const eventEnvelopeSchema = z
   .strictObject({
-    version: z.literal(1),
+    version: z.literal(EVENT_ENVELOPE_VERSION),
     event_id: z
       .string()
       .max(128)

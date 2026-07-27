@@ -26,6 +26,12 @@ TUI 把这些事实转换为临时状态和渲染状态。两个边界都不接�
 版本。即使产品版本相同，v3 客户端也会明确失败。协议版本与产品版本回答不同问题：
 线缆兼容性与发布身份。
 
+契约数字不会在两个进程中手工复制。`contract-versions.json` 会生成无依赖的字面量
+binding：`src/awesome_agent/contract_versions.py` 与
+`tui/src/contract-versions.ts`。运行时代码只导入这些 binding，不读取 catalog。
+`VERSION` 仍单独管理产品版本；release 会把两类来源组合为只属于 artifact 的
+`compatibility.json` tuple，而不是强制它们使用相同数字。
+
 请求 ID 是 JSON/JavaScript 安全的整数，或由 1–128 个 Unicode 标量组成且不含未配对
 UTF-16 surrogate 的字符串。数字 ID 必须是整数、有限值、非 Boolean，并位于
 `-(2^53 - 1)..2^53 - 1`。可选字段不存在时应省略；只有 schema 明确声明可为 null 时才
@@ -81,6 +87,8 @@ Python 负责序列化方法结果、`CommandOutcome` variant 和事件。
 无效 fixture。TypeScript Zod schema 校验同一语料库。
 
 ```text
+contract-versions.json
+  -> generated Python + TypeScript literal bindings
 Python Pydantic contracts
   -> generated v4 fixtures + manifest hashes
   -> TypeScript strict Zod schemas

@@ -3,8 +3,13 @@ import { join } from "node:path";
 
 import { z } from "zod";
 
+import {
+  UI_PREFERENCES_CURRENT,
+  UI_PREFERENCES_READABLE_VERSIONS,
+} from "../contract-versions.js";
+
 export const uiPreferencesSchema = z.strictObject({
-  schema_version: z.literal(1),
+  schema_version: z.literal(UI_PREFERENCES_CURRENT),
   theme: z.enum(["system", "dark", "light"]),
 });
 
@@ -24,8 +29,15 @@ export interface PreferenceIo {
   temporaryName(): string;
 }
 
+function isReadablePreferencesVersion(value: unknown): boolean {
+  return (
+    typeof value === "number" &&
+    UI_PREFERENCES_READABLE_VERSIONS.some((version) => version === value)
+  );
+}
+
 const defaultPreferences: UiPreferencesV1 = {
-  schema_version: 1,
+  schema_version: UI_PREFERENCES_CURRENT,
   theme: "system",
 };
 
@@ -66,7 +78,16 @@ export async function loadPreferences(
   }
 
   try {
-    const preferences = uiPreferencesSchema.parse(JSON.parse(content));
+    const parsed: unknown = JSON.parse(content);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("schema_version" in parsed) ||
+      !isReadablePreferencesVersion(parsed.schema_version)
+    ) {
+      throw new Error("unsupported UI preferences version");
+    }
+    const preferences = uiPreferencesSchema.parse(parsed);
     return { preferences, warnings: [] };
   } catch {
     return {

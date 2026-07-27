@@ -12,6 +12,7 @@ import subprocess
 import sys
 import textwrap
 from collections.abc import Iterator, Mapping
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -29,6 +30,23 @@ from scripts.release.build_bundle import (
     read_version,
     validate_version_files,
 )
+from scripts.release.compatibility_manifest import (
+    MAX_COMPATIBILITY_MANIFEST_BYTES,
+    CompatibilityManifestError,
+    render_release_compatibility,
+    verify_release_compatibility,
+)
+from scripts.release.contract_versions import (
+    MAX_CONTRACT_CATALOG_BYTES,
+    PYTHON_BINDING_PATH,
+    TYPESCRIPT_BINDING_PATH,
+    ContractVersionsError,
+    check_generated_bindings,
+    load_contract_versions,
+    parse_contract_versions,
+    render_python_binding,
+    render_typescript_binding,
+)
 from scripts.release.contracts import ReleaseContractError, validate_release_wheel
 from scripts.release.storage_contract import verify_storage_contract
 from scripts.release.verify_bundle import (
@@ -39,6 +57,7 @@ from scripts.release.verify_bundle import (
 
 from awesome_agent import paths as awesome_paths_module
 from awesome_agent import storage as application_storage
+from awesome_agent.storage import migrations as application_migrations
 
 ROOT = Path(__file__).resolve().parents[2]
 MIT_LICENSE = (ROOT / "LICENSE").read_bytes()
@@ -182,6 +201,11 @@ def _fixture(root: Path, *, version: str = "1.0.0") -> Path:
         f'export const PRODUCT_VERSION = "{version}" as const;\n',
         encoding="utf-8",
     )
+    shutil.copyfile(ROOT / "contract-versions.json", root / "contract-versions.json")
+    for relative in (PYTHON_BINDING_PATH, TYPESCRIPT_BINDING_PATH):
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, destination)
     wheel = root / "dist" / f"awesome_agent-{version}-py3-none-any.whl"
     wheel.parent.mkdir(exist_ok=True)
     (root / "dist" / "release-requirements.txt").write_text(
@@ -225,6 +249,179 @@ def test_version_files_must_not_drift(tmp_path: Path) -> None:
     package.write_text('{"version":"2.0.0"}\n', encoding="utf-8")
     with pytest.raises(BundleError, match="version"):
         validate_version_files(tmp_path, "1.0.0")
+
+
+def test_contract_catalog_is_canonical_and_generated_bindings_are_current() -> None:
+    content = (ROOT / "contract-versions.json").read_bytes()
+    contracts = parse_contract_versions(content)
+
+    assert len(content) <= MAX_CONTRACT_CATALOG_BYTES
+    assert contracts == load_contract_versions(ROOT)
+    assert "product" not in json.loads(content)
+    check_generated_bindings(ROOT, contracts)
+
+
+def test_contract_catalog_loader_bounds_the_file_read(tmp_path: Path) -> None:
+    (tmp_path / "contract-versions.json").write_bytes(
+        b"x" * (MAX_CONTRACT_CATALOG_BYTES + 1)
+    )
+
+    with pytest.raises(ContractVersionsError, match="size limit"):
+        load_contract_versions(tmp_path)
+
+
+def test_readable_version_catalog_changes_invalidate_language_bindings() -> None:
+    contracts = load_contract_versions(ROOT)
+
+    assert render_python_binding(contracts) != render_python_binding(
+        replace(contracts, user_config_readable_versions=(2,))
+    )
+    assert render_typescript_binding(contracts) != render_typescript_binding(
+        replace(contracts, ui_preferences_readable_versions=(1, 2))
+    )
+
+
+def test_generated_binding_check_fails_closed_on_stale_output(tmp_path: Path) -> None:
+    shutil.copyfile(
+        ROOT / "contract-versions.json",
+        tmp_path / "contract-versions.json",
+    )
+    for relative in (PYTHON_BINDING_PATH, TYPESCRIPT_BINDING_PATH):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, destination)
+    contracts = load_contract_versions(tmp_path)
+    check_generated_bindings(tmp_path, contracts)
+
+    python_binding = tmp_path / PYTHON_BINDING_PATH
+    python_binding.write_bytes(python_binding.read_bytes() + b"# stale\n")
+    with pytest.raises(ContractVersionsError, match="generated binding is stale"):
+        check_generated_bindings(tmp_path, contracts)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unknown_field",
+        "noncanonical",
+        "invalid_readable_versions",
+        "duplicate_key",
+        "oversized",
+    ],
+)
+def test_contract_catalog_parser_is_closed_and_canonical(mutation: str) -> None:
+    payload = json.loads((ROOT / "contract-versions.json").read_bytes())
+    if mutation == "oversized":
+        content = b"x" * (MAX_CONTRACT_CATALOG_BYTES + 1)
+    elif mutation == "duplicate_key":
+        content = b'{"version":1,"version":1}\n'
+    elif mutation == "unknown_field":
+        payload["unexpected"] = True
+        content = f"{json.dumps(payload, indent=2, sort_keys=True)}\n".encode()
+    elif mutation == "noncanonical":
+        content = json.dumps(payload, sort_keys=True).encode()
+    else:
+        payload["user_config"]["readable_versions"] = [2, 1]
+        content = f"{json.dumps(payload, indent=2, sort_keys=True)}\n".encode()
+
+    with pytest.raises(ContractVersionsError):
+        parse_contract_versions(content)
+
+
+def test_release_compatibility_is_canonical_and_catalog_derived() -> None:
+    version = read_version(ROOT)
+    content = render_release_compatibility(ROOT, version)
+
+    assert content.endswith(b"\n")
+    assert b"\r" not in content
+    assert json.loads(content) == {
+        "application_log": {"version": 1},
+        "application_schema": {"current": 8, "migration_floor": 7},
+        "event_envelope": {"version": 1},
+        "headless_json": {"schema": "awesome.run.result", "version": 2},
+        "product": {"version": version},
+        "protocol": {"version": 4},
+        "schema": "awesome.release-compatibility",
+        "thread_export": {
+            "json_schema": "awesome.thread-export",
+            "version": 1,
+        },
+        "ui_preferences": {"current": 1, "readable_versions": [1]},
+        "user_config": {"current": 2, "readable_versions": [1, 2]},
+        "version": 1,
+        "workspace_config": {"current": 1, "readable_versions": [1]},
+    }
+    compatibility = verify_release_compatibility(
+        content,
+        product_version=version,
+    )
+    assert compatibility.protocol_version == 4
+    assert compatibility.application_schema_migration_floor == 7
+    assert compatibility.application_schema_current == 8
+    assert render_release_compatibility(ROOT, version) == content
+
+
+def test_release_compatibility_rejects_product_owner_drift(tmp_path: Path) -> None:
+    _fixture(tmp_path)
+    (tmp_path / "VERSION").write_text("2.0.0\n", encoding="utf-8")
+
+    with pytest.raises(CompatibilityManifestError, match="product version owner"):
+        render_release_compatibility(tmp_path, "1.0.0")
+
+
+def test_bundle_rejects_stale_generated_contract_binding(tmp_path: Path) -> None:
+    _fixture(tmp_path)
+    binding = tmp_path / PYTHON_BINDING_PATH
+    binding.write_bytes(binding.read_bytes() + b"# stale\n")
+
+    with pytest.raises(BundleError, match="compatibility manifest"):
+        assemble_bundle(tmp_path, "1.0.0")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unknown_field",
+        "noncanonical",
+        "invalid_range",
+        "invalid_schema",
+        "invalid_protocol",
+        "duplicate_key",
+        "oversized",
+        "product_mismatch",
+    ],
+)
+def test_release_compatibility_parser_is_closed_and_canonical(
+    mutation: str,
+) -> None:
+    version = read_version(ROOT)
+    payload = json.loads(render_release_compatibility(ROOT, version))
+    if mutation == "oversized":
+        content = b"x" * (MAX_COMPATIBILITY_MANIFEST_BYTES + 1)
+    elif mutation == "duplicate_key":
+        content = b'{"version":1,"version":1}\n'
+    elif mutation == "unknown_field":
+        payload["unexpected"] = True
+        content = f"{json.dumps(payload, indent=2, sort_keys=True)}\n".encode()
+    elif mutation == "noncanonical":
+        content = json.dumps(payload, sort_keys=True).encode()
+    else:
+        if mutation == "invalid_range":
+            payload["application_schema"] = {
+                "current": 7,
+                "migration_floor": 8,
+            }
+        elif mutation == "invalid_schema":
+            payload["headless_json"]["schema"] = "not-awesome"
+        elif mutation == "invalid_protocol":
+            payload["protocol"]["version"] = True
+        content = f"{json.dumps(payload, indent=2, sort_keys=True)}\n".encode()
+
+    with pytest.raises(CompatibilityManifestError):
+        verify_release_compatibility(
+            content,
+            product_version="9.9.9" if mutation == "product_mismatch" else version,
+        )
 
 
 def test_bundle_requires_wheel_and_compiled_tui(tmp_path: Path) -> None:
@@ -302,6 +499,43 @@ def test_bundle_verifier_accepts_owned_storage_migration_module(
     _stub_runtime_verification(monkeypatch)
 
     verify_release_bundle(bundle, "1.0.0")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "diagnostic"),
+    [
+        ("missing", "inventory"),
+        ("unknown_field", "compatibility"),
+        ("noncanonical", "compatibility"),
+        ("oversized", "compatibility"),
+    ],
+)
+def test_bundle_verifier_rejects_invalid_compatibility_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    diagnostic: str,
+) -> None:
+    _fixture(tmp_path)
+    bundle = assemble_bundle(tmp_path, "1.0.0").archive
+    member = "awesome-1.0.0/compatibility.json"
+    if mutation == "missing":
+        _remove_bundle_member(bundle, member)
+    else:
+        payload = json.loads(render_release_compatibility(tmp_path, "1.0.0"))
+        if mutation == "unknown_field":
+            payload["unexpected"] = True
+            content = f"{json.dumps(payload, indent=2, sort_keys=True)}\n".encode()
+        elif mutation == "oversized":
+            content = b"x" * (MAX_COMPATIBILITY_MANIFEST_BYTES + 1)
+        else:
+            content = json.dumps(payload, sort_keys=True).encode()
+        _replace_bundle_member(bundle, member, content)
+    _refresh_release_checksums(bundle.parent, "1.0.0")
+    _stub_runtime_verification(monkeypatch)
+
+    with pytest.raises(BundleVerificationError, match=diagnostic):
+        verify_release_bundle(bundle, "1.0.0")
 
 
 @pytest.mark.parametrize(
@@ -430,8 +664,13 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _fixture(tmp_path)
+    compatibility = verify_release_compatibility(
+        render_release_compatibility(tmp_path, "1.0.0"),
+        product_version="1.0.0",
+    )
     commands: list[list[str]] = []
-    handshakes: list[tuple[list[str], Path, Path, str]] = []
+    handshakes: list[tuple[list[str], Path, Path, str, int]] = []
     monkeypatch.setattr(release_verifier, "resolve_executable", lambda _: "uv")
     monkeypatch.setattr(
         release_verifier,
@@ -441,8 +680,16 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
     monkeypatch.setattr(
         release_verifier,
         "_verify_core_protocol_handshake",
-        lambda command, *, cwd, home, expected_version: handshakes.append(
-            (list(command), cwd, home, expected_version)
+        lambda command, *, cwd, home, expected_version, expected_protocol_version: (
+            handshakes.append(
+                (
+                    list(command),
+                    cwd,
+                    home,
+                    expected_version,
+                    expected_protocol_version,
+                )
+            )
         ),
     )
     core = tmp_path / "core"
@@ -455,6 +702,7 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
         wheel,
         requirements,
         "1.0.0",
+        compatibility,
     )
 
     assert len(commands) == 6
@@ -469,6 +717,8 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
     assert Path(commands[5][2]).name == "storage_contract.py"
     assert commands[5][3:] == [
         "1.0.0",
+        "7",
+        "8",
         str(core / ".verification-environment"),
         str(core / ".storage-contract"),
     ]
@@ -484,6 +734,7 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
         core / ".protocol-workspace",
         core / ".protocol-home",
         "1.0.0",
+        4,
     )
 
 
@@ -603,7 +854,7 @@ def test_virtual_environment_scripts_do_not_follow_interpreter_symlinks() -> Non
     )
 
 
-def test_installed_core_protocol_handshake_is_v4_trusted_and_bounded(
+def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
     tmp_path: Path,
 ) -> None:
     server = tmp_path / "fake_core.py"
@@ -616,7 +867,8 @@ def test_installed_core_protocol_handshake_is_v4_trusted_and_bounded(
             import os
             import sys
 
-            expected_version, expected_home = sys.argv[1:]
+            expected_version, protocol_version, expected_home = sys.argv[1:]
+            protocol_version = int(protocol_version)
             assert os.environ["AWESOME_HOME"] == expected_home
             assert "DEEPSEEK_API_KEY" not in os.environ
             assert "MOONSHOT_API_KEY" not in os.environ
@@ -638,7 +890,7 @@ def test_installed_core_protocol_handshake_is_v4_trusted_and_bounded(
 
             params = receive(1, "initialize")
             assert params == {
-                "protocol_version": 4,
+                "protocol_version": protocol_version,
                 "client_name": "awesome",
                 "client_version": expected_version,
             }
@@ -648,7 +900,7 @@ def test_installed_core_protocol_handshake_is_v4_trusted_and_bounded(
                 "params": {},
             }), flush=True)
             respond(1, {
-                "protocol_version": 4,
+                "protocol_version": protocol_version,
                 "product_version": expected_version,
                 "status": "trust_required",
                 "interaction_id": "interaction_release",
@@ -668,10 +920,11 @@ def test_installed_core_protocol_handshake_is_v4_trusted_and_bounded(
     )
 
     release_verifier._verify_core_protocol_handshake(
-        [sys.executable, str(server), "1.3.0", str(home)],
+        [sys.executable, str(server), "1.3.0", "7", str(home)],
         cwd=workspace,
         home=home,
         expected_version="1.3.0",
+        expected_protocol_version=7,
     )
 
 
@@ -793,6 +1046,7 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
         assert archive.namelist() == [
             "awesome-1.0.0/LICENSE",
             "awesome-1.0.0/VERSION",
+            "awesome-1.0.0/compatibility.json",
             "awesome-1.0.0/core/awesome_agent-1.0.0-py3-none-any.whl",
             "awesome-1.0.0/core/requirements.lock",
             "awesome-1.0.0/tui/LICENSE",
@@ -802,6 +1056,9 @@ def test_bundle_is_deterministic_and_has_exact_members(tmp_path: Path) -> None:
         ]
         assert archive.read("awesome-1.0.0/LICENSE") == MIT_LICENSE
         assert archive.read("awesome-1.0.0/tui/LICENSE") == MIT_LICENSE
+        assert archive.read("awesome-1.0.0/compatibility.json") == (
+            render_release_compatibility(tmp_path, "1.0.0")
+        )
         assert {entry.date_time for entry in archive.infolist()} == {
             (1980, 1, 1, 0, 0, 0)
         }
@@ -955,9 +1212,29 @@ def test_release_storage_contract_uses_schema_seven_migration_floor(
     contract_root = tmp_path / "storage-contract"
     verify_storage_contract(
         application_storage,
+        application_migrations,
         awesome_paths_module,
         contract_root,
+        expected_schema_floor=7,
+        expected_schema_current=8,
     )
 
     shutil.rmtree(contract_root)
     assert not contract_root.exists()
+
+
+def test_release_storage_contract_rejects_manifest_schema_drift(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(
+        release_storage_contract.StorageContractError,
+        match="schema probe",
+    ):
+        verify_storage_contract(
+            application_storage,
+            application_migrations,
+            awesome_paths_module,
+            tmp_path / "storage-contract",
+            expected_schema_floor=7,
+            expected_schema_current=9,
+        )
