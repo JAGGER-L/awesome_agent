@@ -369,6 +369,81 @@ describe("connectSurface", () => {
     await connected.close();
   });
 
+  it("preserves the first retry identity failure while another Event is queued", async () => {
+    const firstRetryBuffered = deferred();
+    const releaseSecondRetry = deferred();
+    const secondRetryReleased = deferred();
+    const launch = await options({
+      AWESOME_FAKE_CORE_THREAD: "1",
+      AWESOME_FAKE_CORE_RETRY_EVENTS: "mismatch",
+    });
+    const startSession = launch.startSession;
+    const connected = await connectSurface({
+      ...launch,
+      startSession: async (value) => {
+        const session = await startSession(value);
+        const upstreamEvents = session.rpc.events.bind(session.rpc);
+        session.rpc.events = () =>
+          (async function* controlledRetryEvents() {
+            let retryEventCount = 0;
+            for await (const event of upstreamEvents()) {
+              if (event.operation_id === "operation_retry") {
+                retryEventCount += 1;
+                if (retryEventCount === 2) {
+                  firstRetryBuffered.resolve();
+                  await releaseSecondRetry.promise;
+                  secondRetryReleased.resolve();
+                }
+              }
+              yield event;
+            }
+          })();
+        return session;
+      },
+    });
+    await hydrateCurrentThread(connected);
+    const response = await connected.request("command.execute", {
+      name: "retry",
+    });
+    if (
+      !response.ok ||
+      response.value.kind !== "result" ||
+      response.value.payload.kind !== "thread_retry"
+    ) {
+      throw new Error("Fake Core did not return a Thread retry");
+    }
+    await firstRetryBuffered.promise;
+    const payload = response.value.payload;
+    const replacement = applyThreadTransition({
+      store: connected.store,
+      transition: payload.transition,
+      expectedGeneration: 0,
+      effects: { resetCurrentFrame: () => undefined },
+    });
+    if (replacement.kind !== "replaced") {
+      throw new Error("Retry transition was unexpectedly stale");
+    }
+    expect(() =>
+      connected.activateThreadRetry?.(
+        payload.operation,
+        replacement.generation,
+      ),
+    ).toThrow();
+    expect(connected.store.getState().fatal).toMatchObject({
+      code: "thread_retry_identity_mismatch",
+    });
+
+    releaseSecondRetry.resolve();
+    await secondRetryReleased.promise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(connected.store.getState()).toMatchObject({
+      connection: "fatal",
+      fatal: { code: "thread_retry_identity_mismatch" },
+    });
+    await connected.close();
+  });
+
   it("rejects a post-activation retry Event with a different client identity", async () => {
     const connected = await connectSurface(
       await options({
@@ -552,6 +627,19 @@ async function waitFor<Value>(read: () => Value | undefined): Promise<Value> {
     await new Promise<void>((resolve) => setTimeout(resolve, 2));
   }
   throw new Error("Timed out waiting for Surface state");
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve() {
+      resolvePromise?.();
+    },
+  };
 }
 
 function oldOperationStart(): EventEnvelope {

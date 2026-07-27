@@ -97,7 +97,18 @@ export async function connectSurface(
   const reconciliationTasks = new Set<Promise<void>>();
   let retryGate: ThreadRetryGate | undefined;
   let activeRetryBinding: ThreadRetryOperation | undefined;
+  let fatalFault: Error | undefined;
   const retryEventEncoder = new TextEncoder();
+
+  const failProtocol = (
+    code: string,
+    fault: Error,
+  ): Promise<void> | undefined => {
+    if (fatalFault) return undefined;
+    fatalFault = fault;
+    store.dispatch({ type: "protocol.fatal", code, message: fault.message });
+    return session.rpc.close(fault);
+  };
 
   const reconcileTerminal = async (
     threadId: string,
@@ -147,23 +158,13 @@ export async function connectSurface(
           : new ProtocolDesynchronized(
               "Unknown terminal reconciliation failure",
             );
-      store.dispatch({
-        type: "protocol.fatal",
-        code: "terminal_reconciliation_failed",
-        message: fault.message,
-      });
-      await session.rpc.close(fault);
+      await failProtocol("terminal_reconciliation_failed", fault);
     });
     reconciliationTasks.add(task);
     void task.then(
       () => reconciliationTasks.delete(task),
       () => reconciliationTasks.delete(task),
     );
-  };
-
-  const failProtocol = (code: string, fault: ProtocolDesynchronized): void => {
-    store.dispatch({ type: "protocol.fatal", code, message: fault.message });
-    void session.rpc.close(fault);
   };
 
   const discardRetryGate = (gate: ThreadRetryGate): void => {
@@ -293,7 +294,7 @@ export async function connectSurface(
     const buffered = gate.events.splice(0, gate.events.length);
     gate.bytes = 0;
     if (identityFault) {
-      failProtocol("thread_retry_identity_mismatch", identityFault);
+      void failProtocol("thread_retry_identity_mismatch", identityFault);
       throw identityFault;
     }
     if (expected) {
@@ -304,40 +305,35 @@ export async function connectSurface(
       const failure = acceptEvent(event);
       if (!failure) continue;
       activeRetryBinding = undefined;
-      failProtocol(failure.code, failure.fault);
+      void failProtocol(failure.code, failure.fault);
       throw failure.fault;
     }
   };
 
   const eventConsumer = (async () => {
     for await (const event of session.rpc.events()) {
+      if (fatalFault) break;
       if (retryGate) {
         const fault = bufferRetryEvent(retryGate, event);
         if (fault) {
-          failProtocol("thread_retry_buffer_limit", fault);
-          await session.rpc.close(fault);
+          await failProtocol("thread_retry_buffer_limit", fault);
           break;
         }
         continue;
       }
       const failure = acceptEvent(event);
       if (failure) {
-        failProtocol(failure.code, failure.fault);
-        await session.rpc.close(failure.fault);
+        await failProtocol(failure.code, failure.fault);
         break;
       }
     }
   })()
-    .catch((error: unknown) => {
+    .catch(async (error: unknown) => {
       const fault =
         error instanceof Error
           ? error
           : new ProtocolDesynchronized("Unknown Event consumer failure");
-      store.dispatch({
-        type: "protocol.fatal",
-        code: "event_consumer_failed",
-        message: fault.message,
-      });
+      await failProtocol("event_consumer_failed", fault);
     })
     .finally(() => batcher.close());
 
@@ -432,7 +428,7 @@ export async function connectSurface(
         const fault = new ProtocolDesynchronized(
           "Thread retry response has no pending Event gate",
         );
-        failProtocol("thread_retry_gate_missing", fault);
+        void failProtocol("thread_retry_gate_missing", fault);
         throw fault;
       }
       if (
@@ -447,7 +443,7 @@ export async function connectSurface(
           "Thread retry activation identity does not match the installed transition",
         );
         discardRetryGate(gate);
-        failProtocol("thread_retry_identity_mismatch", fault);
+        void failProtocol("thread_retry_identity_mismatch", fault);
         throw fault;
       }
       releaseRetryGate(gate, generation, operation);
@@ -455,7 +451,7 @@ export async function connectSurface(
     rejectThreadRetry(message) {
       if (retryGate) discardRetryGate(retryGate);
       const fault = new ProtocolDesynchronized(message);
-      failProtocol("thread_retry_transition_rejected", fault);
+      void failProtocol("thread_retry_transition_rejected", fault);
       throw fault;
     },
     close,
