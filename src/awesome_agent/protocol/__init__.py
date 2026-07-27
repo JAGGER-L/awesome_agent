@@ -1,6 +1,6 @@
+from awesome_agent.application.contracts import PROTOCOL_VERSION, ProtocolVersion
 from awesome_agent.protocol.jsonrpc import (
     JSONRPC_VERSION,
-    PROTOCOL_VERSION,
     JsonRpcDispatcher,
     event_notification,
     jsonrpc_error,
@@ -19,6 +19,7 @@ __all__ = [
     "JsonLineWriter",
     "JsonRpcDispatcher",
     "ProtocolEventSink",
+    "ProtocolVersion",
     "event_notification",
     "jsonrpc_error",
     "serve_stdio",

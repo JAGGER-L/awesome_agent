@@ -15,6 +15,7 @@ import {
   threadSchema,
   workspacePresentationSchema,
 } from "./product-projections.js";
+import { PROTOCOL_VERSION } from "./version.js";
 
 const positiveIntegerSchema = safeIntegerSchema.min(1);
 const emptyParamsSchema = z.strictObject({});
@@ -54,7 +55,7 @@ const skillRemoveResultSchema = z.strictObject({
 });
 
 export const initializeParamsSchema = z.strictObject({
-  protocol_version: z.literal(4),
+  protocol_version: z.literal(PROTOCOL_VERSION),
   client_name: z.literal("awesome"),
   client_version: boundedText(1, 64),
 });
@@ -62,7 +63,7 @@ export const initializeParamsSchema = z.strictObject({
 export const initializeResultSchema = z
   .strictObject({
     product_version: boundedText(1, 64),
-    protocol_version: z.literal(4),
+    protocol_version: z.literal(PROTOCOL_VERSION),
     status: z.enum(["ready", "trust_required", "state_reset_required"]),
     session_id: identifierSchema,
     interaction_id: identifierSchema.optional(),

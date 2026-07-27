@@ -11,6 +11,8 @@ from pytest import MonkeyPatch
 
 import awesome_agent
 from awesome_agent.application.commands import COMMAND_OWNERS, CommandName
+from awesome_agent.application.contracts import PROTOCOL_VERSION
+from awesome_agent.protocol import PROTOCOL_VERSION as EXPORTED_PROTOCOL_VERSION
 from awesome_agent.storage import APPLICATION_SCHEMA_VERSION
 from awesome_agent.version import PRODUCT_VERSION
 
@@ -98,6 +100,16 @@ def _imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             result.add(node.module)
     return result
+
+
+def _from_imports(path: Path, module: str) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == module
+        for alias in node.names
+    }
 
 
 def test_product_entrypoints_are_python_host_and_ink_cli() -> None:
@@ -205,6 +217,71 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
     assert (TUI_ROOT / "src" / "version.ts").read_text(encoding="utf-8") == (
         'export const PRODUCT_VERSION = "1.3.0" as const;\n'
     )
+
+
+def test_protocol_version_has_application_owned_sources() -> None:
+    assert PROTOCOL_VERSION == EXPORTED_PROTOCOL_VERSION == 4
+
+    owners = {
+        path.relative_to(ROOT).as_posix()
+        for path in ROOT.rglob("*.py")
+        if any(
+            (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "PROTOCOL_VERSION"
+            )
+            or (
+                isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name)
+                    and target.id == "PROTOCOL_VERSION"
+                    for target in node.targets
+                )
+            )
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        )
+    }
+    assert owners == {"application/contracts.py"}
+
+    application_contract = "awesome_agent.application.contracts"
+    for consumer in (
+        ROOT / "application" / "composition.py",
+        ROOT / "protocol" / "jsonrpc.py",
+        REPOSITORY_ROOT / "scripts" / "generate_protocol_fixtures.py",
+    ):
+        assert "PROTOCOL_VERSION" in _from_imports(consumer, application_contract)
+
+    python_consumers = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "application" / "composition.py",
+            ROOT / "protocol" / "jsonrpc.py",
+            REPOSITORY_ROOT / "scripts" / "generate_protocol_fixtures.py",
+        )
+    )
+    assert re.search(
+        r'(?:protocol_version\s*=\s*4|["\']protocol_version["\']\s*:\s*4)',
+        python_consumers,
+    ) is None
+
+    tui_protocol_version = TUI_ROOT / "src" / "protocol" / "version.ts"
+    assert tui_protocol_version.read_text(encoding="utf-8") == (
+        "export const PROTOCOL_VERSION = 4 as const;\n"
+    )
+    methods = (TUI_ROOT / "src" / "protocol" / "methods.ts").read_text(
+        encoding="utf-8"
+    )
+    startup = (TUI_ROOT / "src" / "surface" / "startup.ts").read_text(
+        encoding="utf-8"
+    )
+    assert methods.count("z.literal(PROTOCOL_VERSION)") == 2
+    assert "protocol_version: PROTOCOL_VERSION" in startup
+    tui_production = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (TUI_ROOT / "src").rglob("*.ts")
+    )
+    assert re.search(r"\bprotocol_version\s*:\s*4\b", tui_production) is None
 
 
 def test_application_schema_identity_is_independent_from_product_version() -> None:

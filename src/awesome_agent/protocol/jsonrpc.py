@@ -17,6 +17,7 @@ from pydantic import (
 
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     InitializeParams,
     InitializeResult,
@@ -39,7 +40,6 @@ from awesome_agent.core.events import EventEnvelope
 from awesome_agent.version import PRODUCT_VERSION
 
 JSONRPC_VERSION = "2.0"
-PROTOCOL_VERSION = 4
 
 logger = logging.getLogger(__name__)
 

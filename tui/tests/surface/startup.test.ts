@@ -17,6 +17,7 @@ import type {
   MethodValue,
 } from "../../src/protocol/methods.js";
 import type { CommandSelection } from "../../src/protocol/commands.js";
+import { PROTOCOL_VERSION } from "../../src/protocol/version.js";
 import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 type Call = { method: MethodName; params: MethodParams[MethodName] };
@@ -389,7 +390,7 @@ function startupHarness({
             ok: true,
             value: {
               product_version: "0.1.0",
-              protocol_version: 4,
+              protocol_version: PROTOCOL_VERSION,
               status,
               session_id: "session_1",
               ...(status === "ready"

@@ -4,6 +4,7 @@ import type {
   MethodParams,
   MethodValue,
 } from "../protocol/methods.js";
+import { PROTOCOL_VERSION } from "../protocol/version.js";
 import type { LaunchIntent } from "../cli/args.js";
 import type { CommandOutcome, CommandSelection } from "../protocol/commands.js";
 import {
@@ -102,7 +103,7 @@ export async function beginStartup(
 ): Promise<StartupResult> {
   surface.store?.dispatch({ type: "connection.handshaking" });
   const initialized = await surface.request("initialize", {
-    protocol_version: 4,
+    protocol_version: PROTOCOL_VERSION,
     client_name: "awesome",
     client_version: PRODUCT_VERSION,
   });

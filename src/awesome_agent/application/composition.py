@@ -36,6 +36,7 @@ from awesome_agent.application.command_results import (
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.context import ApplicationContextService
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     ApplicationState,
     CancelResult,
@@ -677,7 +678,7 @@ class _LocalApplicationBackend:
             await self._flush_recovery_notifications()
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=4,
+                protocol_version=PROTOCOL_VERSION,
                 status=InitializeStatus.READY,
                 session_id=self._session_id,
                 workspace=self._workspace_presentation(include_branch=True),
@@ -756,7 +757,7 @@ class _LocalApplicationBackend:
                 )
             return InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=4,
+                protocol_version=PROTOCOL_VERSION,
                 status=InitializeStatus.TRUST_REQUIRED,
                 session_id=self._session_id,
                 interaction_id=pending.id,
@@ -766,7 +767,7 @@ class _LocalApplicationBackend:
         await self._activate_workspace()
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=4,
+            protocol_version=PROTOCOL_VERSION,
             status=InitializeStatus.READY,
             session_id=self._session_id,
             workspace=self._workspace_presentation(include_branch=True),
@@ -809,7 +810,7 @@ class _LocalApplicationBackend:
             )
         return InitializeResult(
             product_version=PRODUCT_VERSION,
-            protocol_version=4,
+            protocol_version=PROTOCOL_VERSION,
             status=InitializeStatus.STATE_RESET_REQUIRED,
             session_id=self._session_id,
             interaction_id=pending.id,

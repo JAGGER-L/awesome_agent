@@ -21,6 +21,7 @@ from awesome_agent.application.commands import (
     CommandName,
 )
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     ApplicationState,
     CancelResult,
@@ -48,7 +49,7 @@ from awesome_agent.protocol.jsonrpc import JsonRpcDispatcher
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).parents[3]
-FIXTURES = ROOT / "protocol" / "fixtures" / "v4"
+FIXTURES = ROOT / "protocol" / "fixtures" / f"v{PROTOCOL_VERSION}"
 
 
 def _load(name: str) -> dict[str, Any]:
@@ -62,7 +63,7 @@ def test_manifest_freezes_complete_protocol_inventory_and_hashes() -> None:
 
     assert manifest["fixture_version"] == 1
     assert manifest["product_version"] == PRODUCT_VERSION
-    assert manifest["protocol_version"] == 4
+    assert manifest["protocol_version"] == PROTOCOL_VERSION
     assert {"command-results.valid.json", "command-results.invalid.json"} <= set(
         manifest["files"]
     )

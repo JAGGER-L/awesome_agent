@@ -4,6 +4,7 @@ import { commandOutcomeSchema } from "../../src/protocol/commands.js";
 import { productErrorSchema } from "../../src/protocol/base.js";
 import { eventEnvelopeSchema } from "../../src/protocol/events.js";
 import { methodSchemas } from "../../src/protocol/methods.js";
+import { PROTOCOL_VERSION } from "../../src/protocol/version.js";
 import {
   applicationStateSchema,
   budgetSchema,
@@ -19,13 +20,13 @@ import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
 describe("protocol v4 handshake", () => {
   const params = {
-    protocol_version: 4,
+    protocol_version: PROTOCOL_VERSION,
     client_name: "awesome",
     client_version: PRODUCT_VERSION,
   } as const;
   const value = {
     product_version: PRODUCT_VERSION,
-    protocol_version: 4,
+    protocol_version: PROTOCOL_VERSION,
     status: "ready",
     session_id: "session_11111111111111111111111111111111",
     workspace: { display_path: "C:\\workspace" },
@@ -614,7 +615,7 @@ describe("startup state recovery protocol", () => {
         capabilities: ["threads", "turns", "commands", "web", "citations"],
         interaction_id: "interaction_state_reset",
         product_version: PRODUCT_VERSION,
-        protocol_version: 4,
+        protocol_version: PROTOCOL_VERSION,
         session_id: "session_11111111111111111111111111111111",
         status: "state_reset_required",
         workspace: { display_path: "C:\\workspace" },

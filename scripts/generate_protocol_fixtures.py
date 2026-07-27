@@ -20,6 +20,7 @@ from awesome_agent.application.commands import (
     CommandName,
 )
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     ApplicationState,
     CancelResult,
@@ -97,7 +98,7 @@ from awesome_agent.modeling import MODEL_CATALOG, ModelIdentitySnapshot
 from awesome_agent.version import PRODUCT_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "protocol" / "fixtures" / "v4"
+TARGET = ROOT / "protocol" / "fixtures" / f"v{PROTOCOL_VERSION}"
 FIXED_TIME = datetime(2026, 7, 11, 8, 0, tzinfo=UTC)
 WORKSPACE_KEY = "ws_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 THREAD_ID = "thread_11111111111111111111111111111111"
@@ -312,14 +313,14 @@ def _valid_methods() -> dict[str, object]:
             "initialize.ready",
             "initialize",
             {
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=4,
+                    protocol_version=PROTOCOL_VERSION,
                     status=InitializeStatus.READY,
                     session_id="session_11111111111111111111111111111111",
                     workspace=workspace,
@@ -331,14 +332,14 @@ def _valid_methods() -> dict[str, object]:
             "initialize.state_reset_required",
             "initialize",
             {
-                "protocol_version": 4,
+                "protocol_version": PROTOCOL_VERSION,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
             _success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=4,
+                    protocol_version=PROTOCOL_VERSION,
                     status=InitializeStatus.STATE_RESET_REQUIRED,
                     session_id="session_11111111111111111111111111111111",
                     interaction_id="interaction_state_reset",
@@ -625,7 +626,10 @@ def _invalid_methods() -> dict[str, object]:
             {
                 "name": "initialize.missing_client_version",
                 "method": "initialize",
-                "params": {"protocol_version": 4, "client_name": "awesome"},
+                "params": {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "client_name": "awesome",
+                },
                 "expected": {"kind": "jsonrpc_error", "code": -32602},
             },
             {
@@ -1827,7 +1831,7 @@ def build_files() -> dict[str, bytes]:
     manifest = {
         "fixture_version": 1,
         "product_version": PRODUCT_VERSION,
-        "protocol_version": 4,
+        "protocol_version": PROTOCOL_VERSION,
         "methods": list(METHODS),
         "event_types": [event_type.value for event_type in EventType],
         "command_owners": {

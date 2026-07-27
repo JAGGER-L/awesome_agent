@@ -13,6 +13,7 @@ from awesome_agent.application.bootstrap import BootstrapRejection
 from awesome_agent.application.command_results import CommandOutcome
 from awesome_agent.application.commands import CommandIntent
 from awesome_agent.application.contracts import (
+    PROTOCOL_VERSION,
     ApplicationResult,
     ApplicationState,
     CancelResult,
@@ -51,7 +52,7 @@ from awesome_agent.protocol.jsonrpc import (
 from awesome_agent.version import PRODUCT_VERSION
 
 INITIALIZE_PARAMS = {
-    "protocol_version": 4,
+    "protocol_version": PROTOCOL_VERSION,
     "client_name": "awesome",
     "client_version": PRODUCT_VERSION,
 }
@@ -73,7 +74,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=4,
+                protocol_version=PROTOCOL_VERSION,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -558,7 +559,7 @@ async def test_initialize_rejects_incompatible_identity_before_facade_work(
     "params",
     [
         {},
-        {"protocol_version": 4, "client_name": "awesome"},
+        {"protocol_version": PROTOCOL_VERSION, "client_name": "awesome"},
         {**INITIALIZE_PARAMS, "extra": True},
         {**INITIALIZE_PARAMS, "protocol_version": "4"},
     ],

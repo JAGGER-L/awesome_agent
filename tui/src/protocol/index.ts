@@ -6,3 +6,4 @@ export * from "./methods.js";
 export * from "./model-catalog.js";
 export * from "./product-projections.js";
 export * from "./ndjson.js";
+export * from "./version.js";

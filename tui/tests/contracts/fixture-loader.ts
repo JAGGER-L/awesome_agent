@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 
 import { z } from "zod";
 
+import { PROTOCOL_VERSION } from "../../src/protocol/version.js";
+
 const fileNames = [
   "commands.json",
   "command-results.invalid.json",
@@ -17,7 +19,7 @@ const fileNames = [
 const manifestSchema = z.strictObject({
   fixture_version: z.literal(1),
   product_version: z.string(),
-  protocol_version: z.literal(4),
+  protocol_version: z.literal(PROTOCOL_VERSION),
   methods: z.array(z.string()),
   event_types: z.array(z.string()),
   command_owners: z.record(z.string(), z.string()),
@@ -32,7 +34,7 @@ export interface FixtureCorpus {
 }
 
 export const defaultFixtureRoot = new URL(
-  "../../../protocol/fixtures/v4/",
+  `../../../protocol/fixtures/v${PROTOCOL_VERSION}/`,
   import.meta.url,
 );
 
