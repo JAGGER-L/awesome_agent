@@ -4,6 +4,7 @@ import argparse
 import os
 import sqlite3
 import stat
+import sys
 from contextlib import closing
 from pathlib import Path
 from types import ModuleType
@@ -34,6 +35,34 @@ class StorageContractError(RuntimeError):
 _MAX_INVENTORY_ENTRIES = 4_096
 _MAX_INVENTORY_FILE_BYTES = 16 * 1024 * 1024
 _MAX_INVENTORY_TOTAL_BYTES = 64 * 1024 * 1024
+_MAX_ERROR_CAUSES = 8
+
+
+def _safe_error_chain(error: Exception) -> str:
+    summaries: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and len(summaries) < _MAX_ERROR_CAUSES:
+        identity = id(current)
+        if identity in seen:
+            summaries.append("cycle")
+            break
+        seen.add(identity)
+        name = type(current).__name__
+        if isinstance(current, StorageContractError):
+            message = "".join(
+                character if character.isprintable() else "?"
+                for character in str(current)
+            )
+            summaries.append(f"{name}: {message}")
+        elif isinstance(current, OSError):
+            summaries.append(f"{name}(errno={current.errno})")
+        else:
+            summaries.append(name)
+        current = current.__cause__ or current.__context__
+    if current is not None and len(summaries) >= _MAX_ERROR_CAUSES:
+        summaries.append("truncated")
+    return " <- ".join(summaries)
 
 
 def _verify_schema_8(connection: sqlite3.Connection) -> None:
@@ -619,14 +648,18 @@ def main() -> int:
     version = cast(_VersionModule, version_module).PRODUCT_VERSION
     if version != arguments.expected_version:
         raise StorageContractError("installed wheel product version is invalid")
-    verify_storage_contract(
-        storage_module,
-        migrations_module,
-        paths_module,
-        arguments.contract_root,
-        expected_schema_floor=arguments.expected_schema_floor,
-        expected_schema_current=arguments.expected_schema_current,
-    )
+    try:
+        verify_storage_contract(
+            storage_module,
+            migrations_module,
+            paths_module,
+            arguments.contract_root,
+            expected_schema_floor=arguments.expected_schema_floor,
+            expected_schema_current=arguments.expected_schema_current,
+        )
+    except Exception as error:
+        print(f"storage contract failed: {_safe_error_chain(error)}", file=sys.stderr)
+        return 1
     return 0
 
 

@@ -797,6 +797,62 @@ def test_core_check_keeps_failure_output_private_by_default(
         )
 
 
+def test_storage_contract_error_chain_reports_only_controlled_details() -> None:
+    try:
+        raise OSError(22, "private path C:/secret")
+    except OSError as cause:
+        try:
+            raise RuntimeError("private wrapper detail") from cause
+        except RuntimeError as error:
+            summary = release_storage_contract._safe_error_chain(error)
+
+    assert summary == "RuntimeError <- OSError(errno=22)"
+    assert "private" not in summary
+    assert "secret" not in summary
+
+
+def test_storage_contract_error_chain_keeps_fixed_contract_message() -> None:
+    error = release_storage_contract.StorageContractError(
+        "fresh database schema is invalid\nsecond line"
+    )
+
+    assert release_storage_contract._safe_error_chain(error) == (
+        "StorageContractError: fresh database schema is invalid?second line"
+    )
+
+
+def test_storage_contract_cli_reports_safe_cause_chain(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        try:
+            raise OSError(22, "private path C:/secret")
+        except OSError as cause:
+            raise RuntimeError("private wrapper detail") from cause
+
+    monkeypatch.setattr(release_storage_contract, "verify_storage_contract", fail)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "storage_contract.py",
+            (ROOT / "VERSION").read_text(encoding="utf-8").strip(),
+            "7",
+            "8",
+            str(ROOT),
+            str(tmp_path / "contract"),
+        ],
+    )
+
+    assert release_storage_contract.main() == 1
+    assert capsys.readouterr().err == (
+        "storage contract failed: RuntimeError <- OSError(errno=22)\n"
+    )
+
+
 def test_installed_storage_contract_rejects_editable_environment_fallback(
     tmp_path: Path,
 ) -> None:
