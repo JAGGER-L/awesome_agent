@@ -1142,6 +1142,121 @@ def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
 
 
 @pytest.mark.parametrize(
+    ("identifier", "stage"),
+    [(1, "initialize"), (2, "trust"), (3, "state"), (4, "shutdown")],
+)
+def test_protocol_smoke_reports_allowlisted_application_failure(
+    identifier: int,
+    stage: str,
+) -> None:
+    secret = "private-value-never-render"
+    response = {
+        "jsonrpc": "2.0",
+        "id": identifier,
+        "result": {
+            "ok": False,
+            "error": {
+                "code": "state_unavailable",
+                "message": secret,
+                "data": {
+                    "diagnostic_code": "transaction_failed",
+                    "path": secret,
+                },
+            },
+        },
+    }
+
+    with pytest.raises(BundleVerificationError) as raised:
+        release_verifier._successful_protocol_value(
+            response,
+            identifier=identifier,
+        )
+
+    assert str(raised.value) == (
+        f"{release_verifier._CORE_PROTOCOL_DIAGNOSTIC_PREFIX}"
+        f"{stage}>application_error>state_unavailable>transaction_failed"
+    )
+    assert secret not in str(raised.value)
+
+
+def test_protocol_smoke_distinguishes_sanitized_jsonrpc_failure() -> None:
+    secret = "private-value-never-render"
+    response = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+            "code": -32603,
+            "message": secret,
+            "data": {
+                "diagnostic_code": "core_request_failed",
+                "path": secret,
+            },
+        },
+    }
+
+    with pytest.raises(BundleVerificationError) as raised:
+        release_verifier._successful_protocol_value(response, identifier=2)
+
+    assert str(raised.value) == (
+        f"{release_verifier._CORE_PROTOCOL_DIAGNOSTIC_PREFIX}"
+        "trust>jsonrpc_error>internal_error>core_request_failed"
+    )
+    assert secret not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("response", "diagnostic"),
+    [
+        (
+            {
+                "result": {"ok": True, "value": {}},
+                "error": {"code": -32603, "message": "private"},
+            },
+            "trust>response_invalid",
+        ),
+        (
+            {
+                "result": {
+                    "ok": False,
+                    "error": {
+                        "code": "private-error\nvalue",
+                        "message": "private",
+                        "data": {"diagnostic_code": "private-diagnostic"},
+                    },
+                }
+            },
+            "trust>application_error>unknown",
+        ),
+    ],
+    ids=("mixed-response", "unknown-product-error"),
+)
+def test_protocol_smoke_rejects_invalid_or_unknown_failures_without_echoing(
+    response: Mapping[str, object],
+    diagnostic: str,
+) -> None:
+    with pytest.raises(BundleVerificationError) as raised:
+        release_verifier._successful_protocol_value(response, identifier=2)
+
+    assert str(raised.value) == (
+        f"{release_verifier._CORE_PROTOCOL_DIAGNOSTIC_PREFIX}{diagnostic}"
+    )
+    assert "private" not in str(raised.value)
+    assert "\n" not in str(raised.value)
+
+
+def test_protocol_diagnostic_product_codes_cover_v4_contract() -> None:
+    fixture = json.loads(
+        (ROOT / "protocol" / "fixtures" / "v4" / "results.failures.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert {
+        case["code"] for case in fixture["cases"]
+    } == release_verifier._SAFE_PRODUCT_ERROR_CODES
+
+
+@pytest.mark.parametrize(
     ("frame", "diagnostic"),
     [
         (
