@@ -2739,6 +2739,7 @@ class _LocalApplicationBackend:
                 workspace_path=self._workspace.display_path,
                 registry=registry,
                 permission_session=self._permission_session,
+                current_thread_id=lambda: commands.current_thread_id,
                 status_reader=self._command_status_snapshot,
                 usage_reader=self._command_usage,
                 credential_statuses=lambda: (

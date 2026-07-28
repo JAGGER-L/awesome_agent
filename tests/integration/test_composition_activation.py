@@ -21,6 +21,7 @@ from awesome_agent.application.command_results import (
     CommandError,
     CommandOutcome,
     CommandResult,
+    ToolCatalogCommandPayload,
     WebStatusCommandPayload,
 )
 from awesome_agent.application.commands import CommandIntent, CommandName
@@ -1593,7 +1594,24 @@ async def test_web_runtime_registers_both_tools_and_retires_managed_client(
             ("web_fetch", "web_search"),
             (web_fetch, web_search),
         )
-    backend._permission_session.grant_thread_network("thread_test")
+    created = await application.execute_command(CommandIntent(name=CommandName.NEW))
+    assert created.ok is True
+    assert first_runtime.commands.current_thread_id is not None
+    backend._permission_session.grant_thread_network(
+        first_runtime.commands.current_thread_id
+    )
+
+    tools = await application.execute_command(CommandIntent(name=CommandName.TOOLS))
+    assert tools.ok is True
+    assert isinstance(tools.value, CommandResult)
+    assert isinstance(tools.value.payload, ToolCatalogCommandPayload)
+    web_tools = {
+        item.name: item
+        for item in tools.value.payload.tools
+        if item.name in {"web_fetch", "web_search"}
+    }
+    assert set(web_tools) == {"web_fetch", "web_search"}
+    assert all(not item.approval_required for item in web_tools.values())
 
     status = await application.execute_command(
         CommandIntent(name=CommandName.WEB, arguments=("status",))

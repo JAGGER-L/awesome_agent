@@ -34,6 +34,7 @@ type StatusReader = Callable[[], Awaitable[StatusSnapshot | None]]
 type UsageReader = Callable[[], Awaitable[UsageSummary | None]]
 type ProviderDoctor = Callable[[], Awaitable[dict[str, str]]]
 type ReadinessReader = Callable[[], Awaitable[bool | None]]
+type CurrentThreadIdReader = Callable[[], str | None]
 type WorkspaceInstructionDiagnosticReader = Callable[
     [], WorkspaceInstructionDiagnostic | None
 ]
@@ -48,6 +49,7 @@ class DiagnosticCommandService:
         workspace_path: Path,
         registry: ToolRegistry,
         permission_session: PermissionSession,
+        current_thread_id: CurrentThreadIdReader,
         status_reader: StatusReader,
         usage_reader: UsageReader,
         credential_statuses: Callable[[], ProviderCredentialStatuses],
@@ -60,6 +62,7 @@ class DiagnosticCommandService:
         self._workspace_path = workspace_path
         self._registry = registry
         self._permission_session = permission_session
+        self._current_thread_id = current_thread_id
         self._status_reader = status_reader
         self._usage_reader = usage_reader
         self._credential_statuses = credential_statuses
@@ -80,6 +83,10 @@ class DiagnosticCommandService:
             return error("invalid_arguments", "Usage: /tools")
         mode = self._permission_session.mode
         granted = frozenset(self._permission_session.granted_capabilities)
+        thread_id = self._current_thread_id()
+        granted_thread_capabilities = (
+            self._permission_session.thread_granted_capabilities
+        )
         return result(
             ToolCatalogCommandPayload(
                 permission_mode=mode,
@@ -94,6 +101,10 @@ class DiagnosticCommandService:
                                     capability=spec.capability,
                                     mode=mode,
                                     granted_capabilities=granted,
+                                    thread_id=thread_id,
+                                    granted_thread_capabilities=(
+                                        granted_thread_capabilities
+                                    ),
                                 )
                             ).action
                             is PolicyAction.ASK
