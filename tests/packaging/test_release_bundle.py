@@ -748,7 +748,7 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
         core / ".protocol-workspace",
         core / ".protocol-home",
         "1.0.0",
-        4,
+        5,
     )
 
 
