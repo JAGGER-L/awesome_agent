@@ -1326,7 +1326,7 @@ def test_process_runner_kills_command_tree_when_core_is_sigkilled(
         env=dict(os.environ),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
         text=True,
     )
     command_pid: int | None = None
