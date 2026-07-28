@@ -47,6 +47,7 @@ class BundleVerificationError(RuntimeError):
 
 _MAX_CHECKSUM_MANIFEST_BYTES = 4 * 1024
 _MAX_PROTOCOL_FRAME_BYTES = 1024 * 1024
+_MAX_PROTOCOL_FRAMES = 64
 _PROTOCOL_RESPONSE_TIMEOUT_SECONDS = 20.0
 _CORE_EXIT_TIMEOUT_SECONDS = 10.0
 _CORE_PROTOCOL_DIAGNOSTIC_PREFIX = "AWESOME_CORE_PROTOCOL_DIAGNOSTIC_V1:"
@@ -305,9 +306,14 @@ def _protocol_response(
     frames: queue.Queue[bytes | None],
     *,
     identifier: int,
+    overflow: threading.Event | None = None,
 ) -> Mapping[str, object]:
     deadline = time.monotonic() + _PROTOCOL_RESPONSE_TIMEOUT_SECONDS
-    for _ in range(64):
+    for _ in range(_MAX_PROTOCOL_FRAMES):
+        if overflow is not None and overflow.is_set():
+            raise BundleVerificationError(
+                "installed Core emitted too many unsolicited frames"
+            )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise BundleVerificationError("installed Core protocol response timed out")
@@ -317,6 +323,10 @@ def _protocol_response(
             raise BundleVerificationError(
                 "installed Core protocol response timed out"
             ) from error
+        if overflow is not None and overflow.is_set():
+            raise BundleVerificationError(
+                "installed Core emitted too many unsolicited frames"
+            )
         if raw is None:
             raise BundleVerificationError("installed Core protocol closed early")
         if len(raw) > _MAX_PROTOCOL_FRAME_BYTES + 1 or not raw.endswith(b"\n"):
@@ -342,18 +352,22 @@ def _successful_protocol_value(
     *,
     identifier: int,
 ) -> Mapping[str, object]:
-    if "error" in response:
-        if "result" in response:
-            _raise_protocol_diagnostic(identifier, "response_invalid")
+    response_keys = set(response)
+    if response_keys == {"jsonrpc", "id", "error"}:
         error = response.get("error")
-        if not isinstance(error, dict):
+        if (
+            not isinstance(error, dict)
+            or not {"code", "message"} <= set(error)
+            or set(error) - {"code", "message", "data"}
+            or type(error.get("code")) is not int
+            or not isinstance(error.get("message"), str)
+            or not error["message"]
+            or ("data" in error and not isinstance(error.get("data"), dict))
+        ):
             _raise_protocol_diagnostic(identifier, "response_invalid")
         raw_code = error.get("code")
-        code = (
-            _SAFE_JSONRPC_ERROR_CODES.get(raw_code, "unknown")
-            if type(raw_code) is int
-            else "unknown"
-        )
+        assert type(raw_code) is int
+        code = _SAFE_JSONRPC_ERROR_CODES.get(raw_code, "unknown")
         diagnostic_code = _safe_protocol_diagnostic_code(error.get("data"))
         _raise_protocol_diagnostic(
             identifier,
@@ -361,12 +375,26 @@ def _successful_protocol_value(
             code,
             diagnostic_code,
         )
+    if response_keys != {"jsonrpc", "id", "result"}:
+        _raise_protocol_diagnostic(identifier, "response_invalid")
     result = response.get("result")
     if not isinstance(result, dict):
         _raise_protocol_diagnostic(identifier, "response_invalid")
     if result.get("ok") is False:
+        if set(result) != {"ok", "error"}:
+            _raise_protocol_diagnostic(identifier, "response_invalid")
         error = result.get("error")
-        raw_code = error.get("code") if isinstance(error, dict) else None
+        if (
+            not isinstance(error, dict)
+            or set(error) != {"code", "message", "retryable", "data"}
+            or not isinstance(error.get("code"), str)
+            or not isinstance(error.get("message"), str)
+            or not error["message"]
+            or type(error.get("retryable")) is not bool
+            or not isinstance(error.get("data"), dict)
+        ):
+            _raise_protocol_diagnostic(identifier, "response_invalid")
+        raw_code = error.get("code")
         code = (
             raw_code
             if isinstance(raw_code, str) and raw_code in _SAFE_PRODUCT_ERROR_CODES
@@ -381,7 +409,7 @@ def _successful_protocol_value(
             code,
             diagnostic_code,
         )
-    if result.get("ok") is not True:
+    if result.get("ok") is not True or set(result) != {"ok", "value"}:
         _raise_protocol_diagnostic(identifier, "response_invalid")
     value = result.get("value")
     if not isinstance(value, dict):
@@ -418,19 +446,33 @@ def _raise_protocol_diagnostic(
 def _pump_protocol_frames(
     stream: object,
     frames: queue.Queue[bytes | None],
+    overflow: threading.Event,
 ) -> None:
     reader = getattr(stream, "readline", None)
     if not callable(reader):
-        frames.put(None)
+        _queue_protocol_frame(frames, None, overflow)
         return
     try:
         while True:
             line = reader(_MAX_PROTOCOL_FRAME_BYTES + 2)
             if not isinstance(line, bytes) or not line:
                 break
-            frames.put(line)
+            _queue_protocol_frame(frames, line, overflow)
     finally:
-        frames.put(None)
+        _queue_protocol_frame(frames, None, overflow)
+
+
+def _queue_protocol_frame(
+    frames: queue.Queue[bytes | None],
+    frame: bytes | None,
+    overflow: threading.Event,
+) -> None:
+    if overflow.is_set():
+        return
+    try:
+        frames.put_nowait(frame)
+    except queue.Full:
+        overflow.set()
 
 
 def _stop_protocol_process(process: subprocess.Popen[bytes]) -> None:
@@ -496,14 +538,15 @@ def _verify_core_protocol_handshake(
             "installed Core protocol did not start"
         ) from error
 
-    frames: queue.Queue[bytes | None] = queue.Queue()
+    frames: queue.Queue[bytes | None] = queue.Queue(maxsize=_MAX_PROTOCOL_FRAMES)
+    overflow = threading.Event()
     output = process.stdout
     if output is None:
         _stop_protocol_process(process)
         raise BundleVerificationError("installed Core protocol output is unavailable")
     reader = threading.Thread(
         target=_pump_protocol_frames,
-        args=(output, frames),
+        args=(output, frames, overflow),
         name="release-core-protocol-reader",
         daemon=True,
     )
@@ -521,7 +564,7 @@ def _verify_core_protocol_handshake(
             },
         )
         initialized = _successful_protocol_value(
-            _protocol_response(frames, identifier=1),
+            _protocol_response(frames, identifier=1, overflow=overflow),
             identifier=1,
         )
         if (
@@ -541,7 +584,7 @@ def _verify_core_protocol_handshake(
             params={"interaction_id": interaction_id, "decision": "trust"},
         )
         trusted = _successful_protocol_value(
-            _protocol_response(frames, identifier=2),
+            _protocol_response(frames, identifier=2, overflow=overflow),
             identifier=2,
         )
         if trusted.get("accepted") is not True or trusted.get("status") != "resolved":
@@ -556,7 +599,7 @@ def _verify_core_protocol_handshake(
             params={},
         )
         state = _successful_protocol_value(
-            _protocol_response(frames, identifier=3),
+            _protocol_response(frames, identifier=3, overflow=overflow),
             identifier=3,
         )
         if (
@@ -572,7 +615,7 @@ def _verify_core_protocol_handshake(
             params={},
         )
         stopped = _successful_protocol_value(
-            _protocol_response(frames, identifier=4),
+            _protocol_response(frames, identifier=4, overflow=overflow),
             identifier=4,
         )
         if stopped.get("stopped") is not True:

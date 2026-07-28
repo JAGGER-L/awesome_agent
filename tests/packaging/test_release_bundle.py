@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+import threading
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -1175,6 +1176,7 @@ def test_protocol_smoke_reports_allowlisted_application_failure(
             "error": {
                 "code": "state_unavailable",
                 "message": secret,
+                "retryable": True,
                 "data": {
                     "diagnostic_code": "transaction_failed",
                     "path": secret,
@@ -1226,6 +1228,8 @@ def test_protocol_smoke_distinguishes_sanitized_jsonrpc_failure() -> None:
     [
         (
             {
+                "jsonrpc": "2.0",
+                "id": 2,
                 "result": {"ok": True, "value": {}},
                 "error": {"code": -32603, "message": "private"},
             },
@@ -1233,19 +1237,56 @@ def test_protocol_smoke_distinguishes_sanitized_jsonrpc_failure() -> None:
         ),
         (
             {
+                "jsonrpc": "2.0",
+                "id": 2,
                 "result": {
                     "ok": False,
                     "error": {
                         "code": "private-error\nvalue",
                         "message": "private",
+                        "retryable": False,
                         "data": {"diagnostic_code": "private-diagnostic"},
                     },
-                }
+                },
             },
             "trust>application_error>unknown",
         ),
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "ok": True,
+                    "value": {},
+                    "error": {"message": "private"},
+                },
+            },
+            "trust>response_invalid",
+        ),
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"ok": False},
+            },
+            "trust>response_invalid",
+        ),
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "error": {"code": -32603},
+            },
+            "trust>response_invalid",
+        ),
     ],
-    ids=("mixed-response", "unknown-product-error"),
+    ids=(
+        "mixed-response",
+        "unknown-product-error",
+        "mixed-application-success",
+        "missing-application-error",
+        "invalid-jsonrpc-error",
+    ),
 )
 def test_protocol_smoke_rejects_invalid_or_unknown_failures_without_echoing(
     response: Mapping[str, object],
@@ -1301,6 +1342,26 @@ def test_protocol_smoke_timeout_is_bounded(monkeypatch: pytest.MonkeyPatch) -> N
 
     with pytest.raises(BundleVerificationError, match="timed out"):
         release_verifier._protocol_response(queue.Queue(), identifier=1)
+
+
+def test_protocol_smoke_frame_queue_is_bounded() -> None:
+    frames: queue.Queue[bytes | None] = queue.Queue(maxsize=2)
+    overflow = threading.Event()
+
+    release_verifier._pump_protocol_frames(
+        io.BytesIO(b"{}\n{}\n{}\n"),
+        frames,
+        overflow,
+    )
+
+    assert frames.qsize() == 2
+    assert overflow.is_set()
+    with pytest.raises(BundleVerificationError, match="too many unsolicited frames"):
+        release_verifier._protocol_response(
+            frames,
+            identifier=1,
+            overflow=overflow,
+        )
 
 
 @pytest.mark.parametrize(
