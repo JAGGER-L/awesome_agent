@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
+from typing import Never
 from zipfile import ZipFile
 
 if __package__ in {None, ""}:
@@ -46,8 +47,57 @@ class BundleVerificationError(RuntimeError):
 
 _MAX_CHECKSUM_MANIFEST_BYTES = 4 * 1024
 _MAX_PROTOCOL_FRAME_BYTES = 1024 * 1024
+_MAX_PROTOCOL_FRAMES = 64
 _PROTOCOL_RESPONSE_TIMEOUT_SECONDS = 20.0
 _CORE_EXIT_TIMEOUT_SECONDS = 10.0
+_CORE_PROTOCOL_DIAGNOSTIC_PREFIX = "AWESOME_CORE_PROTOCOL_DIAGNOSTIC_V1:"
+_CORE_PROTOCOL_STAGES = {
+    1: "initialize",
+    2: "trust",
+    3: "state",
+    4: "shutdown",
+}
+_SAFE_JSONRPC_ERROR_CODES = {
+    -32700: "parse_error",
+    -32600: "invalid_request",
+    -32601: "method_not_found",
+    -32602: "invalid_params",
+    -32603: "internal_error",
+}
+_SAFE_PRODUCT_ERROR_CODES = frozenset(
+    {
+        "configuration_invalid",
+        "workspace_not_trusted",
+        "thread_not_found",
+        "turn_not_found",
+        "turn_busy",
+        "operation_busy",
+        "model_not_configured",
+        "provider_not_configured",
+        "invalid_arguments",
+        "command_not_available",
+        "result_too_large",
+        "checkpoint_missing",
+        "checkpoint_corrupt",
+        "recovery_required",
+        "client_version_incompatible",
+        "protocol_version_incompatible",
+        "state_created_by_newer_version",
+        "state_unknown",
+        "state_unavailable",
+        "state_reset_busy",
+        "state_reset_failed",
+        "internal_error",
+    }
+)
+_SAFE_PRODUCT_DIAGNOSTIC_CODES = frozenset(
+    {
+        "core_request_failed",
+        "preinitialize_operation_in_progress",
+        "server_not_initialized",
+        "transaction_failed",
+    }
+)
 
 
 def _reject_non_json_constant(value: str) -> None:
@@ -256,9 +306,14 @@ def _protocol_response(
     frames: queue.Queue[bytes | None],
     *,
     identifier: int,
+    overflow: threading.Event | None = None,
 ) -> Mapping[str, object]:
     deadline = time.monotonic() + _PROTOCOL_RESPONSE_TIMEOUT_SECONDS
-    for _ in range(64):
+    for _ in range(_MAX_PROTOCOL_FRAMES):
+        if overflow is not None and overflow.is_set():
+            raise BundleVerificationError(
+                "installed Core emitted too many unsolicited frames"
+            )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise BundleVerificationError("installed Core protocol response timed out")
@@ -268,6 +323,10 @@ def _protocol_response(
             raise BundleVerificationError(
                 "installed Core protocol response timed out"
             ) from error
+        if overflow is not None and overflow.is_set():
+            raise BundleVerificationError(
+                "installed Core emitted too many unsolicited frames"
+            )
         if raw is None:
             raise BundleVerificationError("installed Core protocol closed early")
         if len(raw) > _MAX_PROTOCOL_FRAME_BYTES + 1 or not raw.endswith(b"\n"):
@@ -282,7 +341,8 @@ def _protocol_response(
             raise BundleVerificationError("installed Core protocol frame is invalid")
         if decoded.get("method") == "event":
             continue
-        if decoded.get("id") != identifier:
+        response_id = decoded.get("id")
+        if type(response_id) is not int or response_id != identifier:
             raise BundleVerificationError("installed Core protocol response is invalid")
         return decoded
     raise BundleVerificationError("installed Core emitted too many unsolicited frames")
@@ -290,32 +350,135 @@ def _protocol_response(
 
 def _successful_protocol_value(
     response: Mapping[str, object],
+    *,
+    identifier: int,
 ) -> Mapping[str, object]:
+    response_keys = set(response)
+    if response_keys == {"jsonrpc", "id", "error"}:
+        error = response.get("error")
+        if (
+            not isinstance(error, dict)
+            or not {"code", "message"} <= set(error)
+            or set(error) - {"code", "message", "data"}
+            or type(error.get("code")) is not int
+            or not isinstance(error.get("message"), str)
+            or not error["message"]
+            or ("data" in error and not isinstance(error.get("data"), dict))
+        ):
+            _raise_protocol_diagnostic(identifier, "response_invalid")
+        raw_code = error.get("code")
+        assert type(raw_code) is int
+        code = _SAFE_JSONRPC_ERROR_CODES.get(raw_code, "unknown")
+        diagnostic_code = _safe_protocol_diagnostic_code(error.get("data"))
+        _raise_protocol_diagnostic(
+            identifier,
+            "jsonrpc_error",
+            code,
+            diagnostic_code,
+        )
+    if response_keys != {"jsonrpc", "id", "result"}:
+        _raise_protocol_diagnostic(identifier, "response_invalid")
     result = response.get("result")
-    if not isinstance(result, dict) or result.get("ok") is not True:
-        raise BundleVerificationError("installed Core protocol request was rejected")
+    if not isinstance(result, dict):
+        _raise_protocol_diagnostic(identifier, "response_invalid")
+    if result.get("ok") is False:
+        if set(result) != {"ok", "error"}:
+            _raise_protocol_diagnostic(identifier, "response_invalid")
+        error = result.get("error")
+        if (
+            not isinstance(error, dict)
+            or set(error) != {"code", "message", "retryable", "data"}
+            or not isinstance(error.get("code"), str)
+            or not isinstance(error.get("message"), str)
+            or not error["message"]
+            or type(error.get("retryable")) is not bool
+            or not isinstance(error.get("data"), dict)
+        ):
+            _raise_protocol_diagnostic(identifier, "response_invalid")
+        raw_code = error.get("code")
+        code = (
+            raw_code
+            if isinstance(raw_code, str) and raw_code in _SAFE_PRODUCT_ERROR_CODES
+            else "unknown"
+        )
+        diagnostic_code = _safe_protocol_diagnostic_code(
+            error.get("data") if isinstance(error, dict) else None
+        )
+        _raise_protocol_diagnostic(
+            identifier,
+            "application_error",
+            code,
+            diagnostic_code,
+        )
+    if result.get("ok") is not True or set(result) != {"ok", "value"}:
+        _raise_protocol_diagnostic(identifier, "response_invalid")
     value = result.get("value")
     if not isinstance(value, dict):
-        raise BundleVerificationError("installed Core protocol response is invalid")
+        _raise_protocol_diagnostic(identifier, "response_invalid")
     return value
+
+
+def _safe_protocol_diagnostic_code(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    code = value.get("diagnostic_code")
+    if isinstance(code, str) and code in _SAFE_PRODUCT_DIAGNOSTIC_CODES:
+        return code
+    return None
+
+
+def _raise_protocol_diagnostic(
+    identifier: int,
+    category: str,
+    code: str | None = None,
+    diagnostic_code: str | None = None,
+) -> Never:
+    stage = _CORE_PROTOCOL_STAGES.get(identifier, "unknown")
+    components = [stage, category]
+    if code is not None:
+        components.append(code)
+    if diagnostic_code is not None:
+        components.append(diagnostic_code)
+    raise BundleVerificationError(
+        f"{_CORE_PROTOCOL_DIAGNOSTIC_PREFIX}{'>'.join(components)}"
+    )
 
 
 def _pump_protocol_frames(
     stream: object,
     frames: queue.Queue[bytes | None],
+    overflow: threading.Event,
 ) -> None:
     reader = getattr(stream, "readline", None)
     if not callable(reader):
-        frames.put(None)
+        _queue_protocol_end(frames)
         return
     try:
         while True:
             line = reader(_MAX_PROTOCOL_FRAME_BYTES + 2)
             if not isinstance(line, bytes) or not line:
                 break
-            frames.put(line)
+            _queue_protocol_frame(frames, line, overflow)
     finally:
-        frames.put(None)
+        _queue_protocol_end(frames)
+
+
+def _queue_protocol_frame(
+    frames: queue.Queue[bytes | None],
+    frame: bytes | None,
+    overflow: threading.Event,
+) -> None:
+    if overflow.is_set():
+        return
+    try:
+        frames.put_nowait(frame)
+    except queue.Full:
+        overflow.set()
+
+
+def _queue_protocol_end(frames: queue.Queue[bytes | None]) -> None:
+    with suppress(queue.Full):
+        frames.put_nowait(None)
 
 
 def _stop_protocol_process(process: subprocess.Popen[bytes]) -> None:
@@ -345,6 +508,13 @@ def _verify_core_protocol_handshake(
 ) -> None:
     cwd.mkdir(parents=True, exist_ok=False)
     home.mkdir(parents=True, exist_ok=False)
+    try:
+        resolved_cwd = cwd.resolve(strict=True)
+        resolved_home = home.resolve(strict=True)
+    except OSError as error:
+        raise BundleVerificationError(
+            "installed Core protocol directories are unavailable"
+        ) from error
     excluded = {
         "DEEPSEEK_API_KEY",
         "MOONSHOT_API_KEY",
@@ -358,12 +528,12 @@ def _verify_core_protocol_handshake(
         for name, value in os.environ.items()
         if name not in excluded and not name.startswith("AWESOME_")
     }
-    environment["AWESOME_HOME"] = str(home)
+    environment["AWESOME_HOME"] = str(resolved_home)
     environment["PYTHONUTF8"] = "1"
     try:
         process = subprocess.Popen(
             list(command),
-            cwd=cwd,
+            cwd=resolved_cwd,
             env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -374,14 +544,15 @@ def _verify_core_protocol_handshake(
             "installed Core protocol did not start"
         ) from error
 
-    frames: queue.Queue[bytes | None] = queue.Queue()
+    frames: queue.Queue[bytes | None] = queue.Queue(maxsize=_MAX_PROTOCOL_FRAMES)
+    overflow = threading.Event()
     output = process.stdout
     if output is None:
         _stop_protocol_process(process)
         raise BundleVerificationError("installed Core protocol output is unavailable")
     reader = threading.Thread(
         target=_pump_protocol_frames,
-        args=(output, frames),
+        args=(output, frames, overflow),
         name="release-core-protocol-reader",
         daemon=True,
     )
@@ -399,7 +570,8 @@ def _verify_core_protocol_handshake(
             },
         )
         initialized = _successful_protocol_value(
-            _protocol_response(frames, identifier=1)
+            _protocol_response(frames, identifier=1, overflow=overflow),
+            identifier=1,
         )
         if (
             initialized.get("protocol_version") != expected_protocol_version
@@ -417,7 +589,10 @@ def _verify_core_protocol_handshake(
             method="interaction.respond",
             params={"interaction_id": interaction_id, "decision": "trust"},
         )
-        trusted = _successful_protocol_value(_protocol_response(frames, identifier=2))
+        trusted = _successful_protocol_value(
+            _protocol_response(frames, identifier=2, overflow=overflow),
+            identifier=2,
+        )
         if trusted.get("accepted") is not True or trusted.get("status") != "resolved":
             raise BundleVerificationError(
                 "installed Core trust interaction was not resolved"
@@ -429,7 +604,10 @@ def _verify_core_protocol_handshake(
             method="application.getState",
             params={},
         )
-        state = _successful_protocol_value(_protocol_response(frames, identifier=3))
+        state = _successful_protocol_value(
+            _protocol_response(frames, identifier=3, overflow=overflow),
+            identifier=3,
+        )
         if (
             state.get("initialized") is not True
             or state.get("workspace_trusted") is not True
@@ -442,7 +620,10 @@ def _verify_core_protocol_handshake(
             method="shutdown",
             params={},
         )
-        stopped = _successful_protocol_value(_protocol_response(frames, identifier=4))
+        stopped = _successful_protocol_value(
+            _protocol_response(frames, identifier=4, overflow=overflow),
+            identifier=4,
+        )
         if stopped.get("stopped") is not True:
             raise BundleVerificationError(
                 "installed Core shutdown was not acknowledged"

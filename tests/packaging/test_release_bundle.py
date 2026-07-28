@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+import threading
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -1071,8 +1072,12 @@ def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
     tmp_path: Path,
 ) -> None:
     server = tmp_path / "fake_core.py"
-    home = tmp_path / "isolated-home"
-    workspace = tmp_path / "isolated-workspace"
+    lexical_anchor = tmp_path / "lexical-anchor"
+    lexical_anchor.mkdir()
+    home = lexical_anchor / ".." / "isolated-home"
+    workspace = lexical_anchor / ".." / "isolated-workspace"
+    resolved_home = tmp_path / "isolated-home"
+    resolved_workspace = tmp_path / "isolated-workspace"
     server.write_text(
         textwrap.dedent(
             """
@@ -1080,9 +1085,15 @@ def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
             import os
             import sys
 
-            expected_version, protocol_version, expected_home = sys.argv[1:]
+            (
+                expected_version,
+                protocol_version,
+                expected_home,
+                expected_workspace,
+            ) = sys.argv[1:]
             protocol_version = int(protocol_version)
             assert os.environ["AWESOME_HOME"] == expected_home
+            assert os.path.normcase(os.getcwd()) == os.path.normcase(expected_workspace)
             assert "DEEPSEEK_API_KEY" not in os.environ
             assert "MOONSHOT_API_KEY" not in os.environ
             assert "MEM0_API_KEY" not in os.environ
@@ -1133,12 +1144,174 @@ def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
     )
 
     release_verifier._verify_core_protocol_handshake(
-        [sys.executable, str(server), "1.3.0", "7", str(home)],
+        [
+            sys.executable,
+            str(server),
+            "1.3.0",
+            "7",
+            str(resolved_home),
+            str(resolved_workspace),
+        ],
         cwd=workspace,
         home=home,
         expected_version="1.3.0",
         expected_protocol_version=7,
     )
+
+
+@pytest.mark.parametrize(
+    ("identifier", "stage"),
+    [(1, "initialize"), (2, "trust"), (3, "state"), (4, "shutdown")],
+)
+def test_protocol_smoke_reports_allowlisted_application_failure(
+    identifier: int,
+    stage: str,
+) -> None:
+    secret = "private-value-never-render"
+    response = {
+        "jsonrpc": "2.0",
+        "id": identifier,
+        "result": {
+            "ok": False,
+            "error": {
+                "code": "state_unavailable",
+                "message": secret,
+                "retryable": True,
+                "data": {
+                    "diagnostic_code": "transaction_failed",
+                    "path": secret,
+                },
+            },
+        },
+    }
+
+    with pytest.raises(BundleVerificationError) as raised:
+        release_verifier._successful_protocol_value(
+            response,
+            identifier=identifier,
+        )
+
+    assert str(raised.value) == (
+        f"{release_verifier._CORE_PROTOCOL_DIAGNOSTIC_PREFIX}"
+        f"{stage}>application_error>state_unavailable>transaction_failed"
+    )
+    assert secret not in str(raised.value)
+
+
+def test_protocol_smoke_distinguishes_sanitized_jsonrpc_failure() -> None:
+    secret = "private-value-never-render"
+    response = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+            "code": -32603,
+            "message": secret,
+            "data": {
+                "diagnostic_code": "core_request_failed",
+                "path": secret,
+            },
+        },
+    }
+
+    with pytest.raises(BundleVerificationError) as raised:
+        release_verifier._successful_protocol_value(response, identifier=2)
+
+    assert str(raised.value) == (
+        f"{release_verifier._CORE_PROTOCOL_DIAGNOSTIC_PREFIX}"
+        "trust>jsonrpc_error>internal_error>core_request_failed"
+    )
+    assert secret not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("response", "diagnostic"),
+    [
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"ok": True, "value": {}},
+                "error": {"code": -32603, "message": "private"},
+            },
+            "trust>response_invalid",
+        ),
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "ok": False,
+                    "error": {
+                        "code": "private-error\nvalue",
+                        "message": "private",
+                        "retryable": False,
+                        "data": {"diagnostic_code": "private-diagnostic"},
+                    },
+                },
+            },
+            "trust>application_error>unknown",
+        ),
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "ok": True,
+                    "value": {},
+                    "error": {"message": "private"},
+                },
+            },
+            "trust>response_invalid",
+        ),
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"ok": False},
+            },
+            "trust>response_invalid",
+        ),
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "error": {"code": -32603},
+            },
+            "trust>response_invalid",
+        ),
+    ],
+    ids=(
+        "mixed-response",
+        "unknown-product-error",
+        "mixed-application-success",
+        "missing-application-error",
+        "invalid-jsonrpc-error",
+    ),
+)
+def test_protocol_smoke_rejects_invalid_or_unknown_failures_without_echoing(
+    response: Mapping[str, object],
+    diagnostic: str,
+) -> None:
+    with pytest.raises(BundleVerificationError) as raised:
+        release_verifier._successful_protocol_value(response, identifier=2)
+
+    assert str(raised.value) == (
+        f"{release_verifier._CORE_PROTOCOL_DIAGNOSTIC_PREFIX}{diagnostic}"
+    )
+    assert "private" not in str(raised.value)
+    assert "\n" not in str(raised.value)
+
+
+def test_protocol_diagnostic_product_codes_cover_v4_contract() -> None:
+    fixture = json.loads(
+        (ROOT / "protocol" / "fixtures" / "v4" / "results.failures.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert {
+        case["code"] for case in fixture["cases"]
+    } == release_verifier._SAFE_PRODUCT_ERROR_CODES
 
 
 @pytest.mark.parametrize(
@@ -1148,10 +1321,14 @@ def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
             b'{"jsonrpc":"2.0","method":"event","params":{"value":NaN}}\n',
             "frame is invalid",
         ),
+        (
+            b'{"jsonrpc":"2.0","id":true,"result":{"ok":true,"value":{}}}\n',
+            "response is invalid",
+        ),
         (b"x" * (release_verifier._MAX_PROTOCOL_FRAME_BYTES + 2), "frame is invalid"),
         (None, "closed early"),
     ],
-    ids=("non-finite-json", "oversized-frame", "early-eof"),
+    ids=("non-finite-json", "boolean-id", "oversized-frame", "early-eof"),
 )
 def test_protocol_smoke_rejects_invalid_or_incomplete_frames(
     frame: bytes | None,
@@ -1169,6 +1346,40 @@ def test_protocol_smoke_timeout_is_bounded(monkeypatch: pytest.MonkeyPatch) -> N
 
     with pytest.raises(BundleVerificationError, match="timed out"):
         release_verifier._protocol_response(queue.Queue(), identifier=1)
+
+
+def test_protocol_smoke_frame_queue_is_bounded() -> None:
+    frames: queue.Queue[bytes | None] = queue.Queue(maxsize=2)
+    overflow = threading.Event()
+
+    release_verifier._pump_protocol_frames(
+        io.BytesIO(b"{}\n{}\n{}\n"),
+        frames,
+        overflow,
+    )
+
+    assert frames.qsize() == 2
+    assert overflow.is_set()
+    with pytest.raises(BundleVerificationError, match="too many unsolicited frames"):
+        release_verifier._protocol_response(
+            frames,
+            identifier=1,
+            overflow=overflow,
+        )
+
+
+def test_protocol_smoke_end_marker_does_not_consume_frame_budget() -> None:
+    frames: queue.Queue[bytes | None] = queue.Queue(maxsize=2)
+    overflow = threading.Event()
+
+    release_verifier._pump_protocol_frames(
+        io.BytesIO(b"{}\n{}\n"),
+        frames,
+        overflow,
+    )
+
+    assert frames.qsize() == 2
+    assert not overflow.is_set()
 
 
 @pytest.mark.parametrize(
