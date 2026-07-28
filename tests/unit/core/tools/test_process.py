@@ -9,7 +9,7 @@ from contextlib import suppress
 from pathlib import Path
 from textwrap import dedent
 from time import monotonic
-from typing import NamedTuple, cast
+from typing import Any, NamedTuple, cast
 
 import pytest
 
@@ -19,6 +19,7 @@ from awesome_agent.core.tools.process import ProcessRunner
 
 _SIGKILL = cast(int, vars(signal).get("SIGKILL", signal.SIGTERM))
 _PROC_SELF_STAT = Path("/proc/self/stat")
+_TERMINAL_PROC_STATES = frozenset({"Z", "X", "x"})
 
 
 class _ProcessStat(NamedTuple):
@@ -27,6 +28,94 @@ class _ProcessStat(NamedTuple):
     pgid: int
     session: int
     starttime: int
+
+
+class _PinnedWindowsProcess(NamedTuple):
+    pid: int
+    kernel32: Any
+    handle: int
+
+
+def _windows_api_assertion(operation: str, *, pid: int) -> AssertionError:
+    get_last_error = cast(
+        "Callable[[], int] | None",
+        getattr(ctypes, "get_last_error", None),
+    )
+    error_code = int(get_last_error()) if get_last_error is not None else 0
+    format_error = cast(
+        "Callable[[int], str] | None",
+        getattr(ctypes, "FormatError", None),
+    )
+    detail = (
+        str(format_error(error_code)).strip()
+        if format_error is not None and error_code
+        else "Win32 diagnostics unavailable"
+    )
+    return AssertionError(
+        f"{operation} failed for pid={pid} (WinError {error_code}: {detail})."
+    )
+
+
+def _pin_windows_process(pid: int) -> _PinnedWindowsProcess | None:
+    if os.name != "nt":
+        return None
+    win_dll = getattr(ctypes, "WinDLL", None)
+    if win_dll is None:
+        raise AssertionError("Win32 process APIs are unavailable.")
+    kernel32: Any = win_dll("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    open_process.restype = ctypes.c_void_p
+    wait_for_single_object = kernel32.WaitForSingleObject
+    wait_for_single_object.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    wait_for_single_object.restype = ctypes.c_uint32
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+    handle = open_process(0x00100000, 0, pid)
+    if not handle:
+        raise _windows_api_assertion("OpenProcess", pid=pid)
+    return _PinnedWindowsProcess(pid=pid, kernel32=kernel32, handle=int(handle))
+
+
+def _wait_for_pinned_windows_process_stop(
+    process: _PinnedWindowsProcess,
+    *,
+    timeout: float = 5.0,
+) -> None:
+    result = int(
+        process.kernel32.WaitForSingleObject(
+            process.handle,
+            int(timeout * 1_000),
+        )
+    )
+    if result == 0x00000000:
+        return
+    if result == 0x00000102:
+        raise AssertionError(f"process remained alive: pid={process.pid}")
+    if result == 0xFFFFFFFF:
+        raise _windows_api_assertion("WaitForSingleObject", pid=process.pid)
+    raise AssertionError(
+        f"WaitForSingleObject returned {result:#x} for pid={process.pid}."
+    )
+
+
+def _assert_pinned_windows_process_running(process: _PinnedWindowsProcess) -> None:
+    result = int(process.kernel32.WaitForSingleObject(process.handle, 0))
+    if result == 0x00000102:
+        return
+    if result == 0x00000000:
+        raise AssertionError(f"process exited before timeout: pid={process.pid}")
+    if result == 0xFFFFFFFF:
+        raise _windows_api_assertion("WaitForSingleObject", pid=process.pid)
+    raise AssertionError(
+        f"WaitForSingleObject returned {result:#x} for pid={process.pid}."
+    )
+
+
+def _close_pinned_windows_process(process: _PinnedWindowsProcess | None) -> None:
+    if process is not None:
+        process.kernel32.CloseHandle(process.handle)
 
 
 def _posix_process_group(pid: int) -> int:
@@ -47,16 +136,16 @@ def _posix_process_session(pid: int) -> int:
 def _read_process_stat(pid: int) -> _ProcessStat | None:
     try:
         raw = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
-        fields = raw[raw.rfind(")") + 1 :].split()
-        return _ProcessStat(
-            state=fields[0][:1],
-            ppid=int(fields[1]),
-            pgid=int(fields[2]),
-            session=int(fields[3]),
-            starttime=int(fields[19]),
-        )
-    except (IndexError, OSError, ValueError):
+    except (FileNotFoundError, ProcessLookupError):
         return None
+    fields = raw[raw.rfind(")") + 1 :].split()
+    return _ProcessStat(
+        state=fields[0][:1],
+        ppid=int(fields[1]),
+        pgid=int(fields[2]),
+        session=int(fields[3]),
+        starttime=int(fields[19]),
+    )
 
 
 def _process_details(pid: int) -> str:
@@ -91,19 +180,20 @@ def _process_is_running(pid: int, *, starttime: int | None = None) -> bool:
             return int(wait_for_single_object(handle, 0)) == 0x00000102
         finally:
             close_handle(handle)
+    if _PROC_SELF_STAT.is_file():
+        current = _read_process_stat(pid)
+        return (
+            current is not None
+            and current.state not in _TERMINAL_PROC_STATES
+            and (starttime is None or current.starttime == starttime)
+        )
     try:
         os.kill(pid, 0)
-    except OSError:
+    except ProcessLookupError:
         return False
-    status = Path("/proc") / str(pid) / "stat"
-    if status.exists():
-        current = _read_process_stat(pid)
-        if current is None:
-            return True
-        return current.state != "Z" and (
-            starttime is None or current.starttime == starttime
-        )
-    return starttime is None or not _PROC_SELF_STAT.is_file()
+    except PermissionError:
+        return True
+    return True
 
 
 def _wait_for_pid_file(path: Path, *, timeout: float = 5.0) -> int:
@@ -137,6 +227,104 @@ def _wait_for_process_stop(
         f"process remained alive: {_process_details(pid)}; "
         f"expected_starttime={starttime}"
     )
+
+
+def _use_fake_procfs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "self.stat"
+    marker.write_text("available", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "_PROC_SELF_STAT", marker)
+
+
+def test_read_process_stat_only_treats_a_missing_process_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(*args: object, **kwargs: object) -> str:
+        raise FileNotFoundError
+
+    def vanished(*args: object, **kwargs: object) -> str:
+        raise ProcessLookupError
+
+    def denied(*args: object, **kwargs: object) -> str:
+        raise PermissionError("stat denied")
+
+    def malformed(*args: object, **kwargs: object) -> str:
+        return "malformed"
+
+    monkeypatch.setattr(Path, "read_text", missing)
+    assert _read_process_stat(42) is None
+
+    monkeypatch.setattr(Path, "read_text", vanished)
+    assert _read_process_stat(42) is None
+
+    monkeypatch.setattr(Path, "read_text", denied)
+    with pytest.raises(PermissionError, match="stat denied"):
+        _read_process_stat(42)
+
+    monkeypatch.setattr(Path, "read_text", malformed)
+    with pytest.raises(IndexError):
+        _read_process_stat(42)
+
+
+def test_pinned_process_identity_is_absent_when_proc_stat_disappears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.name == "nt":
+        return
+    _use_fake_procfs(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys.modules[__name__], "_read_process_stat", lambda pid: None)
+
+    assert _process_is_running(42, starttime=100) is False
+
+
+@pytest.mark.parametrize(
+    ("state", "observed_starttime", "expected"),
+    [
+        ("R", 100, True),
+        ("S", 101, False),
+        ("Z", 100, False),
+        ("X", 100, False),
+        ("x", 100, False),
+    ],
+)
+def test_pinned_process_identity_requires_the_same_live_proc_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    state: str,
+    observed_starttime: int,
+    expected: bool,
+) -> None:
+    if os.name == "nt":
+        return
+    _use_fake_procfs(tmp_path, monkeypatch)
+    snapshot = _ProcessStat(state, 1, 42, 42, observed_starttime)
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_read_process_stat",
+        lambda pid: snapshot,
+    )
+
+    assert _process_is_running(42, starttime=100) is expected
+
+
+def test_pinned_process_identity_does_not_hide_proc_permission_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.name == "nt":
+        return
+    _use_fake_procfs(tmp_path, monkeypatch)
+
+    def denied(pid: int) -> _ProcessStat | None:
+        raise PermissionError("stat denied")
+
+    monkeypatch.setattr(sys.modules[__name__], "_read_process_stat", denied)
+
+    with pytest.raises(PermissionError, match="stat denied"):
+        _process_is_running(42, starttime=100)
 
 
 @pytest.mark.asyncio
@@ -228,7 +416,20 @@ async def test_process_runner_times_out_and_terminates(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_runner_timeout_reaps_descendant(tmp_path: Path) -> None:
+async def test_process_runner_timeout_reaps_descendant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeout_scope: asyncio.Timeout | None = None
+    real_timeout = asyncio.timeout
+
+    def deferred_timeout(_: float) -> asyncio.Timeout:
+        nonlocal timeout_scope
+        assert timeout_scope is None
+        timeout_scope = real_timeout(None)
+        return timeout_scope
+
+    monkeypatch.setattr(asyncio, "timeout", deferred_timeout)
     descendant_pid_file = tmp_path / "timeout-descendant.pid"
     descendant_source = "import time; time.sleep(30)"
     parent_source = dedent(
@@ -252,16 +453,51 @@ async def test_process_runner_timeout_reaps_descendant(tmp_path: Path) -> None:
         """
     )
 
-    result = await ProcessRunner().run(
-        argv=[sys.executable, "-c", parent_source],
-        cwd=tmp_path,
-        environment=dict(os.environ),
-        timeout_seconds=0.5,
-        max_output_chars=1_000,
+    task = asyncio.create_task(
+        ProcessRunner().run(
+            argv=[sys.executable, "-c", parent_source],
+            cwd=tmp_path,
+            environment=dict(os.environ),
+            timeout_seconds=60,
+            max_output_chars=1_000,
+        )
     )
+    pinned_windows_process: _PinnedWindowsProcess | None = None
+    try:
+        descendant_pid = await asyncio.to_thread(
+            _wait_for_pid_file,
+            descendant_pid_file,
+        )
+        pinned_windows_process = _pin_windows_process(descendant_pid)
+        descendant_starttime = None
+        if pinned_windows_process is None and _PROC_SELF_STAT.is_file():
+            descendant_stat = _read_process_stat(descendant_pid)
+            assert descendant_stat is not None
+            descendant_starttime = descendant_stat.starttime
+        if pinned_windows_process is not None:
+            _assert_pinned_windows_process_running(pinned_windows_process)
+        else:
+            assert _process_is_running(
+                descendant_pid,
+                starttime=descendant_starttime,
+            )
+        assert timeout_scope is not None
+        timeout_scope.reschedule(asyncio.get_running_loop().time())
+        result = await asyncio.wait_for(task, timeout=15)
+        if pinned_windows_process is not None:
+            _wait_for_pinned_windows_process_stop(pinned_windows_process)
+        else:
+            _wait_for_process_stop(
+                descendant_pid,
+                starttime=descendant_starttime,
+            )
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        _close_pinned_windows_process(pinned_windows_process)
 
-    descendant_pid = _wait_for_pid_file(descendant_pid_file)
-    _wait_for_process_stop(descendant_pid)
     assert result.exit_code == -1
     assert result.timed_out is True
 
@@ -1090,7 +1326,7 @@ def test_process_runner_kills_command_tree_when_core_is_sigkilled(
         env=dict(os.environ),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
         text=True,
     )
     command_pid: int | None = None

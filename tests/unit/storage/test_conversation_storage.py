@@ -693,6 +693,54 @@ async def test_begin_turn_never_moves_thread_updated_at_backwards(
     assert len(view.turns) == 1
 
 
+async def test_turn_reads_follow_transcript_order_when_timestamps_tie(
+    application_database: ApplicationSQLite,
+) -> None:
+    repositories = SQLiteConversationRepositories(application_database)
+    timestamp = datetime(2026, 7, 26, 2, 0, tzinfo=UTC)
+
+    def seed(connection: sqlite3.Connection) -> None:
+        _THREADS.create(_thread(), connection=connection)
+        for sequence in (1, 2):
+            entry = _entry(f"entry_{sequence}", sequence=sequence).model_copy(
+                update={"created_at": timestamp}
+            )
+            _ENTRIES.append(entry, connection=connection)
+        for identifier, entry_id in (
+            ("turn_z", "entry_1"),
+            ("turn_a", "entry_2"),
+        ):
+            _TURNS.create(
+                Turn(
+                    id=identifier,
+                    thread_id="thread_1",
+                    checkpoint_key=identifier,
+                    status=TurnStatus.FAILED,
+                    provider="deepseek",
+                    model="deepseek/deepseek-v4-flash",
+                    budgets=BudgetConfig(),
+                    user_entry_id=entry_id,
+                    error_code="model_failed",
+                    completed_at=timestamp,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                ),
+                connection=connection,
+            )
+
+    await application_database.write(seed)
+
+    full = await repositories.read_thread("thread_1")
+    page = await repositories.read_thread_page(
+        "thread_1",
+        before_sequence=None,
+        limit=2,
+    )
+
+    assert [turn.id for turn in full.turns] == ["turn_z", "turn_a"]
+    assert [turn.id for turn in page.view.turns] == ["turn_z", "turn_a"]
+
+
 async def test_summary_upsert_and_tool_activity_idempotency(
     application_database: ApplicationSQLite,
 ) -> None:
