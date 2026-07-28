@@ -28,7 +28,7 @@
 Awesome 有多个相互独立的版本：
 
 - `VERSION` 和包 metadata 中的产品版本；
-- 私有 Core/TUI Protocol 版本 `4`；
+- 私有 Core/TUI Protocol 版本 `5`；
 - event envelope 版本 `1`；
 - Application diagnostic log record 版本 `1`；
 - Application SQLite schema 版本 `8`，迁移下限为 `7`；

@@ -32,7 +32,7 @@ and tests in the same change.
 Awesome has several independent versions:
 
 - the product version in `VERSION` and package metadata;
-- private Core/TUI Protocol version `4`;
+- private Core/TUI Protocol version `5`;
 - event envelope version `1`;
 - Application diagnostic log record version `1`;
 - Application SQLite schema version `8`, with migration floor `7`;

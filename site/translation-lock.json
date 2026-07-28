@@ -174,8 +174,8 @@
     {
       "english_source": "docs/reference/README.md",
       "chinese_source": "docs/reference/README.zh-CN.md",
-      "english_sha256": "5ab3bdeac1fc7f24bc011de7b452b08b939bbd6ccae55c6781c49aa98efdb9b6",
-      "chinese_sha256": "2d053b43b6514f5684f2d6d50a976c45bcff91cadf693ba0cba03d0c56e78973"
+      "english_sha256": "50fffe6336a99c8953d3aaedc27df488d4aae952b172db200cbba510dd5249fa",
+      "chinese_sha256": "c6dc3404411cfd795289c1f231e3e070773bd5bbf82c42a596c6ba09cf89bc4c"
     },
     {
       "english_source": "docs/reference/built-in-tools.md",
@@ -216,8 +216,8 @@
     {
       "english_source": "docs/reference/protocol.md",
       "chinese_source": "docs/reference/protocol.zh-CN.md",
-      "english_sha256": "8927f375c6bc316427cd30ec1d8a8c5ca6356e64a656de90d4299f77e7fd56fb",
-      "chinese_sha256": "138b81618aa55b1a7e52f09da809f3193e60b9d7cb6b671fd11c41ba5a36e8cf"
+      "english_sha256": "3d9daedbd7995c3fd5e2b7bb0d5b4c389b102cfc4e1f028fcb3c26039133a44b",
+      "chinese_sha256": "bed33b432aba3716ad1105f364594aaf95197cc584530a4e5160f460cc617b93"
     },
     {
       "english_source": "docs/roadmap.md",

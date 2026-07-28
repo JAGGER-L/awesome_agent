@@ -21,7 +21,7 @@
       "name": "initialize.protocol_incompatible",
       "params": {
         "client_name": "awesome",
-        "client_version": "1.3.0",
+        "client_version": "1.3.1",
         "protocol_version": 4
       }
     },

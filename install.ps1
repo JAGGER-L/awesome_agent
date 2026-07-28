@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$Version = "1.3.0"
+$Version = "1.3.1"
 $UvVersion = "0.11.28"
 $NodeVersion = "22.23.1"
 $UvSha256 = "0a23463216d09c6a72ff80ef5dc5a795f07dc1575cb84d24596c2f124a441b7b"

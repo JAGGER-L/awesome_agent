@@ -24,8 +24,8 @@ describe("package identity", () => {
       "utf8",
     );
 
-    expect(repositoryVersion).toBe("1.3.0\n");
-    expect(PRODUCT_VERSION).toBe("1.3.0");
+    expect(repositoryVersion).toBe("1.3.1\n");
+    expect(PRODUCT_VERSION).toBe("1.3.1");
     expect(packageJson.version).toBe(PRODUCT_VERSION);
     expect(packageJson.license).toBe("MIT");
     expect(packageJson.scripts.build).toContain("version:check");

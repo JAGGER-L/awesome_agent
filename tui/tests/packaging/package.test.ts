@@ -97,7 +97,7 @@ describe("awesome package", () => {
         license: string;
       };
       expect(installedPackage).toMatchObject({
-        version: "1.3.0",
+        version: "1.3.1",
         type: "module",
         bin: { awesome: "dist/cli/index.js" },
         license: "MIT",
@@ -131,7 +131,7 @@ describe("awesome package", () => {
               timeoutMs: CLI_TIMEOUT_MS,
             });
       expect(version.status, version.stderr).toBe(0);
-      expect(version.stdout).toBe("1.3.0\n");
+      expect(version.stdout).toBe("1.3.1\n");
     },
     TEST_TIMEOUT_MS,
   );
