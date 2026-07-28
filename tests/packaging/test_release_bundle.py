@@ -675,7 +675,7 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
     monkeypatch.setattr(
         release_verifier,
         "_run_core_check",
-        lambda command, *_: commands.append(command),
+        lambda command, *_, **__: commands.append(command),
     )
     monkeypatch.setattr(
         release_verifier,
@@ -736,6 +736,65 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
         "1.0.0",
         4,
     )
+
+
+def test_core_check_reports_only_one_bounded_opted_in_failure_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detail = "StorageContractError: " + "x" * 1_024
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="untrusted stdout detail\n",
+            stderr=f"first traceback line\n{detail}\n",
+        ),
+    )
+
+    with pytest.raises(BundleVerificationError) as raised:
+        release_verifier._run_core_check(
+            ["python", "storage_contract.py"],
+            tmp_path,
+            "installed Core storage contract failed",
+            report_failure_detail=True,
+        )
+
+    message = str(raised.value)
+    assert message.startswith(
+        "installed Core storage contract failed: StorageContractError: "
+    )
+    assert "first traceback line" not in message
+    assert "untrusted stdout detail" not in message
+    assert message.endswith("...")
+    reported_detail = message.removeprefix("installed Core storage contract failed: ")
+    assert len(reported_detail) == (release_verifier._MAX_CORE_FAILURE_DETAIL_CHARS + 3)
+
+
+def test_core_check_keeps_failure_output_private_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="private diagnostic\n",
+        ),
+    )
+
+    with pytest.raises(
+        BundleVerificationError,
+        match=r"^installed Core smoke check failed$",
+    ):
+        release_verifier._run_core_check(
+            ["python", "-c", "pass"],
+            tmp_path,
+            "installed Core smoke check failed",
+        )
 
 
 def test_installed_storage_contract_rejects_editable_environment_fallback(

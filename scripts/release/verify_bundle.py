@@ -158,7 +158,28 @@ def find_payload(archive: ZipFile, expected_version: str) -> str:
     return prefix
 
 
-def _run_core_check(command: list[str], cwd: Path, diagnostic: str) -> None:
+_MAX_CORE_FAILURE_DETAIL_CHARS = 512
+
+
+def _bounded_core_failure_detail(output: str) -> str | None:
+    lines = tuple(line.strip() for line in output.splitlines() if line.strip())
+    if not lines:
+        return None
+    printable = "".join(
+        character if character.isprintable() else "?" for character in lines[-1]
+    )
+    if len(printable) <= _MAX_CORE_FAILURE_DETAIL_CHARS:
+        return printable
+    return f"{printable[:_MAX_CORE_FAILURE_DETAIL_CHARS]}..."
+
+
+def _run_core_check(
+    command: list[str],
+    cwd: Path,
+    diagnostic: str,
+    *,
+    report_failure_detail: bool = False,
+) -> None:
     try:
         result = subprocess.run(
             command,
@@ -170,6 +191,10 @@ def _run_core_check(command: list[str], cwd: Path, diagnostic: str) -> None:
     except OSError as error:
         raise BundleVerificationError(diagnostic) from error
     if result.returncode != 0:
+        if report_failure_detail:
+            detail = _bounded_core_failure_detail(result.stderr)
+            if detail is not None:
+                raise BundleVerificationError(f"{diagnostic}: {detail}")
         raise BundleVerificationError(diagnostic)
 
 
@@ -526,6 +551,7 @@ assert any((scripts / name).is_file() for name in entrypoints)
         ],
         core,
         "installed Core storage contract failed",
+        report_failure_detail=True,
     )
     scripts = _environment_scripts_directory(environment)
     entrypoint = scripts / (
