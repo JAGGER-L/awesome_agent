@@ -34,6 +34,7 @@ from scripts.release.contracts import (
 )
 from scripts.release.storage_contract import (
     STORAGE_DIAGNOSTIC_MAX_CAUSES,
+    STORAGE_DIAGNOSTIC_MAX_CHARS,
     STORAGE_DIAGNOSTIC_PREFIX,
     STORAGE_DIAGNOSTIC_TOKENS,
 )
@@ -163,9 +164,6 @@ def find_payload(archive: ZipFile, expected_version: str) -> str:
     return prefix
 
 
-_MAX_STORAGE_DIAGNOSTIC_CHARS = 512
-
-
 def _valid_storage_diagnostic_token(token: str) -> bool:
     if token in STORAGE_DIAGNOSTIC_TOKENS:
         return True
@@ -182,7 +180,7 @@ def _storage_contract_failure_detail(output: str) -> str | None:
     if end == 0:
         return None
     start = output.rfind("\n", 0, end) + 1
-    if end - start > _MAX_STORAGE_DIAGNOSTIC_CHARS:
+    if end - start > STORAGE_DIAGNOSTIC_MAX_CHARS:
         return None
     line = output[start:end]
     if not line.startswith(STORAGE_DIAGNOSTIC_PREFIX):

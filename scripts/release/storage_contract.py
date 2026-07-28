@@ -37,6 +37,7 @@ _MAX_INVENTORY_FILE_BYTES = 16 * 1024 * 1024
 _MAX_INVENTORY_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_ERROR_CAUSES = 8
 STORAGE_DIAGNOSTIC_PREFIX = "AWESOME_STORAGE_CONTRACT_DIAGNOSTIC_V1:"
+STORAGE_DIAGNOSTIC_MAX_CHARS = 512
 STORAGE_DIAGNOSTIC_MAX_CAUSES = _MAX_ERROR_CAUSES + 1
 _KNOWN_ERROR_TOKENS = {
     "ApplicationMigrationBackupError": "migration_backup_error",
@@ -166,6 +167,17 @@ def _safe_error_chain(error: Exception) -> str:
         current = next_error
     if current is not None and len(tokens) >= _MAX_ERROR_CAUSES:
         tokens.append("truncated")
+    if len(STORAGE_DIAGNOSTIC_PREFIX) + len(">".join(tokens)) > (
+        STORAGE_DIAGNOSTIC_MAX_CHARS
+    ):
+        if tokens[-1] != "truncated":
+            tokens.append("truncated")
+        while (
+            len(tokens) > 2
+            and len(STORAGE_DIAGNOSTIC_PREFIX) + len(">".join(tokens))
+            > STORAGE_DIAGNOSTIC_MAX_CHARS
+        ):
+            tokens.pop(-2)
     return ">".join(tokens)
 
 

@@ -883,6 +883,29 @@ def test_storage_contract_error_chain_rejects_unknown_contract_message() -> None
     assert release_storage_contract._safe_error_chain(error) == "contract_error"
 
 
+def test_every_produced_storage_diagnostic_is_accepted_by_parent() -> None:
+    longest_message = max(
+        release_storage_contract._CONTRACT_ERROR_MESSAGES,
+        key=lambda message: len(
+            release_storage_contract._contract_error_token(message)
+        ),
+    )
+    error = release_storage_contract.StorageContractError(longest_message)
+    for _ in range(release_storage_contract._MAX_ERROR_CAUSES + 1):
+        wrapper = release_storage_contract.StorageContractError(longest_message)
+        wrapper.__cause__ = error
+        error = wrapper
+
+    detail = (
+        f"{release_storage_contract.STORAGE_DIAGNOSTIC_PREFIX}"
+        f"{release_storage_contract._safe_error_chain(error)}"
+    )
+
+    assert len(detail) <= release_storage_contract.STORAGE_DIAGNOSTIC_MAX_CHARS
+    assert detail.endswith(">truncated")
+    assert release_verifier._storage_contract_failure_detail(f"{detail}\n") == detail
+
+
 def test_parent_accepts_every_allowlisted_contract_diagnostic() -> None:
     for message in release_storage_contract._CONTRACT_ERROR_MESSAGES:
         token = release_storage_contract._contract_error_token(message)
