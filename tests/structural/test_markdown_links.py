@@ -429,7 +429,7 @@ def test_public_reference_covers_runtime_contracts() -> None:
         "shutdown",
     ):
         assert f"`{method}`" in protocol
-    assert "protocol v4" in protocol.casefold()
+    assert "protocol v5" in protocol.casefold()
 
 
 def test_documentation_explains_ownership_and_validation() -> None:

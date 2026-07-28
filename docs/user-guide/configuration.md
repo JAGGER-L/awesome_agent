@@ -5,8 +5,9 @@ small supported configuration surface. It emphasizes safe workflows and
 precedence; the complete schema, defaults, and field constraints live in the
 [configuration reference](../reference/configuration.md).
 
-Web access is independent from the model Provider. It defaults off, always
-reads the Tavily credential from `TAVILY_API_KEY`, and ignores ambient proxy
+Web access is independent from the model Provider. It defaults off and reads
+the Tavily credential from the source selected by `/auth tavily`: either the
+process `TAVILY_API_KEY` or Awesome's managed secret. It ignores ambient proxy
 variables because its async HTTP client uses `trust_env=False`. Set an explicit
 proxy only with `AWESOME_WEB_PROXY_URL` (or its selected Awesome secret), then
 use `/web on|off|status|revoke`; do not hand-edit Workspace config to enable

@@ -376,6 +376,7 @@ export function presentCommandPayload(
         },
         { label: "Kimi", value: credentialState(payload.credentials.kimi) },
         { label: "Mem0", value: credentialState(payload.credentials.mem0) },
+        { label: "Tavily", value: credentialState(payload.credentials.tavily) },
       ]);
     case "permissions":
       return {

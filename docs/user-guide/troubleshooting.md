@@ -321,7 +321,8 @@ a destructive prompt. Do not delete the data directory manually.
 ### Web Search or Fetch is unavailable or fails
 
 Run `/web status`. `enabled: false` means run `/web on`; a missing credential
-requires a non-empty `TAVILY_API_KEY`. `web_proxy_invalid` means the explicit
+requires `/auth tavily` to select an available Environment or Awesome-managed
+key. `web_proxy_invalid` means the explicit
 `AWESOME_WEB_PROXY_URL` is not a bounded credential-free `http` or `https` URL.
 Ambient `HTTP_PROXY`/`HTTPS_PROXY` settings are intentionally ignored because
 the Web client uses `trust_env=False`.

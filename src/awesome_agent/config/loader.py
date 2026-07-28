@@ -390,7 +390,10 @@ def _load_secrets(
             credential_descriptor("mem0").environment_variable,
             statuses.mem0,
         ),
-        tavily_api_key=selected_value("tavily", selections.tavily),
+        tavily_api_key=value(
+            credential_descriptor("tavily").environment_variable,
+            statuses.tavily,
+        ),
         web_proxy_url=selected_value("web_proxy", selections.web_proxy),
     )
 

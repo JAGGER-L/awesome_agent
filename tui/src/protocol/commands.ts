@@ -154,7 +154,7 @@ export const commandSelectionSchema = z
 
 export const commandSecretPromptSchema = z.strictObject({
   kind: z.literal("secret"),
-  provider: z.enum(["deepseek", "kimi", "mem0"]),
+  provider: z.enum(["deepseek", "kimi", "mem0", "tavily"]),
   action: z.enum(["add", "replace"]),
   label: boundedText(1, 200),
   environment_variable: boundedText(1, 128),

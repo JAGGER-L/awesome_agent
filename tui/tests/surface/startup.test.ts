@@ -349,6 +349,13 @@ function applicationState({
         awesome_configured: false,
         selected_source: null,
       },
+      tavily: {
+        provider: "tavily",
+        environment_variable: "TAVILY_API_KEY",
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: "environment",
+      },
     },
     memory_status: {},
     mcp_status: [],

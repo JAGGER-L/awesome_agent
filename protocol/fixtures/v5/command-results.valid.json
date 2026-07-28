@@ -100,6 +100,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -351,6 +357,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -839,6 +851,12 @@
               "environment_configured": false,
               "environment_variable": "MEM0_API_KEY",
               "provider": "mem0"
+            },
+            "tavily": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "TAVILY_API_KEY",
+              "provider": "tavily"
             }
           },
           "kind": "config",
@@ -948,6 +966,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -1026,11 +1050,11 @@
       "outcome": {
         "interaction": {
           "action": "add",
-          "environment_variable": "DEEPSEEK_API_KEY",
-          "help_url": "https://platform.deepseek.com/api_keys",
+          "environment_variable": "TAVILY_API_KEY",
+          "help_url": "https://app.tavily.com/home",
           "kind": "secret",
-          "label": "DeepSeek API Key",
-          "provider": "deepseek"
+          "label": "Tavily API Key",
+          "provider": "tavily"
         },
         "kind": "interaction"
       }

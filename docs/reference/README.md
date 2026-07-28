@@ -13,7 +13,7 @@ design rationale, use the [architecture documentation](../architecture/README.md
 | [Built-in tools](built-in-tools.md) | Tool names, capabilities, argument fields, limits, output, and conditional support tools |
 | [Permission modes](permission-modes.md) | Exact three-mode matrix, one-call and Thread grants, hard denials, and Full access confirmation |
 | [Files and state](files-and-state.md) | User/workspace paths, SQLite ownership, schema behavior, locks, backup, and reset boundaries |
-| [Protocol v4](protocol.md) | Private stdio JSON-RPC methods, events, errors, handshake, and fixtures |
+| [Protocol v5](protocol.md) | Private stdio JSON-RPC methods, events, errors, handshake, and fixtures |
 
 ## How to read a Reference page
 
@@ -48,7 +48,7 @@ documented structured log. Same-release recovery markers and other internal
 implementation records are intentionally excluded.
 
 Matching one does not imply compatibility in another. In particular, the
-private protocol handshake requires both protocol v4 and the exact installed
+private protocol handshake requires both protocol v5 and the exact installed
 product version so independently upgraded Core and TUI components fail clearly.
 `contract-versions.json` is the machine-readable catalog for the contract
 identifiers; generated Python and TypeScript constants keep runtime code free of

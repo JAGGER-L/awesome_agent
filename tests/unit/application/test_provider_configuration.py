@@ -2315,6 +2315,92 @@ async def test_mem0_uses_the_same_masked_awesome_credential_flow(
 
 
 @pytest.mark.asyncio
+async def test_tavily_auth_owns_environment_and_awesome_credential_lifecycle(
+    tmp_path: Path,
+) -> None:
+    validator = FakeValidator(CredentialValidationStatus.INVALID)
+    service, _, sources = _service(
+        tmp_path,
+        validator=validator,
+        environ={"TAVILY_API_KEY": "environment-tavily-secret"},
+    )
+
+    top = await service.auth_command(CommandIntent(name=CommandName.AUTH))
+    source_picker = await service.auth_command(
+        CommandIntent(name=CommandName.AUTH, arguments=("tavily",))
+    )
+    prompt = await service.auth_command(
+        CommandIntent(name=CommandName.AUTH, arguments=("tavily", "awesome"))
+    )
+
+    assert isinstance(top, CommandInteractionResult)
+    assert top.interaction.kind == "selection"
+    assert [option.value for option in top.interaction.options] == [
+        "deepseek",
+        "kimi",
+        "mem0",
+        "tavily",
+    ]
+    assert isinstance(source_picker, CommandInteractionResult)
+    assert source_picker.interaction.kind == "selection"
+    assert [
+        (option.value, option.selected, option.disabled)
+        for option in source_picker.interaction.options
+    ] == [
+        ("environment", True, False),
+        ("awesome", False, False),
+    ]
+    assert isinstance(prompt, CommandInteractionResult)
+    assert prompt.interaction.kind == "secret"
+    assert prompt.interaction.provider == "tavily"
+    assert prompt.interaction.environment_variable == "TAVILY_API_KEY"
+
+    added = await service.set_credential(
+        ProviderCredentialSetRequest(
+            provider="tavily",
+            action="add",
+            api_key=SecretStr("managed-tavily-secret"),
+        )
+    )
+    replaced = await service.set_credential(
+        ProviderCredentialSetRequest(
+            provider="tavily",
+            action="replace",
+            api_key=SecretStr("replacement-tavily-secret"),
+        )
+    )
+    selected_environment = await service.auth_command(
+        CommandIntent(
+            name=CommandName.AUTH,
+            arguments=("tavily", "environment"),
+        )
+    )
+    selected_awesome = await service.auth_command(
+        CommandIntent(
+            name=CommandName.AUTH,
+            arguments=("tavily", "awesome", "use"),
+        )
+    )
+    deleted = await service.set_credential(
+        ProviderCredentialSetRequest(provider="tavily", action="delete")
+    )
+
+    assert added.status is ProviderCredentialSetStatus.CONFIGURED
+    assert replaced.status is ProviderCredentialSetStatus.CONFIGURED
+    assert isinstance(selected_environment, CommandResult)
+    assert isinstance(selected_awesome, CommandResult)
+    assert deleted.status is ProviderCredentialSetStatus.DELETED
+    assert validator.calls == []
+    status = sources().provider_credentials.tavily
+    assert status.environment_configured is True
+    assert status.awesome_configured is False
+    assert status.selected_source is CredentialSource.AWESOME
+    assert status.configured is False
+    assert sources().secrets.tavily_api_key is None
+    assert "TAVILY_API_KEY" not in dotenv_values(tmp_path / "home" / ".env")
+
+
+@pytest.mark.asyncio
 async def test_delete_removes_only_the_selected_user_credential(
     tmp_path: Path,
 ) -> None:

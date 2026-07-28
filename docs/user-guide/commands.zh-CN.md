@@ -112,9 +112,13 @@ metadata。
 /auth deepseek
 /auth kimi
 /auth mem0
+/auth tavily
 ```
 
-`/auth` 会分别显示 Environment 和 Awesome 管理的凭据来源。命令参数绝不接受密钥。已知无效的 Provider 密钥不会被保存。当验证无法访问 Provider 时，TUI 会询问是否把密钥保存为 unverified。删除 Awesome 管理的密钥不会在 Provider 侧吊销它，也不会静默选中 Environment 值。
+`/auth` 会分别显示 Environment 和 Awesome 管理的凭据来源。命令参数绝不接受密钥。
+DeepSeek 与 Kimi 使用远程验证；Mem0 与 Tavily 只做本地输入/存储验证，因此保存时不会发起
+可能计费的请求。删除 Awesome 管理的密钥不会在 Provider 侧吊销它，也不会静默选中
+Environment 值。
 
 ## 权限与扩展命令
 

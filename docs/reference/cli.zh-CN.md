@@ -62,11 +62,11 @@ Skill management:
 Core 前被拒绝。
 
 启动目录就是 Workspace。允许普通输入之前，会先解决信任、本地状态兼容性和 Core/TUI
-protocol 兼容性。见[文件与状态](files-and-state.zh-CN.md)和 [Protocol v4](protocol.zh-CN.md)。
+protocol 兼容性。见[文件与状态](files-and-state.zh-CN.md)和 [Protocol v5](protocol.zh-CN.md)。
 
 ## 本地 Skill 包管理
 
-Skill 包命令会启动同一个私有 Core，但在 `initialize` 之前调用专用的 Protocol v4 RPC。
+Skill 包命令会启动同一个私有 Core，但在 `initialize` 之前调用专用的 Protocol v5 RPC。
 它们不会进入 Ink、创建 Thread 或 Turn、加载模型，也不会把包管理暴露为 Agent 工具。
 任何非零退出都会保持 stdout 为空，并把有界诊断写入 stderr。如果安装、替换或移除 RPC
 已经成功，但 Core 未能干净关闭，stderr 会同时报告两个事实：包变更已经完成且需要重启，
@@ -135,7 +135,7 @@ awesome run "Apply the reviewed fix" --permission-mode accept_edits
 {"version":2,"type":"awesome.run.result","thread_id":"...","turn_id":"...","text":"... [[S1]]","citations":[{"id":"S1","title":"Example","url":"https://example.com/source"}],"termination_reason":null,"usage":{"input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"model_calls":0,"tool_calls":0,"provider_retries":0,"compressions":0,"web_requests":1,"active_execution_seconds":0}}
 ```
 
-该 JSON 文档独立于 Protocol v4 进行版本管理。Version 2 新增有序 `citations` 数组和
+该 JSON 文档独立于 Protocol v5 进行版本管理。Version 2 新增有序 `citations` 数组和
 `usage.web_requests`；它报告持久化回答与 Turn 事实，不是 protocol event stream。任何非零
 退出时 stdout 都为空，诊断写入 stderr。
 

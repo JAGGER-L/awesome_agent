@@ -20,9 +20,9 @@ TUI 把这些事实转换为临时状态和渲染状态。两个边界都不接�
 每个请求并施加明确的输入/背压边界，因为畸形或不匹配的本地组件也不能破坏状态。
 入站与出站 frame 都执行相同的严格 1 MiB UTF-8 JSON 边界，具体见下文。
 
-## Protocol v4 契约
+## Protocol v5 契约
 
-初始化要求字面量 `protocol_version: 4`、客户端名称 `awesome`，以及与 Core 相同的产品
+初始化要求字面量 `protocol_version: 5`、客户端名称 `awesome`，以及与 Core 相同的产品
 版本。即使产品版本相同，v3 客户端也会明确失败。协议版本与产品版本回答不同问题：
 线缆兼容性与发布身份。
 
@@ -83,14 +83,14 @@ fixture、Zod、effect 和 hydration 间保持明确，而无需增加另一条 
 ## 跨语言证据
 
 Python 负责序列化方法结果、`CommandOutcome` variant 和事件。
-`scripts/generate_protocol_fixtures.py` 在 `protocol/fixtures/v4/` 下写入确定性的有效与
+`scripts/generate_protocol_fixtures.py` 在 `protocol/fixtures/v5/` 下写入确定性的有效与
 无效 fixture。TypeScript Zod schema 校验同一语料库。
 
 ```text
 contract-versions.json
   -> generated Python + TypeScript literal bindings
 Python Pydantic contracts
-  -> generated v4 fixtures + manifest hashes
+  -> generated v5 fixtures + manifest hashes
   -> TypeScript strict Zod schemas
   -> protocol contract tests
   -> exhaustive reducers/presenters
@@ -145,7 +145,7 @@ Host 在 dispatch 前把 method 映射到封闭的 `ApplicationOperation` 集合
 定义的 control path。畸形或 v3 initialize 绝不会推进 Application phase。
 
 进入 `READY` 后仍可重复初始化，因此界面重试可以观察当前快照，而不会创建第二个
-Application。这些所有权规则保留单一 Application-owned Protocol v4 request、result、status
+Application。这些所有权规则保留单一 Application-owned Protocol v5 request、result、status
 与 error shape。
 
 ## Frame 与调度边界
@@ -205,7 +205,7 @@ Core 发送事实，而不是预格式化的终端 widget：
 
 ```text
 Application fact
-  -> Protocol v4 payload
+  -> Protocol v5 payload
   -> optional authoritative Surface effect
   -> exhaustive presentCommandPayload()
   -> CommandPresentation
@@ -220,7 +220,7 @@ Effect 与 Presenter 相互分离。Effect 可以安装权威 Thread replacement
 共享组件负责边框、换行、对齐、符号和语义颜色。它们不接受任意 record 并将其字符串化。
 这会增加新命令的代码量，但能防止意外泄露内部 JSON 或 secret。
 
-Protocol v4 将 citation 放入同一份持久投影，而不是平行 event stream。Assistant-entry
+Protocol v5 将 citation 放入同一份持久投影，而不是平行 event stream。Assistant-entry
 metadata 携带有序且严格的 `Citation`；transcript hydration 保留它们，reconciliation
 拒绝过期 replacement，`BlockView` 只为 ID 存在于该 entry catalog 的 marker 生成链接。
 未知 `[[S...]]` marker 保持纯文本。使用 Web 但没有有效 marker 时，finalization 已经附加
@@ -261,12 +261,12 @@ Coordinator 不会独立 drain 输入；Core 继续只准入一个前台 Operati
 
 `awesome run` 是同一个 TypeScript launcher 的第二种展示模式，不是第二套产品 runtime。
 它连接一个 `ConnectedSurface`，通过 `StartupSessionController` 调用同一条 `beginStartup`
-流程，使用现有 command 选择或创建 Thread，通过 Protocol v4 提交，并用 `thread.read` 读取
+流程，使用现有 command 选择或创建 Thread，通过 Protocol v5 提交，并用 `thread.read` 读取
 持久化的最终 assistant entry。Python Application 仍是唯一的生命周期与 mutation 权威。
 
 Runner 不渲染 Ink，也不消费终端输入。父进程 stdout 只为一次成功的最终文本值或一个带版本
 的 JSON 文档保留；诊断使用父进程 stderr。Core 子进程 stdout 仍是私有 NDJSON，绝不会作为
-命令输出转发。这样可在复用 Protocol v4 时提供确定性的重定向输出。
+命令输出转发。这样可在复用 Protocol v5 时提供确定性的重定向输出。
 
 JSON output version 2 包含持久文本、有序 `citations`、`usage.web_requests`、各项 ID、
 termination reason 与其他 usage counter。Text mode 渲染已经 finalized 的回答，包括可能
@@ -404,7 +404,7 @@ kill-on-close lifetime Job Object。Core 无法建立这一不变量时会 fail 
 
 - Python schema 与方法：`protocol/jsonrpc.py`
 - Host framing 与调度：`protocol/stdio.py`
-- Fixtures：`protocol/fixtures/v4/`、`scripts/generate_protocol_fixtures.py`
+- Fixtures：`protocol/fixtures/v5/`、`scripts/generate_protocol_fixtures.py`
 - Core 进程适配器：`tui/src/core/process.ts`
 - Headless runner：`tui/src/cli/headless.ts`、`tui/src/cli/main.tsx`
 - TypeScript schema：`tui/src/protocol/`

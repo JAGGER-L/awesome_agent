@@ -38,8 +38,9 @@ Memory 和 MCP 可以扩充整个 catalog。带 namespace 的扩展工具仍使�
 
 ### 使用 Web Search 与 Fetch
 
-设置 `TAVILY_API_KEY`，运行 `/web on`，随后请求当前信息，或提供一个需要提取可读内容的
-公共 HTTPS 页面。第一次 `network.read` 调用即使在 Full access 下也会 ASK；可选择默认
+通过 `/auth tavily` 配置 Awesome 管理的 key，或选择已有的 `TAVILY_API_KEY`，再运行
+`/web on`。随后请求当前信息，或提供一个需要提取可读内容的公共 HTTPS 页面。第一次
+`network.read` 调用即使在 Full access 下也会 ASK；可选择默认
 deny、allow once 或 allow for this Thread。`/web status` 显示 readiness 与披露，
 `/web revoke` 清除当前 Thread grant，`/web off` 会从重建后的 runtime 中移除两个工具。
 

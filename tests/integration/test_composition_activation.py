@@ -29,6 +29,7 @@ from awesome_agent.application.contracts import (
     InteractionResult,
     ProductErrorCode,
     ProviderCredentialSetRequest,
+    ProviderCredentialSetStatus,
 )
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import LocalApplication
@@ -1625,6 +1626,72 @@ async def test_web_runtime_registers_both_tools_and_retires_managed_client(
 
     assert (await application.shutdown()).ok is True
     assert closed == ["web"]
+
+
+@pytest.mark.asyncio
+async def test_managed_tavily_credential_rebuilds_the_web_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    paths = AwesomePaths.from_home(home)
+    UserConfigWriter(paths.config_file).update(
+        lambda current: current.model_copy(
+            update={"web": current.web.model_copy(update={"enabled": True})}
+        )
+    )
+    await _trust_workspaces(home, workspace)
+
+    class FakeWebProvider:
+        async def search(self, request: WebSearchRequest) -> WebSearchResponse:
+            del request
+            return WebSearchResponse(results=())
+
+        async def fetch(self, request: WebFetchRequest) -> WebFetchResponse:
+            return WebFetchResponse(url=request.url, content="content")
+
+    @asynccontextmanager
+    async def web_resources(*_: object, **__: object) -> AsyncIterator[Any]:
+        yield FakeWebProvider()
+
+    monkeypatch.setattr(composition, "managed_tavily_web_client", web_resources)
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+
+    assert (await application.initialize()).ok is True
+    original_runtime = backend._runtime
+    assert original_runtime is not None
+    assert original_runtime.web_available is False
+    assert original_runtime.web_diagnostic_code == "web_credential_missing"
+
+    configured = await application.set_provider_credential(
+        ProviderCredentialSetRequest(
+            provider="tavily",
+            action="add",
+            api_key=SecretStr("managed-tavily-key"),
+        )
+    )
+
+    assert configured.ok is True
+    assert configured.value is not None
+    assert configured.value.status is ProviderCredentialSetStatus.CONFIGURED
+    assert backend._runtime is not None
+    assert backend._runtime is not original_runtime
+    assert backend._runtime.web_available is True
+    assert backend._runtime.web_diagnostic_code is None
+    assert backend._runtime.tool_registry.resolve("web_search") is not None
+    assert backend._runtime.tool_registry.resolve("web_fetch") is not None
+    assert backend._runtime.sources.provider_credentials.tavily.selected_source is (
+        CredentialSource.AWESOME
+    )
+    assert (await application.shutdown()).ok is True
 
 
 @pytest.mark.asyncio

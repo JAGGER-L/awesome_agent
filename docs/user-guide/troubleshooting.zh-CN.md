@@ -201,8 +201,9 @@ MCP 或 Web 调用可能已经执行时，Abort 排在第一位；Retry 可能�
 
 ### Web Search 或 Fetch 不可用或失败
 
-运行 `/web status`。`enabled: false` 表示需要运行 `/web on`；credential 缺失时需设置非空
-`TAVILY_API_KEY`。`web_proxy_invalid` 表示显式 `AWESOME_WEB_PROXY_URL` 不是有界、不含凭据的
+运行 `/web status`。`enabled: false` 表示需要运行 `/web on`；credential 缺失时需通过
+`/auth tavily` 选择可用的 Environment 或 Awesome-managed key。`web_proxy_invalid` 表示显式
+`AWESOME_WEB_PROXY_URL` 不是有界、不含凭据的
 `http` 或 `https` URL。Web client 使用 `trust_env=False`，因此会有意忽略环境中的
 `HTTP_PROXY`/`HTTPS_PROXY`。
 

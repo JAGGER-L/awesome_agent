@@ -77,11 +77,11 @@ failed, or cancelled response cannot advance the phase. Accepting state reset
 keeps Application non-ready until a later initialize completes.
 
 Surfaces ask Application for a surface-neutral admission decision before
-dispatch. The stdio Host maps a rejection to the existing Protocol v4
+dispatch. The stdio Host maps a rejection to the existing Protocol v5
 `-32002` diagnostics, but never keeps a second state machine or parses a
 serialized request/result payload to infer readiness. Cancellation and
 shutdown remain admitted in every phase. This is an internal ownership change:
-Protocol v4 wire shapes, status values, and error semantics remain Application-owned.
+Protocol v5 wire shapes, status values, and error semantics remain Application-owned.
 
 ### Workspace runtime snapshot
 
@@ -215,7 +215,7 @@ tuple of minimal Core `Citation` values. After each result, Agent derives the
 ordered Turn snapshot in `AgentState.citations`; both that snapshot and the
 `web_requests` counter survive checkpoint recovery. Finalization validates
 `[[S1]]` markers, Conversation persists the same sources with the assistant
-entry, and Protocol v4 projects them to the TUI and headless surfaces.
+entry, and Protocol v5 projects them to the TUI and headless surfaces.
 
 Adding a channel changes checkpoint compatibility and recovery validation. It
 is not a convenient place for arbitrary UI or product state.

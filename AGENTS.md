@@ -202,7 +202,7 @@ Before ending:
   configuration, and troubleshooting.
 - `docs/extensions/`: Memory, Skills, and MCP decision and usage guides.
 - `docs/reference/`: exact CLI, command, configuration, tool, permission,
-  file/state, and Protocol v4 contracts.
+  file/state, and Protocol v5 contracts.
 - `docs/architecture/`: focused lifecycle, Application/Agent, context/model,
   tool, storage, protocol/TUI, security, and dependency guides.
 - `docs/development/`: contributor setup, testing, extension, contract,

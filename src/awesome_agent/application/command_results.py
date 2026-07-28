@@ -49,7 +49,7 @@ class CommandSelection(_CommandModel):
 
 class CommandSecretPrompt(_CommandModel):
     kind: Literal["secret"] = "secret"
-    provider: Literal["deepseek", "kimi", "mem0"]
+    provider: Literal["deepseek", "kimi", "mem0", "tavily"]
     action: Literal["add", "replace"]
     label: str = Field(min_length=1, max_length=200)
     environment_variable: str = Field(min_length=1, max_length=128)

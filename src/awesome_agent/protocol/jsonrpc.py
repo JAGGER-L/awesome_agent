@@ -145,7 +145,7 @@ class _OperationParams(BaseModel):
 class _ProviderCredentialParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    provider: Literal["deepseek", "kimi", "mem0"]
+    provider: Literal["deepseek", "kimi", "mem0", "tavily"]
     action: Literal["add", "replace", "delete"]
     api_key: str | None = Field(default=None, min_length=1, max_length=20_000)
     allow_unverified: bool = Field(default=False, strict=True)

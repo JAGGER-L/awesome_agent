@@ -46,8 +46,9 @@ in [Built-in tools](../reference/built-in-tools.md).
 
 ### Using Web Search and Fetch
 
-Set `TAVILY_API_KEY`, run `/web on`, then ask for current information or provide
-one public HTTPS page whose readable content you need. The first `network.read`
+Configure an Awesome-managed key with `/auth tavily` or select an existing
+`TAVILY_API_KEY`, run `/web on`, then ask for current information or provide one
+public HTTPS page whose readable content you need. The first `network.read`
 call asks even in Full access; choose deny (the default), allow once, or allow
 for this Thread. `/web status` shows readiness and disclosure, `/web revoke`
 clears the active Thread grant, and `/web off` removes both tools from the

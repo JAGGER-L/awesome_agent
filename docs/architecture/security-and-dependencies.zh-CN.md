@@ -161,8 +161,9 @@ store 或 child-process 访问。有意 daemonize 的 POSIX 进程可以离开�
 
 ## Web 网络边界
 
-Web 由用户启用且默认关闭。只有有效 `TAVILY_API_KEY` 与 `web.enabled: true` 才会发布
-`web_search` 与 `web_fetch`；Workspace config 不能启用它或选择 credential。提供商中立
+Web 由用户启用且默认关闭。只有解析到 Tavily credential 且 `web.enabled: true` 才会发布
+`web_search` 与 `web_fetch`；`/auth tavily` 选择 Environment 或 Awesome-managed 来源，
+Workspace config 不能启用它或选择 credential。提供商中立
 handler 使用一个
 可复用 Tavily adapter 和显式 `httpx.AsyncClient`，设置 `trust_env=False`、禁用 redirect、
 限制 response，且不进行不透明 retry。环境 proxy 变量会被忽略，只接受经过校验的

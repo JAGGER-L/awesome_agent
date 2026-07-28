@@ -27,7 +27,7 @@ Awesome 目前提供：
 - 使用经过校验且绑定 generation 的 catalog 的 MCP stdio 服务器；
 - 通过同一 Registry、Policy 与 Executor 提供可选的结构化 Tavily Web Search 与 Fetch，
   并具有每 Turn 预算、Thread 范围的联网同意和可持久引用；
-- Python Core 与 Ink TUI 之间有版本的 Protocol v4 边界；
+- Python Core 与 Ink TUI 之间有版本的 Protocol v5 边界；
 - 从本目录生成、支持搜索的 GitHub Pages 文档站。
 
 [架构总览](../ARCHITECTURE.zh-CN.md)定义当前组件边界。本页其余部分讨论可能增加的能力。

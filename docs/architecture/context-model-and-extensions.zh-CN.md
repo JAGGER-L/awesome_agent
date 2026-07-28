@@ -173,7 +173,7 @@ DI container，也没有为了抽象而虚构第三个 model Provider。Web Prov
 catalog concern 留在独立的 Web/configuration 边界；Tavily Web search/fetch capability
 绝不会进入 `ModelCatalog`。
 
-Application 通过 Protocol v4 `ApplicationState` 发布 catalog，并与动态的
+Application 通过 Protocol v5 `ApplicationState` 发布 catalog，并与动态的
 `provider_credentials` 并列。TUI 会校验这些字段，并从中推导 startup 与 credential setup，
 不复制 model 或 Provider enum。Application 从同一 catalog 生成 `/model` 的
 `CommandSelection` option，TUI 只做通用渲染。在 Python 边界，依赖方向是
@@ -215,7 +215,7 @@ anchor 链。因此，发现后替换 package 会 fail closed。一个无效 pac
 ```text
 awesome skills CLI
   -> argument parsing + optional TTY confirmation
-  -> private Protocol v4 skill.list / skill.install / skill.remove
+  -> private Protocol v5 skill.list / skill.install / skill.remove
   -> Application SkillManagementService
   -> one blocking worker operation
   -> SkillPackageManager validation + recoverable package transaction

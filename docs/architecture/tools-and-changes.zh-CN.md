@@ -58,7 +58,7 @@ Fetch hard admission 只接受一个公共 HTTPS URL，拒绝配置的 blocked h
 `AgentState.citations` 快照，使两者都能经过 checkpoint recovery。
 Finalization 校验模型使用的 `[[S1]]` marker：未知 ID 会产生 warning 且不生成链接；使用 Web
 但没有有效引用时，会附加有界且确定性的 Sources 区域并记录 warning。Conversation 将同一
-来源随 assistant entry 持久化，Protocol v4 再把它们传给 TUI、headless JSON v2 与后续导出。
+来源随 assistant entry 持久化，Protocol v5 再把它们传给 TUI、headless JSON v2 与后续导出。
 
 ## Executor 流水线
 

@@ -50,7 +50,7 @@ CREDENTIAL_DESCRIPTORS = (
         label="Tavily",
         environment_variable="TAVILY_API_KEY",
         value_kind="api_key",
-        awesome_storage_supported=False,
+        awesome_storage_supported=True,
         help_url="https://app.tavily.com/home",
     ),
     CredentialDescriptor(

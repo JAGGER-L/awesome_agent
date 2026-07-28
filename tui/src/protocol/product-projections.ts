@@ -103,7 +103,7 @@ export const usageSummarySchema = z.strictObject({
 
 export const credentialSourceSchema = z.enum(["environment", "awesome"]);
 export const providerCredentialStatusSchema = z.strictObject({
-  provider: z.enum(["deepseek", "kimi", "mem0"]),
+  provider: z.enum(["deepseek", "kimi", "mem0", "tavily"]),
   environment_variable: boundedText(1, 128),
   environment_configured: z.boolean(),
   awesome_configured: z.boolean(),
@@ -113,6 +113,7 @@ export const providerCredentialStatusesSchema = z.strictObject({
   deepseek: providerCredentialStatusSchema,
   kimi: providerCredentialStatusSchema,
   mem0: providerCredentialStatusSchema,
+  tavily: providerCredentialStatusSchema,
 });
 
 export const workspacePresentationSchema = z.strictObject({

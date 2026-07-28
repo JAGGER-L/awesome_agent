@@ -263,7 +263,7 @@ Execute observation 会在 runner 启动前立即记录。参数错误、policy 
 
 ## 公共 Web 工具
 
-Web 默认关闭。设置 `TAVILY_API_KEY`、保持 provider 为 `tavily`，再运行 `/web on`；
+Web 默认关闭。配置 `/auth tavily`、保持 provider 为 `tavily`，再运行 `/web on`；
 Workspace config 可以降低每 Turn budget 或添加 blocked domain，但不能启用 Web 或选择凭据。
 
 ### `web_search`
@@ -324,7 +324,7 @@ once 或当前 Thread allow。审批完成后，任一工具才会消耗同一�
 并按 URL 去重。模型使用 `[[S1]]` 引用。未知 ID 只显示为文本而不生成链接，并产生 warning。
 Web 返回来源但最终回答没有使用任何来源时，finalization 会附加有界 Sources 区域并发出
 warning。同一 citations 会贯穿 ToolResult、Agent state/checkpoint、Conversation、Protocol
-v4、TUI 与 headless JSON v2。
+v5、TUI 与 headless JSON v2。
 
 Search query 或请求的 Fetch URL 会发送给 Tavily，并依据
 [Tavily 隐私政策](https://www.tavily.com/privacy)与

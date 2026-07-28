@@ -24,6 +24,12 @@ const services = {
       description: "Active · awesome",
       selected: false,
     },
+    {
+      value: "tavily",
+      label: "Tavily",
+      description: "Not configured",
+      selected: false,
+    },
   ],
 };
 
@@ -38,6 +44,8 @@ describe("AuthPicker", () => {
     expect(frame).toContain("DeepSeek · Active · environment");
     expect(frame).toContain("Memory providers");
     expect(frame).toContain("Mem0 Cloud · Active · awesome");
+    expect(frame).toContain("Web providers");
+    expect(frame).toContain("Tavily · Not configured");
     expect(frame).toContain("Enter confirm · Esc cancel");
   });
 

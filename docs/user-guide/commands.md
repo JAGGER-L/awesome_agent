@@ -145,13 +145,15 @@ Use:
 /auth deepseek
 /auth kimi
 /auth mem0
+/auth tavily
 ```
 
 `/auth` shows Environment and Awesome-managed credential sources separately.
-Keys are never accepted as command arguments. A known-invalid Provider key is
-not saved. When validation cannot reach a Provider, the TUI asks whether to
-save the key as unverified. Deleting an Awesome-managed key does not revoke it
-at the Provider and does not silently select an Environment value.
+Keys are never accepted as command arguments. DeepSeek and Kimi use remote
+validation; Mem0 and Tavily use local input/storage validation so saving them
+does not make a potentially billable request. Deleting an Awesome-managed key
+does not revoke it at the Provider and does not silently select an Environment
+value.
 
 ## Permission and Extension Commands
 

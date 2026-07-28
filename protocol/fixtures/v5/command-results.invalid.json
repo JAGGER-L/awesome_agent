@@ -107,6 +107,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -352,6 +358,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -545,6 +557,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -686,6 +704,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -838,6 +862,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -1038,6 +1068,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -1238,6 +1274,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -1438,6 +1480,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -1638,6 +1686,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -1838,6 +1892,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -2038,6 +2098,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -2240,6 +2306,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -2478,6 +2550,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -2715,6 +2793,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -2908,6 +2992,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -3152,6 +3242,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {

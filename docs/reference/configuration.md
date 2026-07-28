@@ -117,12 +117,14 @@ The static credential catalog defines five services:
 | DeepSeek | `DEEPSEEK_API_KEY` | `DEEPSEEK_API_KEY` in `<AWESOME_HOME>/.env` |
 | Kimi | `MOONSHOT_API_KEY` | `MOONSHOT_API_KEY` in `<AWESOME_HOME>/.env` |
 | Mem0 | `MEM0_API_KEY` | `MEM0_API_KEY` in `<AWESOME_HOME>/.env` |
-| Tavily | `TAVILY_API_KEY` | Not supported; this selection must be `environment` |
+| Tavily | `TAVILY_API_KEY` | `TAVILY_API_KEY` in `<AWESOME_HOME>/.env` |
 | Web proxy | `AWESOME_WEB_PROXY_URL` | `AWESOME_WEB_PROXY_URL` in `<AWESOME_HOME>/.env` |
 
 DeepSeek, Kimi, Mem0, and Web proxy accept `environment`, `awesome`, or an
-omitted/`null` selection. With no explicit selection, a non-empty process environment value wins; the
-Awesome credential file is used only when the environment value is absent. An
+omitted/`null` selection. Tavily accepts `environment` or `awesome` and defaults
+to `environment` when omitted. With no explicit nullable selection, a non-empty
+process environment value wins; the Awesome credential file is used only when
+the environment value is absent. An
 explicit source never falls back to the other source. For example, selecting
 `environment` while the variable is missing reports that Provider as not
 configured even if `<AWESOME_HOME>/.env` contains a key. This makes provenance
@@ -132,10 +134,10 @@ Do not put keys in YAML or workspace files. `/auth` writes the Awesome credentia
 file atomically, masks secret input, and never exposes its value through
 `/config` or protocol state. DeepSeek and Kimi keys are remotely validated
 before normal saving (with an explicit save-unverified path for reachability
-failure). Mem0 keys receive only local format/storage validation and are saved
-without a remote check; rejection appears when the cloud adapter is enabled or
-called. `/auth` currently manages DeepSeek, Kimi, and Mem0; it does not edit the
-Tavily or Web proxy entries. See [files and state](files-and-state.md) for
+failure). Mem0 and Tavily keys receive only local format/storage validation and
+are saved without a remote check; rejection appears when a later cloud or Web
+operation reaches the service. `/auth` manages DeepSeek, Kimi, Mem0, and Tavily;
+it does not edit the Web proxy entry. See [files and state](files-and-state.md) for
 ownership and backup guidance.
 
 ### `budgets`
@@ -310,7 +312,7 @@ an internal resolver seam from becoming an accidental compatibility promise.
 | `DEEPSEEK_API_KEY` | DeepSeek credential when its selected source is `environment`. |
 | `MOONSHOT_API_KEY` | Kimi credential when its selected source is `environment`. |
 | `MEM0_API_KEY` | Mem0 credential when its selected source is `environment`. |
-| `TAVILY_API_KEY` | Tavily credential; its source is always `environment`. |
+| `TAVILY_API_KEY` | Tavily credential when its selected source is `environment`. |
 | `AWESOME_WEB_PROXY_URL` | Explicit Web proxy when `credentials.web_proxy` resolves to `environment`. |
 
 `AWESOME_HOME` accepts a platform path and expands the home marker supported by

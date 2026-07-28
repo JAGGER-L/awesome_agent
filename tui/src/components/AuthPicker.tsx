@@ -10,7 +10,9 @@ export function AuthPicker({
   readonly selected: number;
   readonly width?: number;
 }) {
-  const services = selection.options.some((option) => option.value === "mem0");
+  const serviceCatalog = selection.options.some(
+    (option) => option.value === "mem0" || option.value === "tavily",
+  );
   return (
     <SelectionPanel
       title={selection.prompt}
@@ -19,13 +21,15 @@ export function AuthPicker({
       variant="neutral"
       width={width}
       sectionForOption={
-        services
+        serviceCatalog
           ? (value) =>
               value === "deepseek"
                 ? "Model providers"
                 : value === "mem0"
                   ? "Memory providers"
-                  : undefined
+                  : value === "tavily"
+                    ? "Web providers"
+                    : undefined
           : undefined
       }
     />

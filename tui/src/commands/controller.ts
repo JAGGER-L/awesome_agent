@@ -155,7 +155,7 @@ export class CommandController {
   }
 
   async setCredential(
-    provider: "deepseek" | "kimi" | "mem0",
+    provider: "deepseek" | "kimi" | "mem0" | "tavily",
     action: "add" | "replace" | "delete",
     apiKey: string | undefined,
     allowUnverified: boolean,

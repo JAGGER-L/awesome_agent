@@ -23,7 +23,7 @@ from awesome_agent.config.models import CredentialSelectionConfig, CredentialSou
 from awesome_agent.core.resource_lock import exclusive_resource_lock
 
 type ProviderName = Literal["deepseek", "kimi"]
-type CredentialService = Literal["deepseek", "kimi", "mem0"]
+type CredentialService = Literal["deepseek", "kimi", "mem0", "tavily"]
 
 _MAX_SECRET_FILE_BYTES = 1024 * 1024
 
@@ -83,6 +83,7 @@ class ProviderCredentialStatuses(BaseModel):
     deepseek: ProviderCredentialStatus
     kimi: ProviderCredentialStatus
     mem0: ProviderCredentialStatus
+    tavily: ProviderCredentialStatus
 
 
 def provider_environment_variable(provider: CredentialService) -> str:
@@ -94,6 +95,7 @@ def missing_provider_credential_statuses() -> ProviderCredentialStatuses:
         deepseek=_missing_status("deepseek"),
         kimi=_missing_status("kimi"),
         mem0=_missing_status("mem0"),
+        tavily=_missing_status("tavily"),
     )
 
 
@@ -134,6 +136,7 @@ def resolve_provider_credential_statuses(
         deepseek=status("deepseek"),
         kimi=status("kimi"),
         mem0=status("mem0"),
+        tavily=status("tavily"),
     )
 
 

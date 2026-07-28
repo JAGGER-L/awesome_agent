@@ -6,7 +6,7 @@
       "params": {
         "client_name": "awesome",
         "client_version": "1.3.0",
-        "protocol_version": 4
+        "protocol_version": 5
       },
       "result": {
         "ok": true,
@@ -19,7 +19,7 @@
             "citations"
           ],
           "product_version": "1.3.0",
-          "protocol_version": 4,
+          "protocol_version": 5,
           "session_id": "session_11111111111111111111111111111111",
           "status": "ready",
           "workspace": {
@@ -35,7 +35,7 @@
       "params": {
         "client_name": "awesome",
         "client_version": "1.3.0",
-        "protocol_version": 4
+        "protocol_version": 5
       },
       "result": {
         "ok": true,
@@ -49,7 +49,7 @@
           ],
           "interaction_id": "interaction_state_reset",
           "product_version": "1.3.0",
-          "protocol_version": 4,
+          "protocol_version": 5,
           "session_id": "session_11111111111111111111111111111111",
           "status": "state_reset_required",
           "workspace": {
@@ -207,6 +207,12 @@
               "environment_configured": false,
               "environment_variable": "MEM0_API_KEY",
               "provider": "mem0"
+            },
+            "tavily": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "TAVILY_API_KEY",
+              "provider": "tavily"
             }
           },
           "secret_status": {
@@ -510,13 +516,13 @@
         "action": "add",
         "allow_unverified": false,
         "api_key": "fixture-request-secret",
-        "provider": "deepseek"
+        "provider": "tavily"
       },
       "result": {
         "ok": true,
         "value": {
           "code": "credential_saved",
-          "provider": "deepseek",
+          "provider": "tavily",
           "source": "awesome",
           "status": "configured"
         }

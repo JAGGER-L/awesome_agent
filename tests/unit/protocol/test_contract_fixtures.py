@@ -251,6 +251,7 @@ def test_provider_credential_fixtures_freeze_source_omission_contract() -> None:
     configured = credential_cases["provider.credential.set.configured"]["result"][
         "value"
     ]
+    assert configured["provider"] == "tavily"
     assert configured["source"] == "awesome"
     for name in {
         "provider.credential.set.invalid",

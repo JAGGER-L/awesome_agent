@@ -131,7 +131,7 @@ const cancelResultSchema = z.strictObject({
 });
 const shutdownResultSchema = z.strictObject({ stopped: z.literal(true) });
 export const providerCredentialSetResultSchema = z.strictObject({
-  provider: z.enum(["deepseek", "kimi", "mem0"]),
+  provider: z.enum(["deepseek", "kimi", "mem0", "tavily"]),
   status: z.enum(["configured", "deleted", "invalid", "confirm_unverified"]),
   source: credentialSourceSchema.optional(),
   code: boundedText(1, 128),
@@ -212,7 +212,7 @@ export const methodSchemas = {
   "provider.credential.set": {
     params: z
       .strictObject({
-        provider: z.enum(["deepseek", "kimi", "mem0"]),
+        provider: z.enum(["deepseek", "kimi", "mem0", "tavily"]),
         action: z.enum(["add", "replace", "delete"]),
         api_key: boundedText(1, 20_000).optional(),
         allow_unverified: z.boolean().optional(),

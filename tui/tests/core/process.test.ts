@@ -109,7 +109,7 @@ describe("CoreProcess", () => {
     const canonicalCwd = await realpath(value.cwd);
     const session = await startCoreProcess(value, [fileURLToPath(fixture)]);
     const initialized = await session.rpc.request("initialize", {
-      protocol_version: 4,
+      protocol_version: 5,
       client_name: "awesome",
       client_version: "0.1.0",
     });
@@ -154,7 +154,7 @@ describe("CoreProcess", () => {
       AWESOME_FAKE_CORE_STDERR_BASE64: Buffer.from(bytes).toString("base64"),
     });
     await session.rpc.request("initialize", {
-      protocol_version: 4,
+      protocol_version: 5,
       client_name: "awesome",
       client_version: "0.1.0",
     });

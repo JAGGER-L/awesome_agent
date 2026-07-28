@@ -250,12 +250,12 @@ tool data from `ToolOutput.citations` into `ToolResult.citations`. Text bounding
 does not remove that tuple. Agent serializes the complete result into
 `AgentState.tool_results` and derives the ordered `AgentState.citations`
 snapshot, so both survive checkpoint recovery. Conversation records, Protocol
-v4, TUI, and headless output carry the same sources without a compatibility
+v5, TUI, and headless output carry the same sources without a compatibility
 adapter.
 
 Optional Web access consists of two ordinary registered tools, not a second
 execution framework. They appear only when user configuration has
-`web.enabled: true` and `TAVILY_API_KEY` resolves. The provider-neutral
+`web.enabled: true` and the `/auth tavily` selection resolves. The provider-neutral
 `web_search` handler sends a bounded basic search with at most ten results to
 `POST https://api.tavily.com/search`. `web_fetch` accepts one public HTTPS URL
 and requests basic Markdown extraction from `POST
@@ -314,7 +314,7 @@ The authoritative Core command path is:
 
 ```text
 Ink command controller
-    -> Protocol v4 command.execute
+    -> Protocol v5 command.execute
     -> LocalApplication facade
     -> complete CommandDispatcher
     -> one focused command service
@@ -331,7 +331,7 @@ hidden model prompts; natural-language input is the only path that starts an
 Agent Turn.
 
 `LocalApplication` is the only surface-facing Application host. Python produces
-Protocol v4 discriminated outcomes that TypeScript validates and presents
+Protocol v5 discriminated outcomes that TypeScript validates and presents
 exhaustively.
 Command progress is pending Surface lifecycle state, not a second durable
 operation model.
@@ -396,8 +396,8 @@ the sole owner of `BootstrapPhase`. Typed initialize and interaction outcomes
 advance or restore that phase; a serialized protocol response is never a
 lifecycle fact source. The stdio Host only asks Application whether an
 operation is admitted and translates a rejection into the existing Protocol
-v4 handshake error. It neither keeps a parallel phase machine nor parses
-response payloads to infer readiness. Protocol v4 request, result, and error
+v5 handshake error. It neither keeps a parallel phase machine nor parses
+response payloads to infer readiness. Protocol v5 request, result, and error
 shapes are unchanged by this internal ownership move.
 
 The private `skill.list`, `skill.install`, and `skill.remove` operations are
@@ -429,7 +429,7 @@ Provider and credential mutations use the same complete-candidate publication
 path, without repeating startup recovery, and preserve the selected Thread.
 The runtime's `model_catalog` is the frozen, provider-neutral `MODEL_CATALOG`;
 credential presence, configured defaults, active selection, and region remain
-dynamic Application/configuration state. Protocol v4 publishes those facts
+dynamic Application/configuration state. Protocol v5 publishes those facts
 separately as `model_catalog`, `provider_credentials`, and `model_identity`.
 Foreground ownership, interactions, permission session, recovery delivery,
 checkpoint saver, the process-owned Application SQLite worker, state leases,
@@ -692,7 +692,7 @@ owns one input's parse, Core-admission, optimistic identity, and generation
 fence. The existing React queue still owns only pending presentation input,
 while Core remains the sole foreground execution authority.
 
-`awesome run` reuses that `ConnectedSurface`, startup controller, Protocol v4
+`awesome run` reuses that `ConnectedSurface`, startup controller, Protocol v5
 client, Application facade, and durable Thread/Turn records without rendering
 Ink. It creates a new Thread by default or targets one explicit Thread, then
 projects only the durable final assistant entry as text or a versioned JSON
@@ -710,7 +710,7 @@ competing component listeners. Optimistic user messages are keyed by
 The active Turn is one ordered Thinking/tool/answer timeline, and completed
 answers use terminal Markdown rendering.
 
-`/retry` returns one strict Protocol v4 `thread_retry` payload containing both
+`/retry` returns one strict Protocol v5 `thread_retry` payload containing both
 the authoritative Thread replacement and the accepted Operation. Because that
 Operation's events may precede the response, `ConnectedSurface` temporarily
 buffers the ordered event stream, installs the replacement, binds the new
@@ -812,14 +812,14 @@ is the composition root and may depend on all concrete owners it wires.
 
 `tests/structural/test_dependency_architecture.py` is the executable source for
 this exact adjacency table and for external-framework ownership. The TUI is a
-separate TypeScript process and reaches Python only through Protocol v4.
+separate TypeScript process and reaches Python only through Protocol v5.
 The `memory` -> `agent` row is intentionally narrower than its package-level
 appearance: only `memory/finalization.py` may import `agent/finalization.py`.
 
 The package dependency arrow is therefore `config -> modeling`, never
 `modeling -> config`. Application composes the static model directory with
 dynamic configuration and credential state, then publishes that catalog
-through Protocol v4 so Ink does not copy model or Provider enumerations.
+through Protocol v5 so Ink does not copy model or Provider enumerations.
 
 Concrete providers and storage adapters are wired in
 `application/composition.py`. The Agent imports provider-neutral contracts, and

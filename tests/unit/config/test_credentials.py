@@ -68,12 +68,11 @@ def test_secret_store_supports_catalogued_awesome_values_and_rejects_unknown_nam
     store = UserSecretStore(tmp_path / ".env")
 
     store.set("MEM0_API_KEY", SecretStr("value"))
+    store.set("TAVILY_API_KEY", SecretStr("value"))
     store.set("AWESOME_WEB_PROXY_URL", SecretStr("https://proxy.example"))
 
     with pytest.raises(ValueError, match="Unsupported"):
         store.set("OTHER_API_KEY", SecretStr("value"))
-    with pytest.raises(ValueError, match="Unsupported"):
-        store.set("TAVILY_API_KEY", SecretStr("value"))
 
 
 def test_secret_store_creates_temporary_file_with_owner_only_mode(

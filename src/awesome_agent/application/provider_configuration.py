@@ -422,7 +422,10 @@ class ProviderConfigurationService:
             )
         service = _service(arguments[0])
         if service is None:
-            return _error("invalid_arguments", "Usage: /auth [deepseek|kimi|mem0]")
+            return _error(
+                "invalid_arguments",
+                "Usage: /auth [deepseek|kimi|mem0|tavily]",
+            )
         status = _status(self._sources(), service)
         if len(arguments) == 1:
             return interaction(
@@ -735,17 +738,16 @@ class ProviderConfigurationService:
             )
         api_key = request.api_key
         assert api_key is not None
-        result = (
-            CredentialValidation(
+        if request.provider in {"mem0", "tavily"}:
+            result = CredentialValidation(
                 status=CredentialValidationStatus.VALID, code="credential_valid"
             )
-            if request.provider == "mem0"
-            else await self._validator.validate(
-                request.provider,
+        else:
+            result = await self._validator.validate(
+                cast(ProviderName, request.provider),
                 api_key,
                 kimi_region=self._sources().user.providers.kimi_region,
             )
-        )
         if result.status is CredentialValidationStatus.INVALID:
             return ProviderCredentialSetResult(
                 provider=request.provider,
@@ -810,7 +812,7 @@ class ProviderConfigurationService:
     def _service_options(self) -> tuple[CommandOption, ...]:
         sources = self._sources()
         options: list[CommandOption] = []
-        for service in ("deepseek", "kimi", "mem0"):
+        for service in ("deepseek", "kimi", "mem0", "tavily"):
             status = _status(sources, service)
             active = status.selected_source.value if status.selected_source else None
             options.append(
@@ -1327,7 +1329,7 @@ class ProviderConfigurationService:
 
 
 def _service(value: str) -> CredentialService | None:
-    if value in {"deepseek", "kimi", "mem0"}:
+    if value in {"deepseek", "kimi", "mem0", "tavily"}:
         return cast(CredentialService, value)
     return None
 
@@ -1351,7 +1353,9 @@ def _status(
         return sources.provider_credentials.deepseek
     if provider == "kimi":
         return sources.provider_credentials.kimi
-    return sources.provider_credentials.mem0
+    if provider == "mem0":
+        return sources.provider_credentials.mem0
+    return sources.provider_credentials.tavily
 
 
 def _verify_model_transaction_state(

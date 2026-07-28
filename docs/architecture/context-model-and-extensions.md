@@ -201,7 +201,7 @@ container, and no speculative third model Provider exists. Web Provider
 selection and catalog concerns remain in the separate Web/configuration
 boundary; Tavily Web search/fetch capability never appears in `ModelCatalog`.
 
-Application publishes the catalog through Protocol v4 `ApplicationState`
+Application publishes the catalog through Protocol v5 `ApplicationState`
 beside dynamic `provider_credentials`. The TUI validates and derives startup
 and credential setup from those fields instead of copying a model or Provider
 enum. Application derives `/model` options from the same catalog as a
@@ -253,7 +253,7 @@ a second discovery implementation:
 ```text
 awesome skills CLI
   -> argument parsing + optional TTY confirmation
-  -> private Protocol v4 skill.list / skill.install / skill.remove
+  -> private Protocol v5 skill.list / skill.install / skill.remove
   -> Application SkillManagementService
   -> one blocking worker operation
   -> SkillPackageManager validation + recoverable package transaction

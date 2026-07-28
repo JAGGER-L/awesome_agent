@@ -1,4 +1,4 @@
-# Private Core/TUI protocol v4
+# Private Core/TUI protocol v5
 
 Awesome's Ink process and its one Python Core child communicate over private
 stdio using newline-delimited JSON-RPC 2.0. The protocol is an internal
@@ -6,7 +6,7 @@ component boundary, not a remote API: it has no network listener, authentication
 scheme, compatibility proxy, or promise that third-party clients can mix
 versions independently.
 
-Protocol version **4** is paired with the exact installed product version. The
+Protocol version **5** is paired with the exact installed product version. The
 current repository product version is **1.3.0**. Event envelopes have their own
 version **1**. Both contract identifiers come from `contract-versions.json`;
 the product value continues to come from `VERSION`.
@@ -39,7 +39,7 @@ the product value continues to come from `VERSION`.
 ```text
 Ink                     Protocol Host              Application
  |                            |                          |
- |-- initialize(v4, exact) -->|                          |
+ |-- initialize(v5, exact) -->|                          |
  |                            |------- initialize ------>|
  |                            |<-- ApplicationResult ----|
  |<---- JSON-RPC response ----|                          |
@@ -104,7 +104,7 @@ rejection to the existing handshake error. `initialize` must use:
   "id": "init-1",
   "method": "initialize",
   "params": {
-    "protocol_version": 4,
+    "protocol_version": 5,
     "client_name": "awesome",
     "client_version": "1.3.0"
   }
@@ -130,7 +130,7 @@ Current capabilities are `threads`, `turns`, `direct_commands`, `commands`,
 
 The Host never parses a serialized result payload to advance readiness; typed
 initialize and interaction outcomes update Application first. This ownership
-is internal and remains part of the Protocol v4 wire contract.
+is internal and remains part of the Protocol v5 wire contract.
 
 Before ready, ordinary requests receive JSON-RPC `-32002` with diagnostic
 `server_not_initialized` or `server_not_ready`. The deliberate exception is
@@ -192,7 +192,7 @@ validity/diagnostics, secret presence and credential source status, Memory/MCP
 summaries, usage, and the structured workspace-instruction diagnostic. Secret
 values are never part of state.
 
-`model_catalog` is the Protocol v4 projection of the static, provider-neutral
+`model_catalog` is the Protocol v5 projection of the static, provider-neutral
 `ModelCatalog -> ProviderDescriptor -> ModelProfile` directory. A Provider
 descriptor carries `id`, `credential_id`, `supported_regions`, optional
 `default_region`, and its model profiles. A model profile carries `id`,
@@ -273,7 +273,7 @@ exactly one branch: typed `result`, typed `interaction`, or stable command
 `error`. Exact grammar and foreground snapshot exceptions are in
 [Slash Commands](commands.md).
 
-Every Protocol v4 Thread projection has a required nullable `lineage` field.
+Every Protocol v5 Thread projection has a required nullable `lineage` field.
 It is `null` for a root Thread, or a strict object with `kind` (`fork` or
 `retry`), `source_thread_id`, and `source_turn_id` for one immediate parent.
 This field records provenance only; clients must not infer a shared transcript
@@ -307,7 +307,7 @@ breaks that invariant.
 
 ### `provider.credential.set`
 
-`provider` is `deepseek`, `kimi`, or `mem0`; `action` is `add`, `replace`, or
+`provider` is `deepseek`, `kimi`, `mem0`, or `tavily`; `action` is `add`, `replace`, or
 `delete`; `allow_unverified` defaults to false. Add/replace require a non-empty
 `api_key` of at most 20,000 characters without CR/LF. Delete forbids both key
 content and `allow_unverified: true`.
@@ -316,14 +316,14 @@ This is a mutation/external operation under the foreground arbiter. The key is
 wrapped as a secret immediately and never copied into events, errors, or state.
 For DeepSeek and Kimi, Core performs remote validation; an unreachable Provider
 may return a confirmation path for an explicit save-unverified retry, while a
-key the Provider rejects is not saved. For `mem0`, Core currently performs no
+key the Provider rejects is not saved. For `mem0` and `tavily`, Core performs no
 remote credential validation and saves any locally valid input; an invalid key
-fails only when a later Mem0 initialization or operation reaches the service.
+fails only when a later Mem0 or Web operation reaches the service.
 
 The result contains `source` only when Core can report a selected credential
 source. It is normally `awesome` after a successful save, but invalid,
 save-unverified-confirmation, or delete results can have no selected source; in
-that case the field is omitted. Explicit `"source": null` is not a valid v4
+that case the field is omitted. Explicit `"source": null` is not a valid v5
 result.
 
 ### `interaction.respond`
@@ -396,7 +396,7 @@ Product error codes are:
 Clients use the `retryable` flag plus current state, not string matching on the
 message, to decide whether a retry is appropriate.
 
-In Protocol v4, an Application-level `state_unavailable` error is retryable and
+In Protocol v5, an Application-level `state_unavailable` error is retryable and
 includes bounded `state_directory` metadata. This is distinct from the
 non-retryable `state_unavailable` inside a built-in Memory tool's `ToolOutput`;
 the two envelopes must not be normalized by code string alone.
@@ -471,7 +471,7 @@ Direct command precedes its acceptance response, and subsequent events may
 arrive before that response is handled.
 
 The same ordering applies to `thread_retry`, but its Thread identity does not
-exist on the surface until the combined command response is installed. A v4
+exist on the surface until the combined command response is installed. A v5
 surface therefore opens a local retry gate before issuing the command, buffers
 events in sequence, installs the returned transition, binds the new generation
 to the returned Operation/Thread/Turn identities, and then replays the buffer.
@@ -496,7 +496,7 @@ where the command contract explicitly allows them.
 
 ## Fixtures and compatibility testing
 
-`protocol/fixtures/v4/` is the cross-language source of truth. It contains valid
+`protocol/fixtures/v5/` is the cross-language source of truth. It contains valid
 and invalid methods, command results, events, product failures, plus a manifest
 with file hashes, method names, event names, product version, and protocol
 version. Python Pydantic models and the TUI's strict TypeScript/Zod schemas both

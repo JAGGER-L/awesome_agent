@@ -75,7 +75,7 @@ What exists now or later? -> Roadmap
 - [Built-in tools](reference/built-in-tools.md)
 - [Permission modes](reference/permission-modes.md)
 - [Files and state](reference/files-and-state.md)
-- [Protocol v4](reference/protocol.md)
+- [Protocol v5](reference/protocol.md)
 
 ### Architecture
 

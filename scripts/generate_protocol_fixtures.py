@@ -506,14 +506,14 @@ def _valid_methods() -> dict[str, object]:
             "provider.credential.set.configured",
             "provider.credential.set",
             {
-                "provider": "deepseek",
+                "provider": "tavily",
                 "action": "add",
                 "api_key": "fixture-request-secret",
                 "allow_unverified": False,
             },
             _success(
                 ProviderCredentialSetResult(
-                    provider="deepseek",
+                    provider="tavily",
                     status=ProviderCredentialSetStatus.CONFIGURED,
                     source=CredentialSource.AWESOME,
                     code="credential_saved",
@@ -636,7 +636,7 @@ def _invalid_methods() -> dict[str, object]:
                 "name": "initialize.protocol_incompatible",
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 3,
+                    "protocol_version": 4,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -1313,11 +1313,11 @@ def _valid_command_results() -> dict[str, object]:
                 "kind": "interaction",
                 "interaction": {
                     "kind": "secret",
-                    "provider": "deepseek",
+                    "provider": "tavily",
                     "action": "add",
-                    "label": "DeepSeek API Key",
-                    "environment_variable": "DEEPSEEK_API_KEY",
-                    "help_url": "https://platform.deepseek.com/api_keys",
+                    "label": "Tavily API Key",
+                    "environment_variable": "TAVILY_API_KEY",
+                    "help_url": "https://app.tavily.com/home",
                 },
             },
         ),

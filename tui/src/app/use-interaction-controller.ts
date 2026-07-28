@@ -51,7 +51,7 @@ export function useInteractionController(
   const mutateCredential = useCallback(
     async (
       intent: CommandIntent,
-      provider: "deepseek" | "kimi" | "mem0",
+      provider: "deepseek" | "kimi" | "mem0" | "tavily",
       action: "add" | "replace" | "delete",
       secret?: string,
       prompt?: SecretPrompt,
@@ -316,7 +316,10 @@ export function commandPickerOwner(intent: CommandIntent): PickerOwner {
   if (
     intent.name === "auth" &&
     intent.arguments?.at(-1) === "delete" &&
-    (provider === "deepseek" || provider === "kimi" || provider === "mem0")
+    (provider === "deepseek" ||
+      provider === "kimi" ||
+      provider === "mem0" ||
+      provider === "tavily")
   ) {
     return { kind: "credential_delete", intent, provider };
   }
@@ -355,10 +358,14 @@ export function secretMode(
   };
 }
 
-function providerLabel(provider: "deepseek" | "kimi" | "mem0"): string {
+function providerLabel(
+  provider: "deepseek" | "kimi" | "mem0" | "tavily",
+): string {
   return provider === "deepseek"
     ? "DeepSeek"
     : provider === "kimi"
       ? "Kimi"
-      : "Mem0 Cloud";
+      : provider === "mem0"
+        ? "Mem0 Cloud"
+        : "Tavily";
 }

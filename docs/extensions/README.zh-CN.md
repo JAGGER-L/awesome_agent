@@ -94,4 +94,4 @@ Turn 使用了与更早 Turn 相同的上下文和工具。
   [工具与 shell](../user-guide/tools-and-shell.zh-CN.md)。
 - 外部工具服务器：[MCP](mcp.zh-CN.md) ->
   [权限](../user-guide/permissions.zh-CN.md) ->
-  [Protocol v4](../reference/protocol.zh-CN.md)。
+  [Protocol v5](../reference/protocol.zh-CN.md)。

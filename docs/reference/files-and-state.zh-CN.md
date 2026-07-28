@@ -82,8 +82,8 @@ Memory 开关、禁用的 Skills 和 User MCP 声明。版本 `1` 仍可读取�
 
 ### `<HOME>/.env`
 
-由 Awesome 管理的 `DEEPSEEK_API_KEY`、`MOONSHOT_API_KEY`、`MEM0_API_KEY`，以及可选的
-`AWESOME_WEB_PROXY_URL` 凭据存储。`/auth` 只管理前三项；受支持的 writer 通过同目录
+由 Awesome 管理的 `DEEPSEEK_API_KEY`、`MOONSHOT_API_KEY`、`MEM0_API_KEY`、
+`TAVILY_API_KEY`，以及可选的 `AWESOME_WEB_PROXY_URL` 凭据存储。`/auth` 管理前四项；受支持的 writer 通过同目录
 temporary file 写入、flush，然后以原子方式替换目标。在 POSIX 上，Awesome 创建目录时
 只允许 owner 访问，创建文件时只允许 owner 读写。
 

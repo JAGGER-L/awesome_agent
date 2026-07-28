@@ -4,7 +4,7 @@ import { presentCommandPayload } from "../../src/commands/presenters.js";
 import { findCommand } from "../../src/commands/catalog.js";
 
 const credential = (
-  provider: "deepseek" | "kimi" | "mem0",
+  provider: "deepseek" | "kimi" | "mem0" | "tavily",
   selected_source: "environment" | "awesome" | null,
   environment_configured: boolean,
   awesome_configured: boolean,
@@ -92,6 +92,7 @@ describe("catalog and configuration presenters", () => {
         deepseek: credential("deepseek", "environment", true, false),
         kimi: credential("kimi", "awesome", false, true),
         mem0: credential("mem0", "awesome", false, false),
+        tavily: credential("tavily", "awesome", false, true),
       },
     });
     expect(result).toMatchObject({
@@ -101,6 +102,7 @@ describe("catalog and configuration presenters", () => {
         { label: "DeepSeek", value: "Environment" },
         { label: "Kimi", value: "Awesome" },
         { label: "Mem0", value: "Awesome · Unavailable" },
+        { label: "Tavily", value: "Awesome" },
       ],
     });
     expect(JSON.stringify(result)).not.toContain("API_KEY=");

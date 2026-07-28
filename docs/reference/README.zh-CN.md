@@ -12,7 +12,7 @@
 | [内置工具](built-in-tools.zh-CN.md) | 工具名、capability、参数字段、限制、输出和条件支持工具 |
 | [权限模式](permission-modes.zh-CN.md) | 精确的三模式矩阵、单次与 Thread grant、hard denial 和 Full access 确认 |
 | [文件与状态](files-and-state.zh-CN.md) | User/workspace 路径、SQLite 所有权、schema 行为、锁、备份和重置边界 |
-| [Protocol v4](protocol.zh-CN.md) | 私有 stdio JSON-RPC method、事件、错误、握手和 fixture |
+| [Protocol v5](protocol.zh-CN.md) | 私有 stdio JSON-RPC method、事件、错误、握手和 fixture |
 
 ## 如何阅读参考页面
 
@@ -43,7 +43,7 @@ Awesome 有多个相互独立的版本：
 不会纳入。
 
 其中一个版本相同，并不意味着其他版本兼容。尤其是，私有 protocol 握手同时要求 protocol
-v4 和完全一致的已安装产品版本，以便独立升级的 Core 与 TUI 组件能够明确失败。
+v5 和完全一致的已安装产品版本，以便独立升级的 Core 与 TUI 组件能够明确失败。
 `contract-versions.json` 是这些契约标识的机器可读目录；生成的 Python 与 TypeScript 常量让
 运行时代码无需读取 JSON。一次发布会把该目录与 `VERSION` 组合到生成的
 `compatibility.json` 中；它不会强制这些数字相等，也不会在每次产品发布时递增所有格式版本。

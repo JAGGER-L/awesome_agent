@@ -13,6 +13,7 @@ import awesome_agent.config.loader as config_loader
 import awesome_agent.core.safe_files as safe_files_module
 from awesome_agent.config import (
     ConfigurationInvalid,
+    CredentialSource,
     config_source_paths,
     load_config_sources,
 )
@@ -361,7 +362,7 @@ def test_user_v1_rejects_v2_only_fields(tmp_path: Path, content: str) -> None:
 @pytest.mark.parametrize(
     "content",
     [
-        "version: 2\ncredentials:\n  tavily: awesome\n",
+        "version: 2\ncredentials:\n  tavily: unsupported\n",
         "version: 2\nweb:\n  provider: other\n",
         "version: 2\nweb:\n  blocked_domains: [Example.COM]\n",
         "version: 2\nbudgets:\n  web_requests: 9\n",
@@ -603,6 +604,7 @@ def test_process_environment_overrides_user_dotenv_without_leaking_values(
         "DEEPSEEK_API_KEY=from-file\n"
         "MOONSHOT_API_KEY=moonshot-file\n"
         "MEM0_API_KEY=mem0-file\n"
+        "TAVILY_API_KEY=tavily-file\n"
         "AWESOME_WEB_PROXY_URL=https://proxy-file.example\n",
         encoding="utf-8",
     )
@@ -662,7 +664,42 @@ def test_process_environment_overrides_user_dotenv_without_leaking_values(
             "awesome_configured": True,
             "selected_source": "awesome",
         },
+        "tavily": {
+            "provider": "tavily",
+            "environment_variable": "TAVILY_API_KEY",
+            "environment_configured": True,
+            "awesome_configured": True,
+            "selected_source": "environment",
+        },
     }
+
+
+def test_tavily_can_select_an_awesome_managed_secret(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        "version: 2\ncredentials:\n  tavily: awesome\n",
+        encoding="utf-8",
+    )
+    (home / ".env").write_text(
+        "TAVILY_API_KEY=managed-tavily-secret\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_config_sources(
+        paths=AwesomePaths.from_home(home),
+        workspace=tmp_path / "workspace",
+        workspace_trusted=False,
+        environ={"TAVILY_API_KEY": "environment-tavily-secret"},
+    )
+
+    assert loaded.provider_credentials.tavily.selected_source is (
+        CredentialSource.AWESOME
+    )
+    assert loaded.provider_credentials.tavily.environment_configured is True
+    assert loaded.provider_credentials.tavily.awesome_configured is True
+    assert loaded.secrets.tavily_api_key is not None
+    assert loaded.secrets.tavily_api_key.get_secret_value() == "managed-tavily-secret"
 
 
 def test_missing_provider_credentials_report_missing_source(tmp_path: Path) -> None:

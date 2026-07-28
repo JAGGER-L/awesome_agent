@@ -83,7 +83,7 @@ def test_protocol_fixture_gate_rejects_event_catalog_drift() -> None:
         )
 
 
-def test_release_identity_uses_catalog_protocol_without_a_v4_constant(
+def test_release_identity_uses_catalog_protocol_without_a_hardcoded_constant(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -343,7 +343,7 @@ def test_release_compatibility_is_canonical_and_catalog_derived() -> None:
         "event_envelope": {"version": 1},
         "headless_json": {"schema": "awesome.run.result", "version": 2},
         "product": {"version": version},
-        "protocol": {"version": 4},
+        "protocol": {"version": 5},
         "schema": "awesome.release-compatibility",
         "thread_export": {
             "json_schema": "awesome.thread-export",
@@ -358,7 +358,7 @@ def test_release_compatibility_is_canonical_and_catalog_derived() -> None:
         content,
         product_version=version,
     )
-    assert compatibility.protocol_version == 4
+    assert compatibility.protocol_version == 5
     assert compatibility.application_schema_migration_floor == 7
     assert compatibility.application_schema_current == 8
     assert render_release_compatibility(ROOT, version) == content
@@ -1302,9 +1302,9 @@ def test_protocol_smoke_rejects_invalid_or_unknown_failures_without_echoing(
     assert "\n" not in str(raised.value)
 
 
-def test_protocol_diagnostic_product_codes_cover_v4_contract() -> None:
+def test_protocol_diagnostic_product_codes_cover_v5_contract() -> None:
     fixture = json.loads(
-        (ROOT / "protocol" / "fixtures" / "v4" / "results.failures.json").read_text(
+        (ROOT / "protocol" / "fixtures" / "v5" / "results.failures.json").read_text(
             encoding="utf-8"
         )
     )

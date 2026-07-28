@@ -28,7 +28,7 @@ def _initialize_result(
 ) -> InitializeResult:
     return InitializeResult(
         product_version="0.1.0",
-        protocol_version=4,
+        protocol_version=5,
         status=status,
         session_id="session_1",
         interaction_id=interaction_id,
@@ -219,7 +219,7 @@ def test_constructed_unknown_initialize_status_restores_previous_phase() -> None
     transition = bootstrap.begin_initialize()
     malformed = InitializeResult.model_construct(
         product_version="0.1.0",
-        protocol_version=4,
+        protocol_version=5,
         status="future_status",
         session_id="session_1",
         interaction_id="interaction_future",

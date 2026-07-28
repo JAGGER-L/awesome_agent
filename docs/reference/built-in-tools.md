@@ -296,7 +296,7 @@ terminal tool event and one ToolActivity.
 
 ## Public Web tools
 
-Web is disabled by default. Set `TAVILY_API_KEY`, keep the provider as
+Web is disabled by default. Configure `/auth tavily`, keep the provider as
 `tavily`, and run `/web on`; Workspace configuration may lower the per-Turn
 budget or add blocked domains, but cannot enable Web or choose credentials.
 
@@ -367,7 +367,7 @@ Each Search result and Fetch response receives a stable Turn-local source ID
 are rendered as text rather than links and produce a warning. If Web returned
 sources but the final answer uses none, finalization appends a bounded Sources
 section and emits a warning. The same citations survive ToolResult, Agent
-state/checkpoint, Conversation, Protocol v4, the TUI, and headless JSON v2.
+state/checkpoint, Conversation, Protocol v5, the TUI, and headless JSON v2.
 
 The Search query or requested Fetch URL is sent to Tavily and processed under
 the
