@@ -14,7 +14,7 @@ authors = [{name = "JAGGER-L"}]
 dependencies = [
   "httpx>=0.28,<1",
   "jsonschema>=4.26,<5",
-  "langgraph>=0.6",
+  "langgraph>=1.2.9",
   "langgraph-checkpoint-sqlite>=3.1.0",
   "mcp>=1,<2",
   "openai>=1.100",
