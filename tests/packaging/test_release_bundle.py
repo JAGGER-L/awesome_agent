@@ -1321,10 +1321,14 @@ def test_protocol_diagnostic_product_codes_cover_v4_contract() -> None:
             b'{"jsonrpc":"2.0","method":"event","params":{"value":NaN}}\n',
             "frame is invalid",
         ),
+        (
+            b'{"jsonrpc":"2.0","id":true,"result":{"ok":true,"value":{}}}\n',
+            "response is invalid",
+        ),
         (b"x" * (release_verifier._MAX_PROTOCOL_FRAME_BYTES + 2), "frame is invalid"),
         (None, "closed early"),
     ],
-    ids=("non-finite-json", "oversized-frame", "early-eof"),
+    ids=("non-finite-json", "boolean-id", "oversized-frame", "early-eof"),
 )
 def test_protocol_smoke_rejects_invalid_or_incomplete_frames(
     frame: bytes | None,
@@ -1362,6 +1366,20 @@ def test_protocol_smoke_frame_queue_is_bounded() -> None:
             identifier=1,
             overflow=overflow,
         )
+
+
+def test_protocol_smoke_end_marker_does_not_consume_frame_budget() -> None:
+    frames: queue.Queue[bytes | None] = queue.Queue(maxsize=2)
+    overflow = threading.Event()
+
+    release_verifier._pump_protocol_frames(
+        io.BytesIO(b"{}\n{}\n"),
+        frames,
+        overflow,
+    )
+
+    assert frames.qsize() == 2
+    assert not overflow.is_set()
 
 
 @pytest.mark.parametrize(

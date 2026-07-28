@@ -341,7 +341,8 @@ def _protocol_response(
             raise BundleVerificationError("installed Core protocol frame is invalid")
         if decoded.get("method") == "event":
             continue
-        if decoded.get("id") != identifier:
+        response_id = decoded.get("id")
+        if type(response_id) is not int or response_id != identifier:
             raise BundleVerificationError("installed Core protocol response is invalid")
         return decoded
     raise BundleVerificationError("installed Core emitted too many unsolicited frames")
@@ -450,7 +451,7 @@ def _pump_protocol_frames(
 ) -> None:
     reader = getattr(stream, "readline", None)
     if not callable(reader):
-        _queue_protocol_frame(frames, None, overflow)
+        _queue_protocol_end(frames)
         return
     try:
         while True:
@@ -459,7 +460,7 @@ def _pump_protocol_frames(
                 break
             _queue_protocol_frame(frames, line, overflow)
     finally:
-        _queue_protocol_frame(frames, None, overflow)
+        _queue_protocol_end(frames)
 
 
 def _queue_protocol_frame(
@@ -473,6 +474,11 @@ def _queue_protocol_frame(
         frames.put_nowait(frame)
     except queue.Full:
         overflow.set()
+
+
+def _queue_protocol_end(frames: queue.Queue[bytes | None]) -> None:
+    with suppress(queue.Full):
+        frames.put_nowait(None)
 
 
 def _stop_protocol_process(process: subprocess.Popen[bytes]) -> None:
