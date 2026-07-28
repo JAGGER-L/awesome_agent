@@ -164,7 +164,7 @@ describe("networkless candidate product flow", () => {
         resetCurrentFrame,
         width: 80,
         welcome: {
-          version: "1.3.0",
+          version: "1.3.1",
           workspacePath: "E:/awesome",
           thread: { kind: "new" },
           model: "deepseek/deepseek-v4-flash",
@@ -602,7 +602,7 @@ async function eventually(assertion: () => void): Promise<void> {
 
 function applicationState(threadId: string) {
   const credential = (
-    provider: "deepseek" | "kimi" | "mem0",
+    provider: "deepseek" | "kimi" | "mem0" | "tavily",
     variable: string,
   ) => ({
     provider,
@@ -639,6 +639,7 @@ function applicationState(threadId: string) {
       deepseek: credential("deepseek", "DEEPSEEK_API_KEY"),
       kimi: credential("kimi", "MOONSHOT_API_KEY"),
       mem0: credential("mem0", "MEM0_API_KEY"),
+      tavily: credential("tavily", "TAVILY_API_KEY"),
     },
     memory_status: {},
     mcp_status: [],

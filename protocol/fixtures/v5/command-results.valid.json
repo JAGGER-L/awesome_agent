@@ -100,6 +100,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -351,6 +357,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -615,15 +627,27 @@
             },
             {
               "approval_required": true,
+              "description": "Run shell commands",
+              "name": "execute",
+              "read_only": false
+            }
+          ],
+          "unavailable_tools": [
+            {
               "description": "Fetch readable content from one public HTTPS URL",
+              "hint": "Run /web on to enable these tools.",
               "name": "web_fetch",
-              "read_only": true
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
             },
             {
-              "approval_required": true,
               "description": "Search the public web for current information",
+              "hint": "Run /web on to enable these tools.",
               "name": "web_search",
-              "read_only": true
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
             }
           ]
         }
@@ -773,7 +797,7 @@
             "thread_display_id": "thread_11111111",
             "thread_id": "thread_11111111111111111111111111111111",
             "thread_title": "Fixture Thread",
-            "version": "1.3.0",
+            "version": "1.3.1",
             "workspace_path": "C:\\workspace"
           }
         }
@@ -839,6 +863,12 @@
               "environment_configured": false,
               "environment_variable": "MEM0_API_KEY",
               "provider": "mem0"
+            },
+            "tavily": {
+              "awesome_configured": false,
+              "environment_configured": false,
+              "environment_variable": "TAVILY_API_KEY",
+              "provider": "tavily"
             }
           },
           "kind": "config",
@@ -948,6 +978,12 @@
                   "environment_configured": false,
                   "environment_variable": "MEM0_API_KEY",
                   "provider": "mem0"
+                },
+                "tavily": {
+                  "awesome_configured": false,
+                  "environment_configured": false,
+                  "environment_variable": "TAVILY_API_KEY",
+                  "provider": "tavily"
                 }
               },
               "secret_status": {
@@ -1026,11 +1062,11 @@
       "outcome": {
         "interaction": {
           "action": "add",
-          "environment_variable": "DEEPSEEK_API_KEY",
-          "help_url": "https://platform.deepseek.com/api_keys",
+          "environment_variable": "TAVILY_API_KEY",
+          "help_url": "https://app.tavily.com/home",
           "kind": "secret",
-          "label": "DeepSeek API Key",
-          "provider": "deepseek"
+          "label": "Tavily API Key",
+          "provider": "tavily"
         },
         "kind": "interaction"
       }

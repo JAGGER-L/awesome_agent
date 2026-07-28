@@ -154,7 +154,7 @@ export const commandSelectionSchema = z
 
 export const commandSecretPromptSchema = z.strictObject({
   kind: z.literal("secret"),
-  provider: z.enum(["deepseek", "kimi", "mem0"]),
+  provider: z.enum(["deepseek", "kimi", "mem0", "tavily"]),
   action: z.enum(["add", "replace"]),
   label: boundedText(1, 200),
   environment_variable: boundedText(1, 128),
@@ -175,6 +175,14 @@ const toolItemSchema = z.strictObject({
   description: boundedText(1, 1_000),
   read_only: z.boolean(),
   approval_required: z.boolean(),
+});
+const unavailableToolItemSchema = z.strictObject({
+  name: boundedText(1, 128),
+  description: boundedText(1, 1_000),
+  read_only: z.boolean(),
+  reason_code: boundedText(1, 128).regex(/^[a-z][a-z0-9_]{0,127}$/u),
+  reason: boundedText(1, 1_000),
+  hint: boundedText(1, 1_000),
 });
 const skillItemSchema = z.strictObject({
   name: boundedText(1, 64),
@@ -306,6 +314,7 @@ const commandPayloadBaseSchema = z.discriminatedUnion("kind", [
     kind: z.literal("tools"),
     permission_mode: permissionModeSchema,
     tools: z.array(toolItemSchema),
+    unavailable_tools: z.array(unavailableToolItemSchema),
   }),
   z.strictObject({
     kind: z.literal("web_status"),
@@ -377,6 +386,34 @@ const commandPayloadBaseSchema = z.discriminatedUnion("kind", [
 
 export const commandPayloadSchema = commandPayloadBaseSchema.superRefine(
   (payload, context) => {
+    if (payload.kind === "tools") {
+      const availableNames = payload.tools.map((tool) => tool.name);
+      const unavailableNames = payload.unavailable_tools.map(
+        (tool) => tool.name,
+      );
+      if (new Set(availableNames).size !== availableNames.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["tools"],
+          message: "Available tool names must be unique",
+        });
+      }
+      if (new Set(unavailableNames).size !== unavailableNames.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["unavailable_tools"],
+          message: "Unavailable tool names must be unique",
+        });
+      }
+      const available = new Set(availableNames);
+      if (unavailableNames.some((name) => available.has(name))) {
+        context.addIssue({
+          code: "custom",
+          path: ["unavailable_tools"],
+          message: "Available and unavailable tool names must be disjoint",
+        });
+      }
+    }
     if (payload.kind === "thread_export") {
       const changed = payload.write_status !== "unchanged";
       if (changed !== Boolean(payload.change_set_id)) {

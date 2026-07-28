@@ -69,12 +69,12 @@ rejected before Core starts.
 The startup directory is the workspace. Trust, local state compatibility, and
 Core/TUI protocol compatibility are resolved before normal input is admitted.
 See [files and state](files-and-state.md) and
-[Protocol v4](protocol.md).
+[Protocol v5](protocol.md).
 
 ## Local Skill package management
 
 Skill package commands start the same private Core but call their dedicated
-Protocol v4 RPC before `initialize`. They do not enter Ink, create a Thread or
+Protocol v5 RPC before `initialize`. They do not enter Ink, create a Thread or
 Turn, load a model, or expose package management as an Agent tool. The command
 keeps stdout empty on every nonzero exit and writes bounded diagnostics to
 stderr. If an install, replacement, or removal RPC succeeds but Core does not
@@ -163,7 +163,7 @@ document followed by one newline:
 {"version":2,"type":"awesome.run.result","thread_id":"...","turn_id":"...","text":"... [[S1]]","citations":[{"id":"S1","title":"Example","url":"https://example.com/source"}],"termination_reason":null,"usage":{"input_tokens":0,"output_tokens":0,"reasoning_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"model_calls":0,"tool_calls":0,"provider_retries":0,"compressions":0,"web_requests":1,"active_execution_seconds":0}}
 ```
 
-The JSON document is versioned independently from Protocol v4. Version 2 adds
+The JSON document is versioned independently from Protocol v5. Version 2 adds
 the ordered `citations` array and `usage.web_requests`; it reports the durable
 answer and Turn facts, not a stream of protocol events. On every
 nonzero exit, stdout is empty and diagnostics go to stderr.

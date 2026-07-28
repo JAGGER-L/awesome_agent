@@ -15,7 +15,7 @@ permission system 或 database owner。
 4. 哪些输入不受信，它们在哪里校验并受限？
 5. Timeout、cancellation、partial output 和 process crash 时会怎样？
 6. 外部作用是否可安全重试，还是必须标记为 uncertain？
-7. 这会改变 Protocol v4、storage schema、permission 或 packaging 吗？
+7. 这会改变 Protocol v5、storage schema、permission 或 packaging 吗？
 
 优先在当前契约后实现具体功能。不要为一个假设实现创建通用 provider/backend/plugin 层。
 
@@ -309,7 +309,7 @@ synthetic multi-step schema 测试 registry，包括数据保留、backup 校验
 
 ## 添加 protocol 或 TUI 界面事实
 
-遵循完整 Protocol v4 链：
+遵循完整 Protocol v5 链：
 
 ```text
 Python strict model

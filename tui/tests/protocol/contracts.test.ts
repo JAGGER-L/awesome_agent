@@ -18,7 +18,7 @@ import { PRODUCT_VERSION } from "../../src/version.js";
 import { loadFixtureCorpus } from "../contracts/fixture-loader.js";
 import { freshModelCatalog } from "../fixtures/model-catalog.js";
 
-describe("protocol v4 handshake", () => {
+describe("protocol v5 handshake", () => {
   const params = {
     protocol_version: PROTOCOL_VERSION,
     client_name: "awesome",
@@ -33,7 +33,7 @@ describe("protocol v4 handshake", () => {
     capabilities: ["threads", "turns", "commands", "web", "citations"],
   } as const;
 
-  it("accepts v4 and rejects old v3 values in both handshake directions", () => {
+  it("accepts v5 and rejects old v4 values in both handshake directions", () => {
     expect(methodSchemas.initialize.params.safeParse(params).success).toBe(
       true,
     );
@@ -59,7 +59,7 @@ describe("protocol v4 handshake", () => {
   });
 });
 
-describe("protocol v4 Skill package management contracts", () => {
+describe("protocol v5 Skill package management contracts", () => {
   it("accepts strict pre-initialize Skill requests and closed mutation results", () => {
     expect(methodSchemas["skill.list"].params.safeParse({}).success).toBe(true);
     expect(
@@ -145,7 +145,7 @@ describe("protocol v4 Skill package management contracts", () => {
   });
 });
 
-describe("protocol v4 Web and citation contracts", () => {
+describe("protocol v5 Web and citation contracts", () => {
   const citation = {
     id: "S1",
     title: "Primary source",
@@ -327,7 +327,7 @@ describe("workspace instruction diagnostic protocol", () => {
 describe("provider credential protocol", () => {
   it("accepts a dedicated credential request and rejects unknown fields", () => {
     const params = {
-      provider: "deepseek",
+      provider: "tavily",
       action: "add",
       api_key: "never-render-this",
     };
@@ -361,10 +361,10 @@ describe("provider credential protocol", () => {
       kind: "interaction",
       interaction: {
         kind: "secret",
-        provider: "kimi",
+        provider: "tavily",
         action: "add",
-        label: "Kimi API Key",
-        environment_variable: "MOONSHOT_API_KEY",
+        label: "Tavily API Key",
+        environment_variable: "TAVILY_API_KEY",
         help_url: "https://example.com",
       },
     };
@@ -765,6 +765,13 @@ function applicationState() {
         environment_configured: false,
         awesome_configured: false,
         selected_source: null,
+      },
+      tavily: {
+        provider: "tavily",
+        environment_variable: "TAVILY_API_KEY",
+        environment_configured: false,
+        awesome_configured: false,
+        selected_source: "environment",
       },
     },
     memory_status: {},

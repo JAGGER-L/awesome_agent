@@ -73,7 +73,7 @@ Finalization validates model markers written as `[[S1]]`: unknown IDs produce
 a warning and are not linked; when Web was used but no valid source is cited,
 it appends a bounded deterministic Sources section and records a warning.
 Conversation persists the same sources with the assistant entry, and Protocol
-v4 carries them to the TUI, headless JSON v2, and later exports.
+v5 carries them to the TUI, headless JSON v2, and later exports.
 
 ## Executor pipeline
 

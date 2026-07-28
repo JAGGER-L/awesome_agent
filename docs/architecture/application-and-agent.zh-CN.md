@@ -70,9 +70,9 @@ Coordinator 还会把 bootstrap interaction 绑定到精确 identity。只有类
 non-ready，直到后续 initialize 完成。
 
 界面在 dispatch 前向 Application 查询提供商中立的 admission decision。stdio Host 会把拒绝
-映射成既有 Protocol v4 `-32002` diagnostic，但绝不维护第二套状态机，也不解析序列化的
+映射成既有 Protocol v5 `-32002` diagnostic，但绝不维护第二套状态机，也不解析序列化的
 request/result payload 来推断 readiness。Cancellation 与 shutdown 在每个 phase 都保持准入。
-Protocol v4 的 wire shape、status value 和 error 语义仍由 Application 统一拥有。
+Protocol v5 的 wire shape、status value 和 error 语义仍由 Application 统一拥有。
 
 ### Workspace runtime 快照
 
@@ -184,7 +184,7 @@ execute_one_tool
 `tool_results` 存储每个完整序列化的 `ToolResult`，包括其中由 Core 定义的最小
 `Citation` tuple。每个 result 完成后，Agent 会在 `AgentState.citations` 中派生有序 Turn
 快照；该快照和 `web_requests` 计数都会经过 checkpoint recovery。Finalization 校验
-`[[S1]]` marker，Conversation 把同一来源随 assistant entry 持久化，Protocol v4 再投影给
+`[[S1]]` marker，Conversation 把同一来源随 assistant entry 持久化，Protocol v5 再投影给
 TUI 与 headless 界面。
 
 新增 channel 会改变 checkpoint 兼容性和恢复校验。这里不是放置任意 UI 或产品状态

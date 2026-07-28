@@ -16,7 +16,7 @@ Ink。Slash Command 是产品控制输入：它会显示在终端 transcript 中
 | `/search <query> [thread_id]` | 一个 query token（多词时加引号），随后可选精确结果 ID | 搜索当前 Workspace、打开 picker，或恢复选中的匹配 Thread。 |
 | `/context` | 无参数 | 显示最新的活动上下文类别、实际 token 数和预算。 |
 | `/compact` | 无参数 | 立即构建并持久化新的对话摘要。 |
-| `/auth [deepseek\|kimi\|mem0]` | 正常使用时为零或一个 service | 通过 picker 选择并管理 Environment 或 Awesome API-key 来源。 |
+| `/auth [deepseek\|kimi\|mem0\|tavily]` | 正常使用时为零或一个 service | 通过 picker 选择并管理 Environment 或 Awesome API-key 来源。 |
 | `/model [deepseek\|kimi]` | 正常使用时为零或一个 Provider | 选择 Provider/model；更新当前 Thread 和用户默认值。 |
 | `/thinking [on\|off]` | 零或一个值 | 显示 picker，或设置当前 Thread 后续 Turn 的 Thinking。 |
 | `/permissions [request_approval\|accept_edits\|full_access]` | 零或一个 mode | 检查或更改会话权限模式；Full access 需要单独确认。 |
@@ -74,8 +74,9 @@ key 或私有 entry metadata。目标会经过通常的工作区 identity 与 sa
 `/auth` 绝不接受 key 作为命令参数。Picker 可能为来源选择、替换和删除生成内部 continuation
 token；请使用遮罩交互，而不是编写脚本调用这些 token。保存 DeepSeek 或 Kimi key 会执行
 一次短 Provider 验证请求。模型 Provider 不可达时会明确提供 save-unverified 选项；被模型
-Provider 拒绝的 key 不会保存。Mem0 不同：`/auth mem0` 只执行本地输入/存储验证，无需远程
-凭据检查就会保存该值。无效 Mem0 key 会在之后启用或调用云端 Memory 时才被发现。
+Provider 拒绝的 key 不会保存。Mem0 与 Tavily 不同：`/auth mem0` 和 `/auth tavily` 只执行
+本地输入/存储验证，无需远程凭据检查就会保存该值。无效 key 会在后续云端 Memory 或 Web
+请求真正连接服务时才被发现。
 
 `/model` 在指定 Provider 时，首先确保该 Provider 有可用且已选中的凭据，随后只提供
 [配置参考](configuration.zh-CN.md)中的精选 model。
@@ -182,4 +183,4 @@ Application 命令只返回一个 `CommandOutcome` 分支：
 - `error`：稳定的 code 和有界的用户可见消息。
 
 命令输入和结果保持为两个独立的终端 block。因此 picker 取消、无效参数和 Core 错误都会
-保留精确的已提交命令。完整 wire schema 见 [Protocol v4](protocol.zh-CN.md)。
+保留精确的已提交命令。完整 wire schema 见 [Protocol v5](protocol.zh-CN.md)。

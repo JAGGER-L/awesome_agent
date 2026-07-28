@@ -71,7 +71,7 @@ API：package 所有权、唯一 graph compiler、命令 inventory、schema iden
 
 该目录是一组 release tuple，而不是共享计数器。只递增真正发生不兼容变化的 contract。
 
-## Protocol v4 变更工作流
+## Protocol v5 变更工作流
 
 Protocol fixture 是 Python/TypeScript 双向证据。若要变更 method、result、event、command
 outcome 或 projection：
@@ -84,7 +84,7 @@ outcome 或 projection：
    uv run python scripts/generate_protocol_fixtures.py
    ```
 
-4. 检查 `protocol/fixtures/v4/` 和 manifest hash；绝不手工编辑。
+4. 检查 `protocol/fixtures/v5/` 和 manifest hash；绝不手工编辑。
 5. 对 breaking change，更新 `contract-versions.json` 中的 Protocol entry 并重新生成
    binding。
 6. 更新 `tui/src/protocol/` 下严格 Zod schema。

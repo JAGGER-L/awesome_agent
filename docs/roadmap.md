@@ -31,7 +31,7 @@ Awesome currently provides:
 - opt-in structured Tavily Web Search and Fetch through the same Registry,
   Policy, and Executor, with per-Turn budgets, Thread-scoped network consent,
   and durable citations;
-- a versioned Protocol v4 boundary between Python Core and the Ink TUI;
+- a versioned Protocol v5 boundary between Python Core and the Ink TUI;
 - a searchable GitHub Pages documentation site generated from this directory.
 
 The [architecture overview](../ARCHITECTURE.md) defines the current component

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { commandOutcomeSchema } from "../../src/protocol/commands.js";
 import { loadFixtureCorpus } from "../contracts/fixture-loader.js";
 
-describe("Protocol v4 command outcomes", () => {
+describe("Protocol v5 command outcomes", () => {
   it("accepts every Python valid outcome and rejects every invalid outcome", async () => {
     const corpus = await loadFixtureCorpus();
     const valid = corpus.files["command-results.valid.json"] as {
@@ -29,6 +29,9 @@ describe("Protocol v4 command outcomes", () => {
         "thread_retry_unknown_field",
         "web_status_empty_diagnostic_code",
         "web_status_invalid_diagnostic_code",
+        "tools_duplicate_available_name",
+        "tools_duplicate_unavailable_name",
+        "tools_available_unavailable_overlap",
       ]),
     );
     expect(valid.cases.map(({ name }) => name)).toContain(

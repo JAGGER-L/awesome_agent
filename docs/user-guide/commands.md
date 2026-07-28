@@ -97,7 +97,7 @@ than running without a limit.
 | `/usage` | Cumulative observed token, model, tool, retry, compression, and active-time usage. |
 | `/config` | Configuration-source and credential-presence diagnostics; never secret values. |
 | `/doctor` | Local state checks, Workspace-instruction diagnostics, and on-demand Provider validation. |
-| `/tools` | Effective built-in and extension tool catalog and approval state. |
+| `/tools` | Active built-in/extension tools with descriptions, side-effect and approval state, plus known unavailable tools with a reason and next step. |
 
 `/context` and `/usage` answer different questions. The former explains what
 was assembled for the model; the latter accounts for what the Thread has
@@ -145,13 +145,15 @@ Use:
 /auth deepseek
 /auth kimi
 /auth mem0
+/auth tavily
 ```
 
 `/auth` shows Environment and Awesome-managed credential sources separately.
-Keys are never accepted as command arguments. A known-invalid Provider key is
-not saved. When validation cannot reach a Provider, the TUI asks whether to
-save the key as unverified. Deleting an Awesome-managed key does not revoke it
-at the Provider and does not silently select an Environment value.
+Keys are never accepted as command arguments. DeepSeek and Kimi use remote
+validation; Mem0 and Tavily use local input/storage validation so saving them
+does not make a potentially billable request. Deleting an Awesome-managed key
+does not revoke it at the Provider and does not silently select an Environment
+value.
 
 ## Permission and Extension Commands
 

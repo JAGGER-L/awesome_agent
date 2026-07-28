@@ -36,8 +36,9 @@ Awesome 最开始提供 `ls`、`read_file`、`write_file`、`edit_file`、`delet
 `glob`、`grep` 和 `execute`。扩展可以继续增加工具，Awesome 不限制为八个工具。
 Local memory 与 Mem0 Cloud 相互独立，二者默认关闭。
 
-Web 工具同样默认关闭。设置 `TAVILY_API_KEY`，通过 `/web on` 启用，并批准每个 Thread
-第一次 `network.read` 请求。Search query 与 Fetch URL 会依据 Tavily 的
+Web 工具同样默认关闭。通过遮罩的 `/auth tavily` 配置 Tavily，或选择已有的
+`TAVILY_API_KEY`，再通过 `/web on` 启用，并批准每个 Thread 第一次 `network.read` 请求。
+Search query 与 Fetch URL 会依据 Tavily 的
 [隐私政策](https://www.tavily.com/privacy)和[平台条款](https://www.tavily.com/terms)
 发送给 Tavily；Awesome 会分配稳定的 `S1...` 来源，并将其带入最终回答。使用 `/web off`
 可关闭集成，使用 `/web revoke` 可清除当前 Thread grant。

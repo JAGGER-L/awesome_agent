@@ -94,7 +94,7 @@ build, packs, installs the tarball, and executes the installed CLI. Keep the
 explicit post-build `npm pack --dry-run` as a human-readable contents check;
 running it before build can inspect stale `dist` or fail to prove the bin target.
 
-### 6. Protocol v4 fixtures
+### 6. Protocol v5 fixtures
 
 ```powershell
 uv run python scripts/release/contract_versions.py

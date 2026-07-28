@@ -93,8 +93,8 @@ by the first supported write. The document contains no secret values. See
 ### `<HOME>/.env`
 
 The Awesome-managed credential store for `DEEPSEEK_API_KEY`,
-`MOONSHOT_API_KEY`, `MEM0_API_KEY`, and optionally
-`AWESOME_WEB_PROXY_URL`. `/auth` manages only the first three entries; supported
+`MOONSHOT_API_KEY`, `MEM0_API_KEY`, `TAVILY_API_KEY`, and optionally
+`AWESOME_WEB_PROXY_URL`. `/auth` manages the first four entries; supported
 writers use a same-directory temporary file, flush it, and atomically replace
 the destination. On POSIX, Awesome creates the directory for owner-only access
 and the file with owner read/write mode.

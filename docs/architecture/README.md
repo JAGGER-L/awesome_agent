@@ -43,7 +43,7 @@ it:
 | prompt sources, budgets, model adapters, Skills, Memory, and MCP | [Context, model, and extensions](context-model-and-extensions.md) |
 | tool registration, Web Search/Fetch citations, approval, shell execution, and reversible changes | [Tools and changes](tools-and-changes.md) |
 | SQLite ownership, checkpoints, leases, reset, and crash convergence | [Storage and recovery](storage-and-recovery.md) |
-| Protocol v4, stdio bounds, Ink state, input modes, and reconciliation | [Protocol and TUI](protocol-and-tui.md) |
+| Protocol v5, stdio bounds, Ink state, input modes, and reconciliation | [Protocol and TUI](protocol-and-tui.md) |
 | threat model, trust, isolation limits, and enforced dependency direction | [Security and dependencies](security-and-dependencies.md) |
 
 For a code-first tour, begin with:
@@ -64,7 +64,7 @@ For a code-first tour, begin with:
 terminal input
     |
     v
-Ink surface -- Protocol v4 --> LocalApplication
+Ink surface -- Protocol v5 --> LocalApplication
                                      |
                               foreground arbiter
                                      |
@@ -118,7 +118,7 @@ Before changing a boundary:
    add integration coverage for the crossed boundary.
 5. Update the root architecture overview if package ownership or dependency
    direction changes.
-6. Update the focused page, user documentation, generated Protocol v4 fixtures,
+6. Update the focused page, user documentation, generated Protocol v5 fixtures,
    and TUI schema/presenter when their contracts change.
 
 The contributor workflow is detailed in

@@ -41,8 +41,9 @@ Awesome starts with `ls`, `read_file`, `write_file`, `edit_file`, `delete`,
 `glob`, `grep`, and `execute`. Extensions can add more tools; the total is not limited to eight.
 Local memory and Mem0 Cloud are independent and default off.
 
-Web tools also default off. Set `TAVILY_API_KEY`, enable them with `/web on`,
-and approve the first `network.read` request in each Thread. Search queries and
+Web tools also default off. Configure Tavily with masked `/auth tavily` or select
+an existing `TAVILY_API_KEY`, enable Web with `/web on`, and approve the first
+`network.read` request in each Thread. Search queries and
 Fetch URLs are sent to Tavily under its [Privacy
 Policy](https://www.tavily.com/privacy) and [Platform
 Terms](https://www.tavily.com/terms); Awesome assigns stable `S1...` sources

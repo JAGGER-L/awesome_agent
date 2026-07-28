@@ -80,7 +80,7 @@ When a covered contract changes incompatibly:
 The catalog is a release tuple, not a shared counter. Increment only the
 contract that actually became incompatible.
 
-## Protocol v4 change workflow
+## Protocol v5 change workflow
 
 Protocol fixtures are the bidirectional Python/TypeScript evidence. To change a
 method, result, event, command outcome, or projection:
@@ -93,7 +93,7 @@ method, result, event, command outcome, or projection:
    uv run python scripts/generate_protocol_fixtures.py
    ```
 
-4. Inspect `protocol/fixtures/v4/` and manifest hashes; never hand-edit them.
+4. Inspect `protocol/fixtures/v5/` and manifest hashes; never hand-edit them.
 5. For a breaking change, update the Protocol entry in
    `contract-versions.json` and regenerate its bindings.
 6. Update strict Zod schemas under `tui/src/protocol/`.

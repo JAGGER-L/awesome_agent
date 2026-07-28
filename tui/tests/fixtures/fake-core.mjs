@@ -134,6 +134,13 @@ const applicationState = (threadId) => ({
       awesome_configured: false,
       selected_source: null,
     },
+    tavily: {
+      provider: "tavily",
+      environment_variable: "TAVILY_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: "environment",
+    },
   },
   memory_status: {},
   mcp_status: [],
@@ -328,7 +335,7 @@ const handleLine = (line) => {
       id: request.id,
       result: application({
         product_version: "0.1.0",
-        protocol_version: 4,
+        protocol_version: 5,
         status:
           startupPhase === "state_reset"
             ? "state_reset_required"

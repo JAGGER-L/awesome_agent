@@ -256,7 +256,7 @@ class Facade:
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=4,
+                protocol_version=5,
                 status=InitializeStatus.READY,
                 session_id="session_1",
                 workspace=WorkspacePresentation(display_path="C:\\workspace"),
@@ -450,7 +450,7 @@ class BlockingControlFacade(Facade):
             return ApplicationResult.success(
                 InitializeResult(
                     product_version=PRODUCT_VERSION,
-                    protocol_version=4,
+                    protocol_version=5,
                     status=InitializeStatus.TRUST_REQUIRED,
                     session_id="session_1",
                     interaction_id="interaction_1",
@@ -517,7 +517,7 @@ class HandshakeTrackingFacade(Facade):
         return ApplicationResult.success(
             InitializeResult(
                 product_version=PRODUCT_VERSION,
-                protocol_version=4,
+                protocol_version=5,
                 status=self.initialize_status,
                 session_id="session_1",
                 interaction_id=(
@@ -630,7 +630,7 @@ class InvalidShutdownDuringCommand:
                 1,
                 "initialize",
                 {
-                    "protocol_version": 4,
+                    "protocol_version": 5,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -671,7 +671,7 @@ def _initialize_request(identifier: int) -> bytes:
         identifier,
         "initialize",
         {
-            "protocol_version": 4,
+            "protocol_version": 5,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -684,7 +684,7 @@ async def test_fragmented_ndjson_malformed_duplicate_and_shutdown() -> None:
         1,
         "initialize",
         {
-            "protocol_version": 4,
+            "protocol_version": 5,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -1205,7 +1205,7 @@ async def test_malformed_initialize_does_not_advance_application_bootstrap() -> 
             1,
             "initialize",
             {
-                "protocol_version": 4,
+                "protocol_version": 5,
                 "client_name": "awesome",
             },
         )
@@ -1275,7 +1275,7 @@ async def test_initialize_notification_advances_application_owned_admission() ->
                 "jsonrpc": "2.0",
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 4,
+                    "protocol_version": 5,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -1313,7 +1313,7 @@ async def test_incompatible_initialize_does_not_open_business_request_gate() -> 
             1,
             "initialize",
             {
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -1362,7 +1362,7 @@ async def test_blocked_initialize_rejects_pipeline_and_duplicate_initialize() ->
         1,
         "initialize",
         {
-            "protocol_version": 4,
+            "protocol_version": 5,
             "client_name": "awesome",
             "client_version": PRODUCT_VERSION,
         },
@@ -1387,7 +1387,7 @@ async def test_blocked_initialize_rejects_pipeline_and_duplicate_initialize() ->
             5,
             "initialize",
             {
-                "protocol_version": 4,
+                "protocol_version": 5,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -1432,7 +1432,7 @@ async def test_trust_bootstrap_only_opens_business_gate_after_trust_resolution()
             1,
             "initialize",
             {
-                "protocol_version": 4,
+                "protocol_version": 5,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -1498,7 +1498,7 @@ async def test_initialize_is_repeatable_after_ready() -> None:
     facade = HandshakeTrackingFacade()
     output = Output()
     initialize_params = {
-        "protocol_version": 4,
+        "protocol_version": 5,
         "client_name": "awesome",
         "client_version": PRODUCT_VERSION,
     }
@@ -1608,7 +1608,7 @@ async def test_background_request_failure_stops_while_stdin_remains_open() -> No
         (
             "initialize",
             {
-                "protocol_version": 4,
+                "protocol_version": 5,
                 "client_name": "awesome",
                 "client_version": PRODUCT_VERSION,
             },
@@ -1701,7 +1701,7 @@ async def test_background_control_lane_is_bounded(
                 1,
                 "initialize",
                 {
-                    "protocol_version": 4,
+                    "protocol_version": 5,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },

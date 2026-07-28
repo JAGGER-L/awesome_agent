@@ -203,9 +203,9 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
     monkeypatch.setenv("AWESOME_VERSION", "9.9.9")
     expected = (REPOSITORY_ROOT / "VERSION").read_text(encoding="utf-8")
 
-    assert expected == "1.3.0\n"
-    assert distribution_version("awesome-agent") == "1.3.0"
-    assert PRODUCT_VERSION == "1.3.0"
+    assert expected == "1.3.1\n"
+    assert distribution_version("awesome-agent") == "1.3.1"
+    assert PRODUCT_VERSION == "1.3.1"
     assert awesome_agent.__version__ == PRODUCT_VERSION
 
     project = tomllib.loads(
@@ -217,11 +217,11 @@ def test_product_version_has_one_manual_source(monkeypatch: MonkeyPatch) -> None
 
     package = json.loads((TUI_ROOT / "package.json").read_text(encoding="utf-8"))
     lock = json.loads((TUI_ROOT / "package-lock.json").read_text(encoding="utf-8"))
-    assert package["version"] == "1.3.0"
-    assert lock["version"] == "1.3.0"
-    assert lock["packages"][""]["version"] == "1.3.0"
+    assert package["version"] == "1.3.1"
+    assert lock["version"] == "1.3.1"
+    assert lock["packages"][""]["version"] == "1.3.1"
     assert (TUI_ROOT / "src" / "version.ts").read_text(encoding="utf-8") == (
-        'export const PRODUCT_VERSION = "1.3.0" as const;\n'
+        'export const PRODUCT_VERSION = "1.3.1" as const;\n'
     )
 
 
@@ -232,7 +232,7 @@ def test_protocol_version_has_one_catalog_and_generated_bindings() -> None:
     assert catalog["schema"] == "awesome.contract-versions"
     assert catalog["version"] == 1
     assert "product" not in catalog
-    assert catalog["protocol"] == {"version": 4}
+    assert catalog["protocol"] == {"version": 5}
     assert (
         PROTOCOL_VERSION
         == APPLICATION_PROTOCOL_VERSION
@@ -284,7 +284,7 @@ def test_protocol_version_has_one_catalog_and_generated_bindings() -> None:
     )
     assert (
         re.search(
-            r'(?:protocol_version\s*=\s*4|["\']protocol_version["\']\s*:\s*4)',
+            r'(?:protocol_version\s*=\s*5|["\']protocol_version["\']\s*:\s*5)',
             python_consumers,
         )
         is None
@@ -297,7 +297,7 @@ def test_protocol_version_has_one_catalog_and_generated_bindings() -> None:
     tui_contracts = (TUI_ROOT / "src" / "contract-versions.ts").read_text(
         encoding="utf-8"
     )
-    assert "export const PROTOCOL_VERSION = 4 as const;" in tui_contracts
+    assert "export const PROTOCOL_VERSION = 5 as const;" in tui_contracts
     methods = (TUI_ROOT / "src" / "protocol" / "methods.ts").read_text(encoding="utf-8")
     startup = (TUI_ROOT / "src" / "surface" / "startup.ts").read_text(encoding="utf-8")
     assert methods.count("z.literal(PROTOCOL_VERSION)") == 2
@@ -305,7 +305,7 @@ def test_protocol_version_has_one_catalog_and_generated_bindings() -> None:
     tui_production = "\n".join(
         path.read_text(encoding="utf-8") for path in (TUI_ROOT / "src").rglob("*.ts")
     )
-    assert re.search(r"\bprotocol_version\s*:\s*4\b", tui_production) is None
+    assert re.search(r"\bprotocol_version\s*:\s*5\b", tui_production) is None
 
 
 def test_application_schema_identity_is_independent_from_product_version() -> None:

@@ -75,6 +75,13 @@ const readyApplication: ReadyApplication = {
       awesome_configured: false,
       selected_source: null,
     },
+    tavily: {
+      provider: "tavily",
+      environment_variable: "TAVILY_API_KEY",
+      environment_configured: false,
+      awesome_configured: false,
+      selected_source: "environment",
+    },
   },
   memory_status: {},
   mcp_status: [],
@@ -221,7 +228,7 @@ describe("runCli", () => {
   ])("prints only the product version for %s without starting Core", async (flag) => {
     const value = harness({ argv: [flag] });
     await expect(runCli(value.dependencies)).resolves.toBe(0);
-    expect(value.stdout.join("")).toBe("1.3.0\n");
+    expect(value.stdout.join("")).toBe("1.3.1\n");
     expect(value.dependencies.startSurface).not.toHaveBeenCalled();
   });
 

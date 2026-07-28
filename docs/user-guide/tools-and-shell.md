@@ -23,8 +23,11 @@ model or direct request
 ```
 
 This shared path is why an extension cannot bypass approval simply by exposing
-a new name. `/tools` displays the effective registry, read-only status, and
-whether each tool currently requires approval.
+a new name. `/tools` shows each active tool's description, whether it is
+read-only or may have side effects, and whether it is available immediately or
+requires approval for the current Thread. Known tools that are not active are
+listed separately as unavailable, with a redacted reason and a suggested next
+step. Unavailable entries are informational and are not exposed to the model.
 
 ## Built-in Tool Families
 
@@ -46,8 +49,9 @@ in [Built-in tools](../reference/built-in-tools.md).
 
 ### Using Web Search and Fetch
 
-Set `TAVILY_API_KEY`, run `/web on`, then ask for current information or provide
-one public HTTPS page whose readable content you need. The first `network.read`
+Configure an Awesome-managed key with `/auth tavily` or select an existing
+`TAVILY_API_KEY`, run `/web on`, then ask for current information or provide one
+public HTTPS page whose readable content you need. The first `network.read`
 call asks even in Full access; choose deny (the default), allow once, or allow
 for this Thread. `/web status` shows readiness and disclosure, `/web revoke`
 clears the active Thread grant, and `/web off` removes both tools from the

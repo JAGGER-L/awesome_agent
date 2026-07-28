@@ -14,6 +14,7 @@ from awesome_agent.application.web_commands import (
     TAVILY_DISCLOSURE,
     WebCommandService,
     WebRuntimeStatus,
+    unavailable_web_tool_items,
 )
 from awesome_agent.config import (
     ApplicationConfig,
@@ -113,6 +114,68 @@ def test_tavily_disclosure_covers_search_fetch_and_policy_links() -> None:
     assert "Web fetch sends the requested URL" in TAVILY_DISCLOSURE
     assert "https://www.tavily.com/privacy" in TAVILY_DISCLOSURE
     assert "https://www.tavily.com/terms" in TAVILY_DISCLOSURE
+
+
+@pytest.mark.parametrize(
+    ("diagnostic_code", "reason", "hint"),
+    [
+        (
+            "web_disabled",
+            "Web access is turned off.",
+            "Run /web on to enable these tools.",
+        ),
+        (
+            "web_credential_missing",
+            "No Tavily credential is configured.",
+            "Run /auth tavily to configure a credential.",
+        ),
+        (
+            "web_proxy_invalid",
+            "The explicit Web proxy configuration is invalid.",
+            "Fix or remove the explicit Web proxy, then run /web on.",
+        ),
+        (
+            "web_client_invalid",
+            "The Tavily Web client configuration is invalid.",
+            (
+                "Replace the Tavily credential with /auth tavily or fix the "
+                "explicit Web proxy."
+            ),
+        ),
+    ],
+)
+def test_unavailable_web_tools_use_stable_redacted_copy(
+    diagnostic_code: str,
+    reason: str,
+    hint: str,
+) -> None:
+    tools = unavailable_web_tool_items(
+        diagnostic_code,
+        credential_configured=True,
+    )
+
+    assert tuple(tool.name for tool in tools) == ("web_fetch", "web_search")
+    assert all(tool.read_only for tool in tools)
+    assert {tool.reason_code for tool in tools} == {diagnostic_code}
+    assert {tool.reason for tool in tools} == {reason}
+    assert {tool.hint for tool in tools} == {hint}
+
+
+def test_unavailable_web_tools_never_echo_an_unknown_diagnostic() -> None:
+    sensitive_code = "secret_tavily_diagnostic"
+
+    with pytest.raises(ValueError) as captured:
+        unavailable_web_tool_items(
+            sensitive_code,
+            credential_configured=False,
+        )
+
+    assert sensitive_code not in str(captured.value)
+    disabled = unavailable_web_tool_items(
+        "web_disabled",
+        credential_configured=False,
+    )
+    assert {tool.hint for tool in disabled} == {"Run /auth tavily, then run /web on."}
 
 
 @pytest.mark.asyncio

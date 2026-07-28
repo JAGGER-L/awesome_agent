@@ -15,9 +15,14 @@ describe("auth command flow", () => {
         argumentsSeen.push(args);
         const value =
           args.length === 0
-            ? selection("Authentication", ["deepseek", "kimi", "mem0"])
+            ? selection("Authentication", [
+                "deepseek",
+                "kimi",
+                "mem0",
+                "tavily",
+              ])
             : args.length === 1
-              ? selection("DeepSeek credential source", [
+              ? selection("Tavily credential source", [
                   "environment",
                   "awesome",
                 ])
@@ -25,10 +30,10 @@ describe("auth command flow", () => {
                   kind: "interaction",
                   interaction: {
                     kind: "secret",
-                    provider: "deepseek",
+                    provider: "tavily",
                     action: "add",
-                    label: "DeepSeek API Key",
-                    environment_variable: "DEEPSEEK_API_KEY",
+                    label: "Tavily API Key",
+                    environment_variable: "TAVILY_API_KEY",
                     help_url: "https://example.com",
                   },
                 };
@@ -44,7 +49,7 @@ describe("auth command flow", () => {
     if (providers.kind !== "selection") return;
     const sources = await controller.select(
       providers.intent,
-      "deepseek",
+      "tavily",
       "thread_1",
     );
     expect(sources.kind).toBe("selection");
@@ -56,9 +61,9 @@ describe("auth command flow", () => {
     );
     expect(secret).toMatchObject({
       kind: "secret",
-      prompt: { provider: "deepseek", action: "add" },
+      prompt: { provider: "tavily", action: "add" },
     });
-    expect(argumentsSeen).toEqual([[], ["deepseek"], ["deepseek", "awesome"]]);
+    expect(argumentsSeen).toEqual([[], ["tavily"], ["tavily", "awesome"]]);
   });
 });
 

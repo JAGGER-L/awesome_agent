@@ -11,6 +11,7 @@ from awesome_agent.core.citations import CitationAllocator
 from awesome_agent.core.tools.builtins.web_fetch import (
     MAX_WEB_FETCH_CONTENT_CHARS,
     MAX_WEB_FETCH_OUTPUT_CHARS,
+    WEB_FETCH_SPEC,
     WebFetchArguments,
     create_web_fetch_registration,
 )
@@ -70,6 +71,7 @@ def _context(*, limit: int = 8) -> ToolExecutionContext:
 def test_registration_is_strict_network_read_and_non_replayable() -> None:
     registration = create_web_fetch_registration(StubWebProvider())
 
+    assert registration.spec is WEB_FETCH_SPEC
     assert registration.spec.name == "web_fetch"
     assert registration.spec.capability == "network.read"
     assert registration.spec.read_only is True

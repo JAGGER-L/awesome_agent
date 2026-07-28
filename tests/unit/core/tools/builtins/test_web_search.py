@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from awesome_agent.core.citations import CitationAllocator
 from awesome_agent.core.tools.builtins.web_search import (
     MAX_WEB_SEARCH_OUTPUT_CHARS,
+    WEB_SEARCH_SPEC,
     WebSearchArguments,
     create_web_search_registration,
 )
@@ -75,6 +76,7 @@ def _result(index: int, *, snippet: str = "context") -> WebSearchResult:
 def test_registration_is_strict_network_read_and_non_replayable() -> None:
     registration = create_web_search_registration(StubSearchProvider())
 
+    assert registration.spec is WEB_SEARCH_SPEC
     assert registration.spec.name == "web_search"
     assert registration.spec.capability == "network.read"
     assert registration.spec.read_only is True

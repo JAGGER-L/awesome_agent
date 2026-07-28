@@ -17,7 +17,7 @@ a model conversation message.
 | `/search <query> [thread_id]` | one query token (quote multiple words), then optional exact result ID | Search this Workspace, open a picker, or resume the selected matching Thread. |
 | `/context` | no arguments | Show the latest active context categories, realized token count, and budget. |
 | `/compact` | no arguments | Build and persist a new conversation summary now. |
-| `/auth [deepseek\|kimi\|mem0]` | zero or one service in normal use | Select and manage Environment or Awesome API-key sources through pickers. |
+| `/auth [deepseek\|kimi\|mem0\|tavily]` | zero or one service in normal use | Select and manage Environment or Awesome API-key sources through pickers. |
 | `/model [deepseek\|kimi]` | zero or one Provider in normal use | Choose a Provider/model; update this Thread and the user default. |
 | `/thinking [on\|off]` | zero or one value | Show a picker or set future-Turn Thinking on the current Thread. |
 | `/permissions [request_approval\|accept_edits\|full_access]` | zero or one mode | Inspect or change the session permission mode; Full access requires a separate confirmation. |
@@ -91,10 +91,10 @@ internal continuation tokens for source selection, replacement, and deletion;
 use the masked interaction rather than scripting those tokens. Saving a
 DeepSeek or Kimi key performs one short Provider validation request. An
 unreachable model Provider offers an explicit save-unverified choice; a key
-that the model Provider rejects is not saved. Mem0 is different: `/auth mem0`
-performs local input/storage validation only and saves the value without a
-remote credential check. An invalid Mem0 key is discovered later when cloud
-Memory is enabled or called.
+that the model Provider rejects is not saved. Mem0 and Tavily are different:
+`/auth mem0` and `/auth tavily` perform local input/storage validation only and
+save the value without a remote credential check. An invalid key is discovered
+later when a cloud Memory or Web request reaches its service.
 
 `/model` with a selected Provider first ensures that Provider has an available
 selected credential, then offers only the curated models in the
@@ -216,4 +216,4 @@ Application commands return exactly one `CommandOutcome` branch:
 Command input and result remain separate terminal blocks. Picker cancellation,
 invalid arguments, and Core errors therefore preserve the exact submitted
 command. The full wire schemas are covered by
-[Protocol v4](protocol.md).
+[Protocol v5](protocol.md).

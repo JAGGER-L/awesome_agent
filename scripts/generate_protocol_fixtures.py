@@ -506,14 +506,14 @@ def _valid_methods() -> dict[str, object]:
             "provider.credential.set.configured",
             "provider.credential.set",
             {
-                "provider": "deepseek",
+                "provider": "tavily",
                 "action": "add",
                 "api_key": "fixture-request-secret",
                 "allow_unverified": False,
             },
             _success(
                 ProviderCredentialSetResult(
-                    provider="deepseek",
+                    provider="tavily",
                     status=ProviderCredentialSetStatus.CONFIGURED,
                     source=CredentialSource.AWESOME,
                     code="credential_saved",
@@ -636,7 +636,7 @@ def _invalid_methods() -> dict[str, object]:
                 "name": "initialize.protocol_incompatible",
                 "method": "initialize",
                 "params": {
-                    "protocol_version": 3,
+                    "protocol_version": 4,
                     "client_name": "awesome",
                     "client_version": PRODUCT_VERSION,
                 },
@@ -1187,16 +1187,28 @@ def _valid_command_results() -> dict[str, object]:
                     "approval_required": False,
                 },
                 {
+                    "name": "execute",
+                    "description": "Run shell commands",
+                    "read_only": False,
+                    "approval_required": True,
+                },
+            ],
+            "unavailable_tools": [
+                {
                     "name": "web_fetch",
                     "description": "Fetch readable content from one public HTTPS URL",
                     "read_only": True,
-                    "approval_required": True,
+                    "reason_code": "web_disabled",
+                    "reason": "Web access is turned off.",
+                    "hint": "Run /web on to enable these tools.",
                 },
                 {
                     "name": "web_search",
                     "description": "Search the public web for current information",
                     "read_only": True,
-                    "approval_required": True,
+                    "reason_code": "web_disabled",
+                    "reason": "Web access is turned off.",
+                    "hint": "Run /web on to enable these tools.",
                 },
             ],
         },
@@ -1313,11 +1325,11 @@ def _valid_command_results() -> dict[str, object]:
                 "kind": "interaction",
                 "interaction": {
                     "kind": "secret",
-                    "provider": "deepseek",
+                    "provider": "tavily",
                     "action": "add",
-                    "label": "DeepSeek API Key",
-                    "environment_variable": "DEEPSEEK_API_KEY",
-                    "help_url": "https://platform.deepseek.com/api_keys",
+                    "label": "Tavily API Key",
+                    "environment_variable": "TAVILY_API_KEY",
+                    "help_url": "https://app.tavily.com/home",
                 },
             },
         ),
@@ -1383,6 +1395,14 @@ def _invalid_command_results() -> dict[str, object]:
     fork_thread = cast(dict[str, Any], fork_transition["thread"])
     fork_view = cast(dict[str, Any], fork_thread["view"])
     fork_thread_record = cast(dict[str, Any], fork_view["thread"])
+    tools_outcome = next(
+        case["outcome"]
+        for case in cast(list[dict[str, Any]], _valid_command_results()["cases"])
+        if case["name"] == "result.tools"
+    )
+    tools_payload = cast(dict[str, Any], tools_outcome["payload"])
+    available_tools = cast(list[dict[str, Any]], tools_payload["tools"])
+    unavailable_tools = cast(list[dict[str, Any]], tools_payload["unavailable_tools"])
     web_status = {
         "kind": "web_status",
         "enabled": False,
@@ -1709,6 +1729,47 @@ def _invalid_command_results() -> dict[str, object]:
                 "outcome": {
                     "kind": "result",
                     "payload": {**web_status, "diagnostic_code": ""},
+                },
+            },
+            {
+                "name": "tools_duplicate_available_name",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **tools_payload,
+                        "tools": [available_tools[0], available_tools[0]],
+                    },
+                },
+            },
+            {
+                "name": "tools_duplicate_unavailable_name",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **tools_payload,
+                        "unavailable_tools": [
+                            unavailable_tools[0],
+                            unavailable_tools[0],
+                        ],
+                    },
+                },
+            },
+            {
+                "name": "tools_available_unavailable_overlap",
+                "outcome": {
+                    "kind": "result",
+                    "payload": {
+                        **tools_payload,
+                        "tools": [
+                            *available_tools,
+                            {
+                                "name": unavailable_tools[0]["name"],
+                                "description": unavailable_tools[0]["description"],
+                                "read_only": unavailable_tools[0]["read_only"],
+                                "approval_required": True,
+                            },
+                        ],
+                    },
                 },
             },
             {

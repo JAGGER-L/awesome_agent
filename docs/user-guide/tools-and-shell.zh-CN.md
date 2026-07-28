@@ -19,7 +19,10 @@
  终态事件 + ToolActivity + 可选 ChangeSet
 ```
 
-正因为共用这条路径，扩展无法仅靠公开一个新名称来绕过审批。`/tools` 会显示有效 registry、只读状态，以及每个工具当前是否需要审批。
+正因为共用这条路径，扩展无法仅靠公开一个新名称来绕过审批。`/tools` 会显示每个活动工具的
+描述、它是只读还是可能产生副作用，以及它在当前 Thread 中是可立即使用还是需要审批。已知但
+未活动的工具会单独标为 unavailable，并给出脱敏原因和建议的下一步；这些条目仅供查看，
+不会暴露给模型。
 
 ## 内置工具类别
 
@@ -38,8 +41,9 @@ Memory 和 MCP 可以扩充整个 catalog。带 namespace 的扩展工具仍使�
 
 ### 使用 Web Search 与 Fetch
 
-设置 `TAVILY_API_KEY`，运行 `/web on`，随后请求当前信息，或提供一个需要提取可读内容的
-公共 HTTPS 页面。第一次 `network.read` 调用即使在 Full access 下也会 ASK；可选择默认
+通过 `/auth tavily` 配置 Awesome 管理的 key，或选择已有的 `TAVILY_API_KEY`，再运行
+`/web on`。随后请求当前信息，或提供一个需要提取可读内容的公共 HTTPS 页面。第一次
+`network.read` 调用即使在 Full access 下也会 ASK；可选择默认
 deny、allow once 或 allow for this Thread。`/web status` 显示 readiness 与披露，
 `/web revoke` 清除当前 Thread grant，`/web off` 会从重建后的 runtime 中移除两个工具。
 

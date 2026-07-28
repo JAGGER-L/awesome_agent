@@ -232,11 +232,12 @@ probe。Executor 对所有工具统一应用这一条顺序，不按具体工具
 Core 中提供商中立的 `Citation(id, title, url)` 值会沿成功工具数据从
 `ToolOutput.citations` 进入 `ToolResult.citations`；文本设限不会移除这个 tuple。Agent
 把完整 result 序列化到 `AgentState.tool_results`，并派生有序的 `AgentState.citations`
-快照，因此两者都能经过 checkpoint recovery。Conversation record、Protocol v4、TUI 与
+快照，因此两者都能经过 checkpoint recovery。Conversation record、Protocol v5、TUI 与
 headless output 会携带同一来源，不提供 compatibility adapter。
 
 可选 Web 能力由两个普通 registered tool 组成，不是第二套执行框架。只有 user config 设置
-`web.enabled: true` 且能解析 `TAVILY_API_KEY` 时，它们才会出现。提供商中立的 `web_search`
+`web.enabled: true` 且能解析 `/auth tavily` 选择的凭据时，它们才会出现。提供商中立的
+`web_search`
 handler 向 `POST https://api.tavily.com/search` 发送有界 basic Search，最多返回十条结果。
 `web_fetch` 接受一个公共 HTTPS URL，通过 `POST https://api.tavily.com/extract` 请求 basic
 Markdown extraction，并把模型可见正文限制为 24,000 个字符。由 Tavily 云服务连接目标；
@@ -285,7 +286,7 @@ Runner、journal、脱敏、timeout、cancellation 与 terminal-event 路径。C
 
 ```text
 Ink command controller
-    -> Protocol v4 command.execute
+    -> Protocol v5 command.execute
     -> LocalApplication facade
     -> complete CommandDispatcher
     -> one focused command service
@@ -299,7 +300,7 @@ Immutable dispatcher 负责每个 Core 命令。Ink-owned command 仍是本地�
 command result。斜杠命令是确定性的产品操作，绝不会提交隐藏的 model prompt；只有自然
 语言输入会启动 Agent Turn。
 
-`LocalApplication` 是唯一面向界面的 Application host。Python 生成 Protocol v4
+`LocalApplication` 是唯一面向界面的 Application host。Python 生成 Protocol v5
 discriminated outcome，TypeScript 对其进行严格校验并穷尽展示。Command progress 是
 pending Surface lifecycle state，不是第二种持久化 operation model。
 
@@ -349,9 +350,9 @@ Application 与 LangGraph 数据库之间不可避免的提交窗口，而不会
 `LocalApplication` 持有唯一的 `ApplicationBootstrap`，Application 是
 `BootstrapPhase` 的唯一所有者。类型化 initialize 与 interaction 结果会推进或恢复该 phase；
 序列化的 protocol response 绝不是生命周期事实来源。stdio Host 只向 Application 查询某项
-operation 是否准入，并把拒绝转换成既有的 Protocol v4 握手错误；它既不维护并行 phase
+operation 是否准入，并把拒绝转换成既有的 Protocol v5 握手错误；它既不维护并行 phase
 machine，也不解析 response payload 来推断 readiness。这次内部所有权迁移不会改变
-Protocol v4 的 request、result 或 error 形状。
+Protocol v5 的 request、result 或 error 形状。
 
 私有 `skill.list`、`skill.install` 与 `skill.remove` operation 只在该 phase 恰好为
 `UNINITIALIZED` 时准入。一个由 Application 持有的 pre-initialize transition 使三者彼此
@@ -374,7 +375,7 @@ provider client、内部创建的 Mem0 client 和 MCP，并按 MCP、Mem0、prov
 credential mutation 复用同一条完整 candidate 发布路径，但不重复 startup recovery，并保留
 已选择的 Thread。Runtime 的 `model_catalog` 是 frozen、提供商中立的 `MODEL_CATALOG`；
 credential 存在性、已配置默认项、活动选择与 region 仍是动态的
-Application/configuration state。Protocol v4
+Application/configuration state。Protocol v5
 通过 `model_catalog`、`provider_credentials` 和 `model_identity` 分别发布这些事实。
 前台所有权、interaction、permission session、recovery delivery、checkpoint saver、进程级
 Application SQLite worker、state lease 和其他进程生命周期资源
@@ -583,7 +584,7 @@ selection 结果；它不复制 Application bootstrap phase。`SubmissionCoordin
 输入的解析、Core 准入、乐观 identity 和 generation fence。既有 React queue 仍只拥有
 pending 展示输入，而 Core 仍是唯一的前台执行权威。
 
-`awesome run` 复用同一个 `ConnectedSurface`、startup controller、Protocol v4 client、
+`awesome run` 复用同一个 `ConnectedSurface`、startup controller、Protocol v5 client、
 Application facade 和持久化 Thread/Turn record，但不渲染 Ink。它默认创建新 Thread，或指定
 一个明确 Thread，随后只把持久化的最终 assistant entry 投影为文本或带版本的 JSON 文档。
 父进程 stdout 只承载结果，stderr 只承载诊断；Core stdout 仍是私有 NDJSON。未解决
@@ -597,7 +598,7 @@ Tab、方向键和全局取消，不会有相互竞争的 component listener。�
 Turn 是一条有序 Thinking/tool/answer timeline，已完成 answer 使用 terminal Markdown
 渲染。
 
-`/retry` 返回一个严格的 Protocol v4 `thread_retry` payload，同时包含权威 Thread
+`/retry` 返回一个严格的 Protocol v5 `thread_retry` payload，同时包含权威 Thread
 replacement 与已准入 Operation。由于该 Operation 的 event 可能早于 response 到达，
 `ConnectedSurface` 会暂时缓存有序 event stream，先安装 replacement，再把新 generation
 绑定到返回的 Operation/Thread/Turn identity，最后才重放缓存事件。Gate 的上限为 1,024
@@ -681,13 +682,13 @@ Application 是 composition root，可以依赖其装配的所有具体所有者
 | `web` | `core`、`web` |
 
 `tests/structural/test_dependency_architecture.py` 是该精确 adjacency table 和外部 framework
-所有权的可执行来源。TUI 是独立 TypeScript 进程，只通过 Protocol v4 访问 Python。
+所有权的可执行来源。TUI 是独立 TypeScript 进程，只通过 Protocol v5 访问 Python。
 `memory` -> `agent` 这一行刻意采用比 package 级表象更窄的约束：仅允许
 `memory/finalization.py` 导入 `agent/finalization.py`。
 
 因此 package 依赖箭头是 `config -> modeling`，绝不是 `modeling -> config`。
 Application 将静态模型目录与动态 configuration、credential state 组装起来，再通过
-Protocol v4 发布 catalog，使 Ink 无需复制 model 或 Provider 枚举。
+Protocol v5 发布 catalog，使 Ink 无需复制 model 或 Provider 枚举。
 
 具体 provider 与 storage adapter 在 `application/composition.py` 中装配。Agent 导入
 提供商中立契约，protocol 导入 Application facade，而不是各个子系统。

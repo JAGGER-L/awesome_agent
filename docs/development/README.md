@@ -41,7 +41,7 @@ editing. Maintainers preparing artifacts use [Release](release.md).
 | `src/awesome_agent/storage/` | embedded state and checkpoints | `database.py`, `conversations.py` |
 | `src/awesome_agent/extensions/` | Skills and MCP | `skills/`, `mcp/` |
 | `src/awesome_agent/memory/` | local and Mem0 memory | `service.py`, `mem0_cloud.py` |
-| `src/awesome_agent/protocol/` | Protocol v4 and stdio Host | `jsonrpc.py`, `stdio.py` |
+| `src/awesome_agent/protocol/` | Protocol v5 and stdio Host | `jsonrpc.py`, `stdio.py` |
 | `tui/src/` | terminal presentation and Core adapter | `app/App.tsx`, `protocol/`, `state/` |
 | `tests/` and `tui/tests/` | behavior, integration, structure, packaging | nearest package suite |
 

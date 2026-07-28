@@ -54,13 +54,6 @@ class CredentialSelectionConfig(BaseModel):
             raise ValueError("credential source must be a string or null")
         return value
 
-    @field_validator("tavily")
-    @classmethod
-    def validate_tavily_source(cls, value: CredentialSource) -> CredentialSource:
-        if value is not CredentialSource.ENVIRONMENT:
-            raise ValueError("tavily credentials must use the environment source")
-        return value
-
 
 class ProviderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)

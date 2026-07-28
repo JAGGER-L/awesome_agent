@@ -81,6 +81,13 @@ def _application(
                     awesome_configured=False,
                     selected_source=None,
                 ),
+                tavily=ProviderCredentialStatus(
+                    provider="tavily",
+                    environment_variable="TAVILY_API_KEY",
+                    environment_configured=False,
+                    awesome_configured=False,
+                    selected_source=CredentialSource.ENVIRONMENT,
+                ),
             ),
         )
     )

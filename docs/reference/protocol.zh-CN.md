@@ -1,10 +1,10 @@
-# 私有 Core/TUI protocol v4
+# 私有 Core/TUI protocol v5
 
 Awesome 的 Ink 进程与其唯一的 Python Core 子进程通过私有 stdio 使用 newline-delimited
 JSON-RPC 2.0 通信。该 protocol 是内部组件边界，不是远程 API：它没有网络 listener、
 authentication scheme、compatibility proxy，也不承诺第三方客户端可以独立混用不同版本。
 
-Protocol 版本 **4** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.3.0**。Event
+Protocol 版本 **5** 与精确的已安装产品版本配对。当前仓库产品版本是 **1.3.1**。Event
 envelope 有独立版本 **1**。两个 contract identifier 都来自
 `contract-versions.json`；产品值仍来自 `VERSION`。
 
@@ -29,7 +29,7 @@ envelope 有独立版本 **1**。两个 contract identifier 都来自
 ```text
 Ink                     Protocol Host              Application
  |                            |                          |
- |-- initialize(v4, exact) -->|                          |
+ |-- initialize(v5, exact) -->|                          |
  |                            |------- initialize ------>|
  |                            |<-- ApplicationResult ----|
  |<---- JSON-RPC response ----|                          |
@@ -85,9 +85,9 @@ phase；它会查询 Application admission，并把拒绝转换为既有握手�
   "id": "init-1",
   "method": "initialize",
   "params": {
-    "protocol_version": 4,
+    "protocol_version": 5,
     "client_name": "awesome",
-    "client_version": "1.3.0"
+    "client_version": "1.3.1"
   }
 }
 ```
@@ -109,7 +109,7 @@ capability 和一种状态：
 `mcp`、`local_memory`、`mem0_cloud`、`web` 和 `citations`。
 
 Host 绝不会通过解析序列化 result payload 来推进 readiness；类型化 initialize 与 interaction
-结果会先更新 Application；该路径属于 Protocol v4 wire contract。
+结果会先更新 Application；该路径属于 Protocol v5 wire contract。
 
 Ready 前，普通 request 会收到 JSON-RPC `-32002`，diagnostic 为 `server_not_initialized` 或
 `server_not_ready`。有意保留的例外是 `skill.list`、`skill.install` 与 `skill.remove`：三者都
@@ -163,7 +163,7 @@ Snapshot 包含 initialization/session/workspace identity 与 trust、已选 Thr
 usage，以及结构化 workspace-instruction diagnostic。Secret value 从来不属于 state。
 
 `model_catalog` 是静态、提供商中立的
-`ModelCatalog -> ProviderDescriptor -> ModelProfile` 目录在 Protocol v4 上的 projection。
+`ModelCatalog -> ProviderDescriptor -> ModelProfile` 目录在 Protocol v5 上的 projection。
 Provider descriptor 包含 `id`、`credential_id`、`supported_regions`、可选
 `default_region` 及其 model profile。Model profile 包含 `id`、`context_limit`、
 `supports_tools`、`supports_reasoning` 和 `is_default`。Provider 与 model ID 唯一，每个
@@ -226,7 +226,14 @@ Params 是封闭的 `CommandIntent`：
 `interaction` 或稳定的 command `error`。精确语法和 foreground snapshot 例外见
 [Slash Commands](commands.zh-CN.md)。
 
-Protocol v4 的每个 Thread projection 都有必需且可空的 `lineage` 字段。根 Thread 的值为
+`tools` result 会分离执行与可发现性。它的 `tools` 数组是可执行 Registry 的精确投影；每一项
+包含 `name`、`description`、`read_only`，以及基于当前 Thread 的
+`approval_required` 事实。与之互斥的 `unavailable_tools` 数组描述尚未注册的已知工具，字段为
+`name`、`description`、`read_only`、稳定的 `reason_code`、脱敏的 `reason` 和脱敏的
+`hint`。每个数组内部的名称必须唯一，名称也不能同时出现在两个数组中。不可用项绝不会进入
+Agent 或模型工具 catalog。
+
+Protocol v5 的每个 Thread projection 都有必需且可空的 `lineage` 字段。根 Thread 的值为
 `null`；具有一个直接父级的 Thread 则使用严格 object，其中包含 `kind`（`fork` 或
 `retry`）、`source_thread_id` 与 `source_turn_id`。该字段只记录来源；client 不得据此
 推断存在共享 transcript DAG，也不能通过它读取历史。
@@ -251,19 +258,19 @@ transport 的最终字节检查会返回 `result_too_large`，而不是发送无
 
 ### `provider.credential.set`
 
-`provider` 为 `deepseek`、`kimi` 或 `mem0`；`action` 为 `add`、`replace` 或 `delete`；
+`provider` 为 `deepseek`、`kimi`、`mem0` 或 `tavily`；`action` 为 `add`、`replace` 或 `delete`；
 `allow_unverified` 默认为 false。Add/replace 要求非空、最多 20,000 个字符且不含 CR/LF 的
 `api_key`。Delete 禁止 key content 和 `allow_unverified: true`。
 
 这是 foreground arbiter 下的 mutation/external operation。Key 会立刻包装为 secret，绝不
 复制到 event、error 或 state。对于 DeepSeek 和 Kimi，Core 会执行远程验证；Provider 不可达
 时，可能返回明确 save-unverified 重试的确认路径，而被 Provider 拒绝的 key 不会保存。对于
-`mem0`，Core 当前不执行远程凭据验证，会保存任何本地有效输入；无效 key 只会在之后的 Mem0
-初始化或操作到达服务时失败。
+`mem0` 与 `tavily`，Core 不执行远程凭据验证，会保存任何本地有效输入；无效 key 只会在
+之后的 Mem0 或 Web 操作到达服务时失败。
 
 只有 Core 能报告已选择的 credential source 时，result 才包含 `source`。成功保存后通常为
 `awesome`；invalid、save-unverified confirmation 或 delete 结果可能没有已选择 source，此时
-会省略该字段。显式的 `"source": null` 不是合法的 v4 result。
+会省略该字段。显式的 `"source": null` 不是合法的 v5 result。
 
 ### `interaction.respond`
 
@@ -326,7 +333,7 @@ diagnostic。
 
 客户端使用 `retryable` flag 和当前 state 判断是否适合重试，不会匹配 message 字符串。
 
-在 Protocol v4 中，Application 级 `state_unavailable` error 可重试，并携带有界的
+在 Protocol v5 中，Application 级 `state_unavailable` error 可重试，并携带有界的
 `state_directory` metadata。它与内置 Memory tool 的 `ToolOutput` 中不可重试的
 `state_unavailable` 不同；客户端不能仅按 code 字符串把两个 envelope 归一化。
 
@@ -394,7 +401,7 @@ sequence 和 correlation ID 渲染，而不能假定并发 request 之间 respon
 后续 event 也可能在该 response 被处理前到达。
 
 `thread_retry` 也遵循相同顺序，但在组合 command response 安装前，其 Thread identity 尚不
-存在于界面。Protocol v4 界面因此会在发出命令前打开本地 retry gate，按 sequence 缓存
+存在于界面。Protocol v5 界面因此会在发出命令前打开本地 retry gate，按 sequence 缓存
 event，安装返回的 transition，把新 generation 绑定到返回的 Operation/Thread/Turn
 identity，再重放缓存。Gate 最多接受 1,024 个 event 和 4 MiB 编码内容。容量或 identity
 违规属于 protocol desynchronization，必须 fail closed；不能仅因为 event 先到就把它
@@ -413,7 +420,7 @@ shutdown。只有命令契约明确允许时，snapshot command 才能在 Operat
 
 ## Fixture 与兼容性测试
 
-`protocol/fixtures/v4/` 是跨语言 source of truth。它包含有效和无效 method、command result、
+`protocol/fixtures/v5/` 是跨语言 source of truth。它包含有效和无效 method、command result、
 event、产品失败，以及记录 file hash、method name、event name、产品版本和 protocol 版本的
 manifest。Python Pydantic model 与 TUI 的严格 TypeScript/Zod schema 都会验证这些 fixture。
 

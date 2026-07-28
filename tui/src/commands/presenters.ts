@@ -169,16 +169,31 @@ export function presentCommandPayload(
         ...(payload.warning ? { warning: payload.warning } : {}),
       };
     case "tools":
-      return payload.tools.length === 0
+      return payload.tools.length === 0 &&
+        payload.unavailable_tools.length === 0
         ? { kind: "empty", title, message: "No tools available" }
-        : panel(
-            title,
-            payload.tools.map((tool) => ({
+        : panel(title, [
+            ...payload.tools.map((tool) => ({
               label: tool.name,
-              value: tool.approval_required ? "Approval required" : "Enabled",
-              status: tool.approval_required ? "warning" : "success",
+              value: `${
+                tool.approval_required ? "Approval required" : "Available"
+              } · ${
+                tool.read_only ? "Read-only" : "May have side effects"
+              } — ${tool.description}`,
+              status: tool.approval_required
+                ? ("warning" as const)
+                : ("success" as const),
             })),
-          );
+            ...payload.unavailable_tools.map((tool) => ({
+              label: tool.name,
+              value: `Unavailable · ${
+                tool.read_only ? "Read-only" : "May have side effects"
+              } — ${tool.description} · Reason: ${tool.reason} · Hint: ${
+                tool.hint
+              }`,
+              status: "warning" as const,
+            })),
+          ]);
     case "web_status":
       return panel(title, [
         { label: "Enabled", value: payload.enabled ? "On" : "Off" },
@@ -376,6 +391,7 @@ export function presentCommandPayload(
         },
         { label: "Kimi", value: credentialState(payload.credentials.kimi) },
         { label: "Mem0", value: credentialState(payload.credentials.mem0) },
+        { label: "Tavily", value: credentialState(payload.credentials.tavily) },
       ]);
     case "permissions":
       return {

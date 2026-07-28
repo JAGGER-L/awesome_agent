@@ -215,7 +215,7 @@ class Facade:
         return ApplicationResult.success(ShutdownResult())
 
 
-def test_dispatcher_exposes_exact_protocol_v4_method_table() -> None:
+def test_dispatcher_exposes_exact_protocol_v5_method_table() -> None:
     assert set(JsonRpcDispatcher(Facade()).methods) == {
         "initialize",
         "skill.list",
@@ -518,7 +518,7 @@ async def test_interaction_decision_contract_accepts_recovery_and_rejects_unknow
     ("params", "error_code"),
     [
         (
-            {**INITIALIZE_PARAMS, "protocol_version": 3},
+            {**INITIALIZE_PARAMS, "protocol_version": 4},
             "protocol_version_incompatible",
         ),
         (
@@ -793,7 +793,7 @@ async def test_wire_integral_json_numbers_match_javascript_semantics() -> None:
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": {**INITIALIZE_PARAMS, "protocol_version": 4.0},
+            "params": {**INITIALIZE_PARAMS, "protocol_version": 5.0},
         }
     )
     listed = await dispatcher.dispatch(

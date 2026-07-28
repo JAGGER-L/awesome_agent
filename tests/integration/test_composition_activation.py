@@ -21,6 +21,7 @@ from awesome_agent.application.command_results import (
     CommandError,
     CommandOutcome,
     CommandResult,
+    ToolCatalogCommandPayload,
     WebStatusCommandPayload,
 )
 from awesome_agent.application.commands import CommandIntent, CommandName
@@ -29,6 +30,7 @@ from awesome_agent.application.contracts import (
     InteractionResult,
     ProductErrorCode,
     ProviderCredentialSetRequest,
+    ProviderCredentialSetStatus,
 )
 from awesome_agent.application.errors import ApplicationFailure
 from awesome_agent.application.facade import LocalApplication
@@ -1592,7 +1594,25 @@ async def test_web_runtime_registers_both_tools_and_retires_managed_client(
             ("web_fetch", "web_search"),
             (web_fetch, web_search),
         )
-    backend._permission_session.grant_thread_network("thread_test")
+    created = await application.execute_command(CommandIntent(name=CommandName.NEW))
+    assert created.ok is True
+    assert first_runtime.commands.current_thread_id is not None
+    backend._permission_session.grant_thread_network(
+        first_runtime.commands.current_thread_id
+    )
+
+    tools = await application.execute_command(CommandIntent(name=CommandName.TOOLS))
+    assert tools.ok is True
+    assert isinstance(tools.value, CommandResult)
+    assert isinstance(tools.value.payload, ToolCatalogCommandPayload)
+    web_tools = {
+        item.name: item
+        for item in tools.value.payload.tools
+        if item.name in {"web_fetch", "web_search"}
+    }
+    assert set(web_tools) == {"web_fetch", "web_search"}
+    assert all(not item.approval_required for item in web_tools.values())
+    assert tools.value.payload.unavailable_tools == ()
 
     status = await application.execute_command(
         CommandIntent(name=CommandName.WEB, arguments=("status",))
@@ -1617,6 +1637,20 @@ async def test_web_runtime_registers_both_tools_and_retires_managed_client(
     assert backend._runtime.tool_registry.resolve("web_fetch") is None
     assert backend._runtime.tool_registry.resolve("web_search") is None
     assert backend._permission_session.thread_granted_capabilities == frozenset()
+    unavailable = await application.execute_command(
+        CommandIntent(name=CommandName.TOOLS)
+    )
+    assert unavailable.ok is True
+    assert isinstance(unavailable.value, CommandResult)
+    assert isinstance(unavailable.value.payload, ToolCatalogCommandPayload)
+    unavailable_web = {
+        item.name: item for item in unavailable.value.payload.unavailable_tools
+    }
+    assert set(unavailable_web) == {"web_fetch", "web_search"}
+    assert {item.reason_code for item in unavailable_web.values()} == {"web_disabled"}
+    assert not {item.name for item in unavailable.value.payload.tools} & set(
+        unavailable_web
+    )
     for _ in range(20):
         if closed:
             break
@@ -1625,6 +1659,90 @@ async def test_web_runtime_registers_both_tools_and_retires_managed_client(
 
     assert (await application.shutdown()).ok is True
     assert closed == ["web"]
+
+
+@pytest.mark.asyncio
+async def test_managed_tavily_credential_rebuilds_the_web_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    paths = AwesomePaths.from_home(home)
+    UserConfigWriter(paths.config_file).update(
+        lambda current: current.model_copy(
+            update={"web": current.web.model_copy(update={"enabled": True})}
+        )
+    )
+    await _trust_workspaces(home, workspace)
+
+    class FakeWebProvider:
+        async def search(self, request: WebSearchRequest) -> WebSearchResponse:
+            del request
+            return WebSearchResponse(results=())
+
+        async def fetch(self, request: WebFetchRequest) -> WebFetchResponse:
+            return WebFetchResponse(url=request.url, content="content")
+
+    @asynccontextmanager
+    async def web_resources(*_: object, **__: object) -> AsyncIterator[Any]:
+        yield FakeWebProvider()
+
+    monkeypatch.setattr(composition, "managed_tavily_web_client", web_resources)
+    application = await composition.compose_local_application(
+        home=home,
+        workspace=workspace,
+        event_sink=CollectingEventSink(),
+        environ={},
+    )
+    backend = cast(composition._LocalApplicationBackend, application._backend)
+
+    assert (await application.initialize()).ok is True
+    original_runtime = backend._runtime
+    assert original_runtime is not None
+    assert original_runtime.web_available is False
+    assert original_runtime.web_diagnostic_code == "web_credential_missing"
+    missing = await application.execute_command(CommandIntent(name=CommandName.TOOLS))
+    assert missing.ok is True
+    assert isinstance(missing.value, CommandResult)
+    assert isinstance(missing.value.payload, ToolCatalogCommandPayload)
+    assert {
+        item.name: item.reason_code for item in missing.value.payload.unavailable_tools
+    } == {
+        "web_fetch": "web_credential_missing",
+        "web_search": "web_credential_missing",
+    }
+
+    configured = await application.set_provider_credential(
+        ProviderCredentialSetRequest(
+            provider="tavily",
+            action="add",
+            api_key=SecretStr("managed-tavily-key"),
+        )
+    )
+
+    assert configured.ok is True
+    assert configured.value is not None
+    assert configured.value.status is ProviderCredentialSetStatus.CONFIGURED
+    assert backend._runtime is not None
+    assert backend._runtime is not original_runtime
+    assert backend._runtime.web_available is True
+    assert backend._runtime.web_diagnostic_code is None
+    assert backend._runtime.tool_registry.resolve("web_search") is not None
+    assert backend._runtime.tool_registry.resolve("web_fetch") is not None
+    available = await application.execute_command(CommandIntent(name=CommandName.TOOLS))
+    assert available.ok is True
+    assert isinstance(available.value, CommandResult)
+    assert isinstance(available.value.payload, ToolCatalogCommandPayload)
+    assert available.value.payload.unavailable_tools == ()
+    assert {"web_fetch", "web_search"} <= {
+        item.name for item in available.value.payload.tools
+    }
+    assert backend._runtime.sources.provider_credentials.tavily.selected_source is (
+        CredentialSource.AWESOME
+    )
+    assert (await application.shutdown()).ok is True
 
 
 @pytest.mark.asyncio

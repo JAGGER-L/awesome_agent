@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -48,6 +48,7 @@ describe("awesome package", () => {
       const report = JSON.parse(packed) as Array<{
         filename: string;
         files: Array<{ path: string }>;
+        integrity: string;
       }>;
       expect(report).toHaveLength(1);
       const entry = report[0];
@@ -69,18 +70,18 @@ describe("awesome package", () => {
         ),
       ).toBe(true);
 
-      const tarball = join(tarballs, entry.filename);
+      await writeOfflineConsumer(prefix, entry.filename, entry.integrity);
       npm(
         "install package",
         [
-          "install",
+          "ci",
           "--prefix",
           prefix,
           "--ignore-scripts",
           "--no-audit",
           "--no-fund",
+          "--omit=dev",
           "--offline",
-          tarball,
         ],
         root,
         INSTALL_TIMEOUT_MS,
@@ -97,7 +98,7 @@ describe("awesome package", () => {
         license: string;
       };
       expect(installedPackage).toMatchObject({
-        version: "1.3.0",
+        version: "1.3.1",
         type: "module",
         bin: { awesome: "dist/cli/index.js" },
         license: "MIT",
@@ -131,7 +132,7 @@ describe("awesome package", () => {
               timeoutMs: CLI_TIMEOUT_MS,
             });
       expect(version.status, version.stderr).toBe(0);
-      expect(version.stdout).toBe("1.3.0\n");
+      expect(version.stdout).toBe("1.3.1\n");
     },
     TEST_TIMEOUT_MS,
   );
@@ -149,6 +150,75 @@ describe("awesome package", () => {
     expect(performance.now() - startedAt).toBeLessThan(5_000);
   }, 10_000);
 });
+
+async function writeOfflineConsumer(
+  prefix: string,
+  tarballFilename: string,
+  integrity: string,
+): Promise<void> {
+  if (!integrity) throw new Error("npm pack did not report tarball integrity");
+  const packageName = "@awesome-agent/tui";
+  const consumerName = "awesome-package-consumer";
+  const dependency = `file:../tarballs/${tarballFilename}`;
+  const sourceLock = JSON.parse(
+    await readFile(join(packageRoot, "package-lock.json"), "utf8"),
+  ) as {
+    lockfileVersion: number;
+    packages: Record<string, Record<string, unknown>>;
+  };
+  const sourceRoot = sourceLock.packages[""];
+  if (sourceLock.lockfileVersion !== 3 || !sourceRoot) {
+    throw new Error("package-lock.json does not expose the expected v3 root");
+  }
+
+  const runtimePackage = { ...sourceRoot };
+  delete runtimePackage.devDependencies;
+  const packages = {
+    ...sourceLock.packages,
+    "": {
+      name: consumerName,
+      version: "0.0.0",
+      private: true,
+      dependencies: { [packageName]: dependency },
+    },
+    [`node_modules/${packageName}`]: {
+      ...runtimePackage,
+      resolved: dependency,
+      integrity,
+    },
+  };
+
+  await mkdir(prefix);
+  await writeFile(
+    join(prefix, "package.json"),
+    `${JSON.stringify(
+      {
+        name: consumerName,
+        version: "0.0.0",
+        private: true,
+        dependencies: { [packageName]: dependency },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(prefix, "package-lock.json"),
+    `${JSON.stringify(
+      {
+        name: consumerName,
+        version: "0.0.0",
+        lockfileVersion: sourceLock.lockfileVersion,
+        requires: true,
+        packages,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
 
 function npm(
   stage: string,

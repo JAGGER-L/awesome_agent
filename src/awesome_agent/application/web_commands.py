@@ -10,6 +10,7 @@ from pydantic import SecretStr
 
 from awesome_agent.application.command_results import (
     CommandOutcome,
+    UnavailableToolCommandItem,
     WebStatusCommandPayload,
     error,
     result,
@@ -25,6 +26,8 @@ from awesome_agent.core.cancellation import (
     finish_cancellation_safe,
     run_cancellation_safe_blocking_call,
 )
+from awesome_agent.core.tools.builtins.web_fetch import WEB_FETCH_SPEC
+from awesome_agent.core.tools.builtins.web_search import WEB_SEARCH_SPEC
 from awesome_agent.core.tools.permissions import PermissionSession
 
 TAVILY_DISCLOSURE = (
@@ -34,12 +37,59 @@ TAVILY_DISCLOSURE = (
     "and https://www.tavily.com/terms."
 )
 
+_WEB_TOOL_SPECS = (WEB_FETCH_SPEC, WEB_SEARCH_SPEC)
+_WEB_TOOL_UNAVAILABLE_COPY = {
+    "web_disabled": (
+        "Web access is turned off.",
+        "Run /web on to enable these tools.",
+    ),
+    "web_credential_missing": (
+        "No Tavily credential is configured.",
+        "Run /auth tavily to configure a credential.",
+    ),
+    "web_proxy_invalid": (
+        "The explicit Web proxy configuration is invalid.",
+        "Fix or remove the explicit Web proxy, then run /web on.",
+    ),
+    "web_client_invalid": (
+        "The Tavily Web client configuration is invalid.",
+        "Replace the Tavily credential with /auth tavily or fix the explicit "
+        "Web proxy.",
+    ),
+}
+
 _DIAGNOSTIC_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,127}")
 
 type WebConfigurationSnapshot = tuple[LoadedConfigSources, ApplicationConfig]
 type ApplyWebConfiguration = Callable[
     [WebConfigurationSnapshot], Awaitable["WebRuntimeStatus"]
 ]
+
+
+def unavailable_web_tool_items(
+    diagnostic_code: str | None,
+    *,
+    credential_configured: bool,
+) -> tuple[UnavailableToolCommandItem, ...]:
+    if diagnostic_code is None:
+        return ()
+    try:
+        reason, hint = _WEB_TOOL_UNAVAILABLE_COPY[diagnostic_code]
+    except KeyError:
+        raise ValueError("Web Runtime has an unsupported diagnostic code.") from None
+    if diagnostic_code == "web_disabled" and not credential_configured:
+        hint = "Run /auth tavily, then run /web on."
+    return tuple(
+        UnavailableToolCommandItem(
+            name=spec.name,
+            description=spec.description,
+            read_only=spec.read_only,
+            reason_code=diagnostic_code,
+            reason=reason,
+            hint=hint,
+        )
+        for spec in _WEB_TOOL_SPECS
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -326,4 +376,5 @@ __all__ = [
     "WebCommandService",
     "WebConfigurationControl",
     "WebRuntimeStatus",
+    "unavailable_web_tool_items",
 ]

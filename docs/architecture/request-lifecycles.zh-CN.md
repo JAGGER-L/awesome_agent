@@ -41,7 +41,7 @@ Thread 和 Turn。
 ```text
 awesome [workspace]
   -> Ink starts one private awesome-core
-  -> initialize(protocol=4, client identity)
+  -> initialize(protocol=5, client identity)
   -> resolve candidate workspace identity
   -> shared-lease read-only state preflight
   -> if migration_required:

@@ -115,6 +115,7 @@ describe("shared Python fixture corpus", () => {
       if (!fixture) throw new Error(`Missing fixture: ${name}`);
       return (fixture.result as { value: Record<string, unknown> }).value;
     };
+    expect(value("provider.credential.set.configured").provider).toBe("tavily");
     expect(value("provider.credential.set.configured").source).toBe("awesome");
     for (const name of [
       "provider.credential.set.invalid",

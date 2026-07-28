@@ -87,7 +87,7 @@ npm pack ./tui --dry-run
 `npm pack --dry-run`，作为便于人工阅读的内容检查；在 build 前运行可能检查过期 `dist`，
 或无法证明 bin target。
 
-### 6. Protocol v4 fixtures
+### 6. Protocol v5 fixtures
 
 ```powershell
 uv run python scripts/release/contract_versions.py

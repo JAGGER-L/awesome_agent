@@ -251,6 +251,7 @@ def test_provider_credential_fixtures_freeze_source_omission_contract() -> None:
     configured = credential_cases["provider.credential.set.configured"]["result"][
         "value"
     ]
+    assert configured["provider"] == "tavily"
     assert configured["source"] == "awesome"
     for name in {
         "provider.credential.set.invalid",
@@ -423,6 +424,9 @@ def test_command_outcome_corpus_is_complete_and_strict() -> None:
         "thread_retry_operation_multiple_in_progress",
         "web_status_empty_diagnostic_code",
         "web_status_invalid_diagnostic_code",
+        "tools_duplicate_available_name",
+        "tools_duplicate_unavailable_name",
+        "tools_available_unavailable_overlap",
     }.issubset({case["name"] for case in invalid})
     for case in invalid:
         with pytest.raises(ValidationError):

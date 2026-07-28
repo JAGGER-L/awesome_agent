@@ -108,19 +108,22 @@ Application 再把这些选择与当前 credential 存在性及已选 Thread 组
 | DeepSeek | `DEEPSEEK_API_KEY` | `<AWESOME_HOME>/.env` 中的 `DEEPSEEK_API_KEY` |
 | Kimi | `MOONSHOT_API_KEY` | `<AWESOME_HOME>/.env` 中的 `MOONSHOT_API_KEY` |
 | Mem0 | `MEM0_API_KEY` | `<AWESOME_HOME>/.env` 中的 `MEM0_API_KEY` |
-| Tavily | `TAVILY_API_KEY` | 不支持；该选择必须是 `environment` |
+| Tavily | `TAVILY_API_KEY` | `<AWESOME_HOME>/.env` 中的 `TAVILY_API_KEY` |
 | Web proxy | `AWESOME_WEB_PROXY_URL` | `<AWESOME_HOME>/.env` 中的 `AWESOME_WEB_PROXY_URL` |
 
-DeepSeek、Kimi、Mem0 和 Web proxy 接受 `environment`、`awesome` 或省略/`null`。没有显式选择时，非空的进程环境值优先；只有环境值不存在时，才使用 Awesome 凭据文件。
+DeepSeek、Kimi、Mem0 和 Web proxy 接受 `environment`、`awesome` 或省略/`null`。Tavily
+接受 `environment` 或 `awesome`，省略时默认为 `environment`。对于没有显式选择的可空项，
+非空的进程环境值优先；只有环境值不存在时，才使用 Awesome 凭据文件。
 显式来源绝不会回退到另一个来源。例如，选择 `environment` 而变量缺失时，即使
 `<AWESOME_HOME>/.env` 中有 key，也会报告该 Provider 未配置。这让 provenance 可见，并
 防止 operator 在不知情的情况下使用陈旧的本地秘密。
 
 不要把 key 放入 YAML 或 Workspace 文件。`/auth` 以原子方式写入 Awesome 凭据文件，遮罩
 秘密输入，并且绝不会通过 `/config` 或 protocol 状态暴露其值。DeepSeek 和 Kimi key 在
-正常保存前会经过远程验证（如果只是不可达，则有明确的 save-unverified 路径）。Mem0 key
-只接受本地格式/存储验证，不经远程检查就会保存；只有启用或调用 cloud adapter 时才会出现
-拒绝。`/auth` 当前管理 DeepSeek、Kimi 和 Mem0，不编辑 Tavily 或 Web proxy 条目。所有权和备份指导见[文件与状态](files-and-state.zh-CN.md)。
+正常保存前会经过远程验证（如果只是不可达，则有明确的 save-unverified 路径）。Mem0 与
+Tavily key 只接受本地格式/存储验证，不经远程检查就会保存；只有后续 cloud 或 Web 操作真正
+连接服务时才会发现拒绝。`/auth` 管理 DeepSeek、Kimi、Mem0 和 Tavily，不编辑 Web proxy
+条目。所有权和备份指导见[文件与状态](files-and-state.zh-CN.md)。
 
 ### `budgets`
 
@@ -276,7 +279,7 @@ environment 解析实际 Turn。因此在这个 release 中，`AWESOME_THINKING`
 | `DEEPSEEK_API_KEY` | 所选来源为 `environment` 时使用的 DeepSeek 凭据。 |
 | `MOONSHOT_API_KEY` | 所选来源为 `environment` 时使用的 Kimi 凭据。 |
 | `MEM0_API_KEY` | 所选来源为 `environment` 时使用的 Mem0 凭据。 |
-| `TAVILY_API_KEY` | Tavily 凭据；其来源始终是 `environment`。 |
+| `TAVILY_API_KEY` | 所选来源为 `environment` 时使用的 Tavily 凭据。 |
 | `AWESOME_WEB_PROXY_URL` | `credentials.web_proxy` 解析为 `environment` 时使用的显式 Web proxy。 |
 
 `AWESOME_HOME` 接受平台路径，并展开 host runtime 支持的 home marker。空值等同于未设置。

@@ -17,7 +17,7 @@ export interface PickerSelection {
 
 export interface SecretPrompt {
   readonly kind?: "secret";
-  readonly provider: "deepseek" | "kimi" | "mem0";
+  readonly provider: "deepseek" | "kimi" | "mem0" | "tavily";
   readonly action: "add" | "replace";
   readonly label: string;
   readonly environment_variable: string;
@@ -34,7 +34,7 @@ export type PickerOwner =
   | {
       readonly kind: "credential_delete";
       readonly intent: CommandIntent;
-      readonly provider: "deepseek" | "kimi" | "mem0";
+      readonly provider: "deepseek" | "kimi" | "mem0" | "tavily";
     }
   | {
       readonly kind: "credential_unverified";

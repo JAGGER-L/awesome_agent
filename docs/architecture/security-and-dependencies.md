@@ -198,8 +198,9 @@ running. A deliberately daemonized POSIX process can leave the owned group.
 
 ## Web network boundary
 
-Web is user-enabled and defaults off. Only a valid `TAVILY_API_KEY` plus
-`web.enabled: true` publishes `web_search` and `web_fetch`; Workspace
+Web is user-enabled and defaults off. Only a resolved Tavily credential plus
+`web.enabled: true` publishes `web_search` and `web_fetch`; `/auth tavily`
+selects an Environment or Awesome-managed source, while Workspace
 configuration cannot turn it on or select credentials. The provider-neutral handlers use one reusable
 Tavily adapter and an explicit `httpx.AsyncClient` with `trust_env=False`,
 redirects disabled, a bounded response, and no opaque retry. Ambient proxy

@@ -40,5 +40,6 @@ def test_only_supported_awesome_secrets_are_writable() -> None:
         "DEEPSEEK_API_KEY",
         "MOONSHOT_API_KEY",
         "MEM0_API_KEY",
+        "TAVILY_API_KEY",
         "AWESOME_WEB_PROXY_URL",
     }
