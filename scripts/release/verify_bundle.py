@@ -32,6 +32,12 @@ from scripts.release.contracts import (
     validate_locked_requirements,
     validate_release_wheel,
 )
+from scripts.release.storage_contract import (
+    STORAGE_DIAGNOSTIC_MAX_CAUSES,
+    STORAGE_DIAGNOSTIC_MAX_CHARS,
+    STORAGE_DIAGNOSTIC_PREFIX,
+    STORAGE_DIAGNOSTIC_TOKENS,
+)
 
 
 class BundleVerificationError(RuntimeError):
@@ -158,7 +164,43 @@ def find_payload(archive: ZipFile, expected_version: str) -> str:
     return prefix
 
 
-def _run_core_check(command: list[str], cwd: Path, diagnostic: str) -> None:
+def _valid_storage_diagnostic_token(token: str) -> bool:
+    if token in STORAGE_DIAGNOSTIC_TOKENS:
+        return True
+    if not token.startswith("os_error_"):
+        return False
+    errno = token.removeprefix("os_error_")
+    return 1 <= len(errno) <= 5 and errno.isascii() and errno.isdigit()
+
+
+def _storage_contract_failure_detail(output: str) -> str | None:
+    end = len(output)
+    while end > 0 and output[end - 1] in "\r\n":
+        end -= 1
+    if end == 0:
+        return None
+    start = output.rfind("\n", 0, end) + 1
+    if end - start > STORAGE_DIAGNOSTIC_MAX_CHARS:
+        return None
+    line = output[start:end]
+    if not line.startswith(STORAGE_DIAGNOSTIC_PREFIX):
+        return None
+    payload = line.removeprefix(STORAGE_DIAGNOSTIC_PREFIX)
+    tokens = payload.split(">")
+    if not 1 <= len(tokens) <= STORAGE_DIAGNOSTIC_MAX_CAUSES:
+        return None
+    if not all(_valid_storage_diagnostic_token(token) for token in tokens):
+        return None
+    return line
+
+
+def _run_core_check(
+    command: list[str],
+    cwd: Path,
+    diagnostic: str,
+    *,
+    report_storage_diagnostic: bool = False,
+) -> None:
     try:
         result = subprocess.run(
             command,
@@ -170,6 +212,10 @@ def _run_core_check(command: list[str], cwd: Path, diagnostic: str) -> None:
     except OSError as error:
         raise BundleVerificationError(diagnostic) from error
     if result.returncode != 0:
+        if report_storage_diagnostic:
+            detail = _storage_contract_failure_detail(result.stderr)
+            if detail is not None:
+                raise BundleVerificationError(f"{diagnostic}: {detail}")
         raise BundleVerificationError(diagnostic)
 
 
@@ -526,6 +572,7 @@ assert any((scripts / name).is_file() for name in entrypoints)
         ],
         core,
         "installed Core storage contract failed",
+        report_storage_diagnostic=True,
     )
     scripts = _environment_scripts_directory(environment)
     entrypoint = scripts / (
