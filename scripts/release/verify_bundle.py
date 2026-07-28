@@ -460,6 +460,13 @@ def _verify_core_protocol_handshake(
 ) -> None:
     cwd.mkdir(parents=True, exist_ok=False)
     home.mkdir(parents=True, exist_ok=False)
+    try:
+        resolved_cwd = cwd.resolve(strict=True)
+        resolved_home = home.resolve(strict=True)
+    except OSError as error:
+        raise BundleVerificationError(
+            "installed Core protocol directories are unavailable"
+        ) from error
     excluded = {
         "DEEPSEEK_API_KEY",
         "MOONSHOT_API_KEY",
@@ -473,12 +480,12 @@ def _verify_core_protocol_handshake(
         for name, value in os.environ.items()
         if name not in excluded and not name.startswith("AWESOME_")
     }
-    environment["AWESOME_HOME"] = str(home)
+    environment["AWESOME_HOME"] = str(resolved_home)
     environment["PYTHONUTF8"] = "1"
     try:
         process = subprocess.Popen(
             list(command),
-            cwd=cwd,
+            cwd=resolved_cwd,
             env=environment,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

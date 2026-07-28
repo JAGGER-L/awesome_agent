@@ -1071,8 +1071,12 @@ def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
     tmp_path: Path,
 ) -> None:
     server = tmp_path / "fake_core.py"
-    home = tmp_path / "isolated-home"
-    workspace = tmp_path / "isolated-workspace"
+    lexical_anchor = tmp_path / "lexical-anchor"
+    lexical_anchor.mkdir()
+    home = lexical_anchor / ".." / "isolated-home"
+    workspace = lexical_anchor / ".." / "isolated-workspace"
+    resolved_home = tmp_path / "isolated-home"
+    resolved_workspace = tmp_path / "isolated-workspace"
     server.write_text(
         textwrap.dedent(
             """
@@ -1080,9 +1084,15 @@ def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
             import os
             import sys
 
-            expected_version, protocol_version, expected_home = sys.argv[1:]
+            (
+                expected_version,
+                protocol_version,
+                expected_home,
+                expected_workspace,
+            ) = sys.argv[1:]
             protocol_version = int(protocol_version)
             assert os.environ["AWESOME_HOME"] == expected_home
+            assert os.path.normcase(os.getcwd()) == os.path.normcase(expected_workspace)
             assert "DEEPSEEK_API_KEY" not in os.environ
             assert "MOONSHOT_API_KEY" not in os.environ
             assert "MEM0_API_KEY" not in os.environ
@@ -1133,7 +1143,14 @@ def test_installed_core_protocol_handshake_uses_declared_version_and_is_bounded(
     )
 
     release_verifier._verify_core_protocol_handshake(
-        [sys.executable, str(server), "1.3.0", "7", str(home)],
+        [
+            sys.executable,
+            str(server),
+            "1.3.0",
+            "7",
+            str(resolved_home),
+            str(resolved_workspace),
+        ],
         cwd=workspace,
         home=home,
         expected_version="1.3.0",
