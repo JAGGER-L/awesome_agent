@@ -136,7 +136,7 @@ def _posix_process_session(pid: int) -> int:
 def _read_process_stat(pid: int) -> _ProcessStat | None:
     try:
         raw = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return None
     fields = raw[raw.rfind(")") + 1 :].split()
     return _ProcessStat(
@@ -244,6 +244,9 @@ def test_read_process_stat_only_treats_a_missing_process_as_absent(
     def missing(*args: object, **kwargs: object) -> str:
         raise FileNotFoundError
 
+    def vanished(*args: object, **kwargs: object) -> str:
+        raise ProcessLookupError
+
     def denied(*args: object, **kwargs: object) -> str:
         raise PermissionError("stat denied")
 
@@ -251,6 +254,9 @@ def test_read_process_stat_only_treats_a_missing_process_as_absent(
         return "malformed"
 
     monkeypatch.setattr(Path, "read_text", missing)
+    assert _read_process_stat(42) is None
+
+    monkeypatch.setattr(Path, "read_text", vanished)
     assert _read_process_stat(42) is None
 
     monkeypatch.setattr(Path, "read_text", denied)
