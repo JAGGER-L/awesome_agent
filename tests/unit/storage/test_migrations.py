@@ -133,6 +133,29 @@ def test_production_registry_has_one_schema_seven_to_eight_step() -> None:
     assert APPLICATION_MIGRATIONS.path_from(6) is None
 
 
+def test_production_migration_returns_canonical_backup_for_lexical_alias(
+    tmp_path: Path,
+) -> None:
+    alias_anchor = tmp_path / "alias-anchor"
+    alias_anchor.mkdir()
+    path = alias_anchor / ".." / "state" / "application.db"
+    resolved_path = path.resolve()
+    expected_backup = resolved_path.with_name("application.db.pre-migration.bak")
+    _seed_production_schema_seven(path)
+
+    with sqlite3.connect(path) as connection:
+        backup = migrations_module.migrate_application_database(connection, path)
+
+    assert backup == expected_backup
+    assert path.with_name("application.db.pre-migration.bak").samefile(backup)
+    assert _schema(resolved_path) == 8
+    assert _schema(expected_backup) == 7
+    with sqlite3.connect(resolved_path) as connection:
+        assert connection.execute(
+            "SELECT thread_id, title, lineage_json FROM threads"
+        ).fetchone() == ("thread_existing", "Preserved", None)
+
+
 @pytest.mark.asyncio
 async def test_production_schema_seven_migrates_lineage_without_data_loss(
     tmp_path: Path,

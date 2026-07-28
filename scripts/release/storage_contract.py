@@ -370,9 +370,10 @@ def _verify_schema_7_to_8_migration(
 ) -> None:
     migrated = root / "schema-7-migration" / "application.db"
     _seed_schema_7(storage_module, migrated)
+    resolved_migrated = migrated.resolve()
     with closing(sqlite3.connect(migrated)) as connection:
         backup = migrations_module.migrate_application_database(connection, migrated)
-    expected_backup = migrated.with_name("application.db.pre-migration.bak")
+    expected_backup = resolved_migrated.with_name("application.db.pre-migration.bak")
     if backup != expected_backup or not expected_backup.is_file():
         raise StorageContractError("schema migration backup is invalid")
     with closing(sqlite3.connect(migrated)) as connection:

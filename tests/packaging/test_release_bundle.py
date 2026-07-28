@@ -8,6 +8,7 @@ import json
 import os
 import queue
 import shutil
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -15,6 +16,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import cast
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -1432,6 +1434,74 @@ def test_release_storage_contract_uses_schema_seven_migration_floor(
 
     shutil.rmtree(contract_root)
     assert not contract_root.exists()
+
+
+def test_release_storage_contract_accepts_resolved_contract_root(
+    tmp_path: Path,
+) -> None:
+    alias_anchor = tmp_path / "alias-anchor"
+    alias_anchor.mkdir()
+    contract_root = alias_anchor / ".." / "storage-contract"
+
+    verify_storage_contract(
+        application_storage,
+        application_migrations,
+        awesome_paths_module,
+        contract_root,
+        expected_schema_floor=7,
+        expected_schema_current=8,
+    )
+
+    assert contract_root != contract_root.resolve()
+    shutil.rmtree(contract_root)
+    assert not contract_root.exists()
+
+
+@pytest.mark.parametrize("failure", ["wrong-path", "missing-file"])
+def test_release_storage_contract_rejects_invalid_backup_identity(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    alias_anchor = tmp_path / "alias-anchor"
+    alias_anchor.mkdir()
+    contract_root = alias_anchor / ".." / "storage-contract"
+
+    def invalid_backup(
+        connection: sqlite3.Connection,
+        database_path: Path,
+        *,
+        registry: application_storage.ApplicationMigrationRegistry = (
+            application_storage.APPLICATION_MIGRATIONS
+        ),
+    ) -> Path:
+        backup = application_migrations.migrate_application_database(
+            connection,
+            database_path,
+            registry=registry,
+        )
+        assert backup is not None
+        if failure == "missing-file":
+            backup.unlink()
+            return backup
+        return database_path.with_name("application.db.pre-migration.bak")
+
+    migrations_module = cast(
+        ModuleType,
+        SimpleNamespace(migrate_application_database=invalid_backup),
+    )
+
+    with pytest.raises(
+        release_storage_contract.StorageContractError,
+        match="schema migration backup is invalid",
+    ):
+        verify_storage_contract(
+            application_storage,
+            migrations_module,
+            awesome_paths_module,
+            contract_root,
+            expected_schema_floor=7,
+            expected_schema_current=8,
+        )
 
 
 def test_release_storage_contract_rejects_manifest_schema_drift(
