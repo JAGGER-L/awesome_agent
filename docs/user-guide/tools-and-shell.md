@@ -23,8 +23,11 @@ model or direct request
 ```
 
 This shared path is why an extension cannot bypass approval simply by exposing
-a new name. `/tools` displays the effective registry, read-only status, and
-whether each tool currently requires approval.
+a new name. `/tools` shows each active tool's description, whether it is
+read-only or may have side effects, and whether it is available immediately or
+requires approval for the current Thread. Known tools that are not active are
+listed separately as unavailable, with a redacted reason and a suggested next
+step. Unavailable entries are informational and are not exposed to the model.
 
 ## Built-in Tool Families
 

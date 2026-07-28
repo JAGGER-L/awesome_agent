@@ -240,8 +240,8 @@
     {
       "english_source": "docs/user-guide/commands.md",
       "chinese_source": "docs/user-guide/commands.zh-CN.md",
-      "english_sha256": "99b47c9b3517c3bd3bac9d2c02b02382e3209d209a292086de414ea1b8f01b34",
-      "chinese_sha256": "84a89e58876bbdb2878df34f237434dff51b73bef9789ac5e4cc6c61b92ef38c"
+      "english_sha256": "f609c3d8a21418314ef4237c0bd87305642136839b2065a9611a755fca84aa07",
+      "chinese_sha256": "c134d5619e6ada71393a7aa24c1e8b589295705768d4c11a896c97c5b51e5fb5"
     },
     {
       "english_source": "docs/user-guide/configuration.md",
@@ -258,8 +258,8 @@
     {
       "english_source": "docs/user-guide/tools-and-shell.md",
       "chinese_source": "docs/user-guide/tools-and-shell.zh-CN.md",
-      "english_sha256": "1049990f1c3d9e3dac5324b90153875d74dba6430eac1f6fb823fe51e5cfe978",
-      "chinese_sha256": "cf083cc1b4d0f6ab3ce355c376d39e69857d82303ba8fb16bd65294d75cce5fb"
+      "english_sha256": "739cef76bd65767f361c58e9e404becd7d61a1c4f28f273602dad2f5477efb23",
+      "chinese_sha256": "023d275c38d0a10cd7288ecb05d8c6d44233877cd460021d7fea73e129698d18"
     },
     {
       "english_source": "docs/user-guide/troubleshooting.md",

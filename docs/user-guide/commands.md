@@ -97,7 +97,7 @@ than running without a limit.
 | `/usage` | Cumulative observed token, model, tool, retry, compression, and active-time usage. |
 | `/config` | Configuration-source and credential-presence diagnostics; never secret values. |
 | `/doctor` | Local state checks, Workspace-instruction diagnostics, and on-demand Provider validation. |
-| `/tools` | Effective built-in and extension tool catalog and approval state. |
+| `/tools` | Active built-in/extension tools with descriptions, side-effect and approval state, plus known unavailable tools with a reason and next step. |
 
 `/context` and `/usage` answer different questions. The former explains what
 was assembled for the model; the latter accounts for what the Thread has

@@ -77,7 +77,7 @@ substring match。它不是全文或相关性搜索，也绝不会跨越活动 W
 | `/usage` | 累计观测到的 Token、模型、工具、重试、压缩和活动时间用量。 |
 | `/config` | 配置来源和凭据存在性诊断；绝不显示 secret 值。 |
 | `/doctor` | 本地状态检查、Workspace 指令诊断和按需 Provider 验证。 |
-| `/tools` | 有效的内置/扩展工具 catalog 和审批状态。 |
+| `/tools` | 活动内置/扩展工具的描述、副作用和审批状态，以及已知不可用工具的原因和下一步建议。 |
 
 `/context` 和 `/usage` 回答不同的问题。前者解释为模型组装了什么；后者统计 Thread 消耗了什么。`/config` 有意不提供原始配置 dump。`/doctor` 可能发起 Provider 网络请求，并为失败检查呈现有界细节。
 

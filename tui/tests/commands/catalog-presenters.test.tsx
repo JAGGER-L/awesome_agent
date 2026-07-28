@@ -71,9 +71,64 @@ describe("catalog and configuration presenters", () => {
     expect(result).toMatchObject({
       kind: "panel",
       rows: [
-        { label: "read_file", value: "Enabled", status: "success" },
-        { label: "execute", value: "Approval required", status: "warning" },
+        {
+          label: "read_file",
+          value: "Available · Read-only — Read",
+          status: "success",
+        },
+        {
+          label: "execute",
+          value: "Approval required · May have side effects — Execute",
+          status: "warning",
+        },
       ],
+    });
+  });
+
+  it("presents unavailable metadata without depending on a Web tool name", () => {
+    const result = presentCommandPayload("tools", {
+      kind: "tools",
+      permission_mode: "request_approval",
+      tools: [],
+      unavailable_tools: [
+        {
+          name: "extension.lookup",
+          description: "Look up extension records",
+          read_only: false,
+          reason_code: "extension_offline",
+          reason: "The extension is offline.",
+          hint: "Reconnect the extension and try again.",
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      kind: "panel",
+      title: "/tools",
+      tone: "info",
+      rows: [
+        {
+          label: "extension.lookup",
+          value:
+            "Unavailable · May have side effects — Look up extension records · Reason: The extension is offline. · Hint: Reconnect the extension and try again.",
+          status: "warning",
+        },
+      ],
+    });
+  });
+
+  it("keeps the explicit empty state for a truly empty catalog", () => {
+    expect(
+      presentCommandPayload("tools", {
+        kind: "tools",
+        permission_mode: "request_approval",
+        tools: [],
+        unavailable_tools: [],
+      }),
+    ).toEqual({
+      kind: "empty",
+      title: "/tools",
+      message: "No tools available",
     });
   });
 
