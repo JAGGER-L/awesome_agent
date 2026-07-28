@@ -56,8 +56,8 @@
     "warning"
   ],
   "files": {
-    "command-results.invalid.json": "213255b3667f500b578e8ef126cae0b6842aca87e8d218016c76f2bde6b9cc09",
-    "command-results.valid.json": "f3997f6fcf8b329ee2ebe5c687443457e86fcda707fa44754b5bfecacf608dac",
+    "command-results.invalid.json": "b419839cdd3cb4f883b4c700e58334dcc612992ae05ba1804022e919666f0747",
+    "command-results.valid.json": "0721d535a950faec3a39354b15eb794d9f99aa68a6eefeef8180fbe204253b71",
     "commands.json": "99319cc39fcac8f30fbb7d9e34744293713c5d0a33687441b242ecf4788ce8e8",
     "events.invalid.json": "c9fbbc2be594f30d3a4a80ff077ef6a2e6efcf1aaa2250bc77a01530fad32eb3",
     "events.valid.json": "0bc03cb963e49fc0dd9670efd14daf2aef375b673b56b89926e66b7f22bba805",

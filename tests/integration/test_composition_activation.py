@@ -1612,6 +1612,7 @@ async def test_web_runtime_registers_both_tools_and_retires_managed_client(
     }
     assert set(web_tools) == {"web_fetch", "web_search"}
     assert all(not item.approval_required for item in web_tools.values())
+    assert tools.value.payload.unavailable_tools == ()
 
     status = await application.execute_command(
         CommandIntent(name=CommandName.WEB, arguments=("status",))
@@ -1636,6 +1637,22 @@ async def test_web_runtime_registers_both_tools_and_retires_managed_client(
     assert backend._runtime.tool_registry.resolve("web_fetch") is None
     assert backend._runtime.tool_registry.resolve("web_search") is None
     assert backend._permission_session.thread_granted_capabilities == frozenset()
+    unavailable = await application.execute_command(
+        CommandIntent(name=CommandName.TOOLS)
+    )
+    assert unavailable.ok is True
+    assert isinstance(unavailable.value, CommandResult)
+    assert isinstance(unavailable.value.payload, ToolCatalogCommandPayload)
+    unavailable_web = {
+        item.name: item for item in unavailable.value.payload.unavailable_tools
+    }
+    assert set(unavailable_web) == {"web_fetch", "web_search"}
+    assert {item.reason_code for item in unavailable_web.values()} == {
+        "web_disabled"
+    }
+    assert not {
+        item.name for item in unavailable.value.payload.tools
+    } & set(unavailable_web)
     for _ in range(20):
         if closed:
             break
@@ -1688,6 +1705,17 @@ async def test_managed_tavily_credential_rebuilds_the_web_runtime(
     assert original_runtime is not None
     assert original_runtime.web_available is False
     assert original_runtime.web_diagnostic_code == "web_credential_missing"
+    missing = await application.execute_command(CommandIntent(name=CommandName.TOOLS))
+    assert missing.ok is True
+    assert isinstance(missing.value, CommandResult)
+    assert isinstance(missing.value.payload, ToolCatalogCommandPayload)
+    assert {
+        item.name: item.reason_code
+        for item in missing.value.payload.unavailable_tools
+    } == {
+        "web_fetch": "web_credential_missing",
+        "web_search": "web_credential_missing",
+    }
 
     configured = await application.set_provider_credential(
         ProviderCredentialSetRequest(
@@ -1706,6 +1734,14 @@ async def test_managed_tavily_credential_rebuilds_the_web_runtime(
     assert backend._runtime.web_diagnostic_code is None
     assert backend._runtime.tool_registry.resolve("web_search") is not None
     assert backend._runtime.tool_registry.resolve("web_fetch") is not None
+    available = await application.execute_command(CommandIntent(name=CommandName.TOOLS))
+    assert available.ok is True
+    assert isinstance(available.value, CommandResult)
+    assert isinstance(available.value.payload, ToolCatalogCommandPayload)
+    assert available.value.payload.unavailable_tools == ()
+    assert {"web_fetch", "web_search"} <= {
+        item.name for item in available.value.payload.tools
+    }
     assert backend._runtime.sources.provider_credentials.tavily.selected_source is (
         CredentialSource.AWESOME
     )

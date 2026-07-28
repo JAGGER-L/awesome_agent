@@ -112,6 +112,7 @@ from awesome_agent.application.web_commands import (
     WebCommandService,
     WebConfigurationControl,
     WebRuntimeStatus,
+    unavailable_web_tool_items,
 )
 from awesome_agent.config import (
     ApplicationConfig,
@@ -2740,6 +2741,12 @@ class _LocalApplicationBackend:
                 registry=registry,
                 permission_session=self._permission_session,
                 current_thread_id=lambda: commands.current_thread_id,
+                unavailable_tools=unavailable_web_tool_items(
+                    web_diagnostic_code,
+                    credential_configured=(
+                        sources.secrets.tavily_api_key is not None
+                    ),
+                ),
                 status_reader=self._command_status_snapshot,
                 usage_reader=self._command_usage,
                 credential_statuses=lambda: (

@@ -273,6 +273,15 @@ exactly one branch: typed `result`, typed `interaction`, or stable command
 `error`. Exact grammar and foreground snapshot exceptions are in
 [Slash Commands](commands.md).
 
+The `tools` result keeps execution and discoverability separate. Its `tools`
+array is the exact executable Registry projection; every item contains `name`,
+`description`, `read_only`, and the current Thread-aware `approval_required`
+fact. Its disjoint `unavailable_tools` array describes known tools that are not
+registered, using `name`, `description`, `read_only`, a stable `reason_code`, a
+redacted `reason`, and a redacted `hint`. Names are unique within each array and
+cannot occur in both. Unavailable entries never enter the Agent or model tool
+catalog.
+
 Every Protocol v5 Thread projection has a required nullable `lineage` field.
 It is `null` for a root Thread, or a strict object with `kind` (`fork` or
 `retry`), `source_thread_id`, and `source_turn_id` for one immediate parent.

@@ -231,10 +231,32 @@ class ToolCommandItem(_CommandModel):
     approval_required: bool
 
 
+class UnavailableToolCommandItem(_CommandModel):
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(min_length=1, max_length=1_000)
+    read_only: bool
+    reason_code: str = Field(pattern=r"^[a-z][a-z0-9_]{0,127}$")
+    reason: str = Field(min_length=1, max_length=1_000)
+    hint: str = Field(min_length=1, max_length=1_000)
+
+
 class ToolCatalogCommandPayload(_CommandModel):
     kind: Literal["tools"] = "tools"
     permission_mode: PermissionMode
     tools: tuple[ToolCommandItem, ...]
+    unavailable_tools: tuple[UnavailableToolCommandItem, ...]
+
+    @model_validator(mode="after")
+    def validate_tool_names(self) -> Self:
+        available_names = [tool.name for tool in self.tools]
+        unavailable_names = [tool.name for tool in self.unavailable_tools]
+        if len(available_names) != len(set(available_names)):
+            raise ValueError("Available tool names must be unique.")
+        if len(unavailable_names) != len(set(unavailable_names)):
+            raise ValueError("Unavailable tool names must be unique.")
+        if set(available_names) & set(unavailable_names):
+            raise ValueError("Available and unavailable tool names must be disjoint.")
+        return self
 
 
 class SkillCommandItem(_CommandModel):

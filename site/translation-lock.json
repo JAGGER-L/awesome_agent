@@ -216,8 +216,8 @@
     {
       "english_source": "docs/reference/protocol.md",
       "chinese_source": "docs/reference/protocol.zh-CN.md",
-      "english_sha256": "c7f91a5069e32131fbb438bfced6127d52e916c5ea63a83b51ab686fba2c2e6f",
-      "chinese_sha256": "97940f7e90630c8f2a4f165c5cb58c4f4ec49d907e61075282d1c2644a02594b"
+      "english_sha256": "8927f375c6bc316427cd30ec1d8a8c5ca6356e64a656de90d4299f77e7fd56fb",
+      "chinese_sha256": "138b81618aa55b1a7e52f09da809f3193e60b9d7cb6b671fd11c41ba5a36e8cf"
     },
     {
       "english_source": "docs/roadmap.md",

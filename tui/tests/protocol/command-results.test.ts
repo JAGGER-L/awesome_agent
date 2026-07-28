@@ -29,6 +29,9 @@ describe("Protocol v5 command outcomes", () => {
         "thread_retry_unknown_field",
         "web_status_empty_diagnostic_code",
         "web_status_invalid_diagnostic_code",
+        "tools_duplicate_available_name",
+        "tools_duplicate_unavailable_name",
+        "tools_available_unavailable_overlap",
       ]),
     );
     expect(valid.cases.map(({ name }) => name)).toContain(

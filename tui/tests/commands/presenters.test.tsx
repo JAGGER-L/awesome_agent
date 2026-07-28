@@ -47,6 +47,7 @@ describe("command presenters", () => {
           approval_required: true,
         },
       ],
+      unavailable_tools: [],
     });
     const frame = render(
       <CommandResultView presentation={tools} width={100} />,

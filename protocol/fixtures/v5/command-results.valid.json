@@ -627,15 +627,27 @@
             },
             {
               "approval_required": true,
+              "description": "Run shell commands",
+              "name": "execute",
+              "read_only": false
+            }
+          ],
+          "unavailable_tools": [
+            {
               "description": "Fetch readable content from one public HTTPS URL",
+              "hint": "Run /web on to enable these tools.",
               "name": "web_fetch",
-              "read_only": true
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
             },
             {
-              "approval_required": true,
               "description": "Search the public web for current information",
+              "hint": "Run /web on to enable these tools.",
               "name": "web_search",
-              "read_only": true
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
             }
           ]
         }

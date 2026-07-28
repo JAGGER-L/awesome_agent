@@ -66,6 +66,7 @@ describe("catalog and configuration presenters", () => {
           approval_required: true,
         },
       ],
+      unavailable_tools: [],
     });
     expect(result).toMatchObject({
       kind: "panel",

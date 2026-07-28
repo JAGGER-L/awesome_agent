@@ -226,6 +226,13 @@ Params 是封闭的 `CommandIntent`：
 `interaction` 或稳定的 command `error`。精确语法和 foreground snapshot 例外见
 [Slash Commands](commands.zh-CN.md)。
 
+`tools` result 会分离执行与可发现性。它的 `tools` 数组是可执行 Registry 的精确投影；每一项
+包含 `name`、`description`、`read_only`，以及基于当前 Thread 的
+`approval_required` 事实。与之互斥的 `unavailable_tools` 数组描述尚未注册的已知工具，字段为
+`name`、`description`、`read_only`、稳定的 `reason_code`、脱敏的 `reason` 和脱敏的
+`hint`。每个数组内部的名称必须唯一，名称也不能同时出现在两个数组中。不可用项绝不会进入
+Agent 或模型工具 catalog。
+
 Protocol v5 的每个 Thread projection 都有必需且可空的 `lineage` 字段。根 Thread 的值为
 `null`；具有一个直接父级的 Thread 则使用严格 object，其中包含 `kind`（`fork` 或
 `retry`）、`source_thread_id` 与 `source_turn_id`。该字段只记录来源；client 不得据此

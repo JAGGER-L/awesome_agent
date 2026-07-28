@@ -15,6 +15,9 @@ from awesome_agent.application.command_results import (
     ThreadRetryCommandPayload,
     ThreadTransitionCommandPayload,
     ThreadTransitionSnapshot,
+    ToolCatalogCommandPayload,
+    ToolCommandItem,
+    UnavailableToolCommandItem,
     error,
     interaction,
     result,
@@ -125,6 +128,52 @@ def test_unknown_and_secret_fields_are_rejected() -> None:
                     "api_key": "must-not-cross-the-contract",
                 },
             }
+        )
+
+
+def test_tool_catalog_requires_unique_disjoint_names() -> None:
+    available = ToolCommandItem(
+        name="read_file",
+        description="Read file contents",
+        read_only=True,
+        approval_required=False,
+    )
+    unavailable = UnavailableToolCommandItem(
+        name="web_search",
+        description="Search the public web",
+        read_only=True,
+        reason_code="web_disabled",
+        reason="Web access is turned off.",
+        hint="Run /web on.",
+    )
+
+    ToolCatalogCommandPayload(
+        permission_mode=PermissionMode.REQUEST_APPROVAL,
+        tools=(available,),
+        unavailable_tools=(unavailable,),
+    )
+    with pytest.raises(ValidationError, match="Available tool names must be unique"):
+        ToolCatalogCommandPayload(
+            permission_mode=PermissionMode.REQUEST_APPROVAL,
+            tools=(available, available),
+            unavailable_tools=(unavailable,),
+        )
+    with pytest.raises(
+        ValidationError,
+        match="Unavailable tool names must be unique",
+    ):
+        ToolCatalogCommandPayload(
+            permission_mode=PermissionMode.REQUEST_APPROVAL,
+            tools=(available,),
+            unavailable_tools=(unavailable, unavailable),
+        )
+    with pytest.raises(ValidationError, match="must be disjoint"):
+        ToolCatalogCommandPayload(
+            permission_mode=PermissionMode.REQUEST_APPROVAL,
+            tools=(available,),
+            unavailable_tools=(
+                unavailable.model_copy(update={"name": available.name}),
+            ),
         )
 
 

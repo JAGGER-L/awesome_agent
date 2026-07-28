@@ -3421,6 +3421,138 @@
       }
     },
     {
+      "name": "tools_duplicate_available_name",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "tools",
+          "permission_mode": "accept_edits",
+          "tools": [
+            {
+              "approval_required": false,
+              "description": "Read file contents",
+              "name": "read_file",
+              "read_only": true
+            },
+            {
+              "approval_required": false,
+              "description": "Read file contents",
+              "name": "read_file",
+              "read_only": true
+            }
+          ],
+          "unavailable_tools": [
+            {
+              "description": "Fetch readable content from one public HTTPS URL",
+              "hint": "Run /web on to enable these tools.",
+              "name": "web_fetch",
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
+            },
+            {
+              "description": "Search the public web for current information",
+              "hint": "Run /web on to enable these tools.",
+              "name": "web_search",
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tools_duplicate_unavailable_name",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "tools",
+          "permission_mode": "accept_edits",
+          "tools": [
+            {
+              "approval_required": false,
+              "description": "Read file contents",
+              "name": "read_file",
+              "read_only": true
+            },
+            {
+              "approval_required": true,
+              "description": "Run shell commands",
+              "name": "execute",
+              "read_only": false
+            }
+          ],
+          "unavailable_tools": [
+            {
+              "description": "Fetch readable content from one public HTTPS URL",
+              "hint": "Run /web on to enable these tools.",
+              "name": "web_fetch",
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
+            },
+            {
+              "description": "Fetch readable content from one public HTTPS URL",
+              "hint": "Run /web on to enable these tools.",
+              "name": "web_fetch",
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "tools_available_unavailable_overlap",
+      "outcome": {
+        "kind": "result",
+        "payload": {
+          "kind": "tools",
+          "permission_mode": "accept_edits",
+          "tools": [
+            {
+              "approval_required": false,
+              "description": "Read file contents",
+              "name": "read_file",
+              "read_only": true
+            },
+            {
+              "approval_required": true,
+              "description": "Run shell commands",
+              "name": "execute",
+              "read_only": false
+            },
+            {
+              "approval_required": true,
+              "description": "Fetch readable content from one public HTTPS URL",
+              "name": "web_fetch",
+              "read_only": true
+            }
+          ],
+          "unavailable_tools": [
+            {
+              "description": "Fetch readable content from one public HTTPS URL",
+              "hint": "Run /web on to enable these tools.",
+              "name": "web_fetch",
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
+            },
+            {
+              "description": "Search the public web for current information",
+              "hint": "Run /web on to enable these tools.",
+              "name": "web_search",
+              "read_only": true,
+              "reason": "Web access is turned off.",
+              "reason_code": "web_disabled"
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "thread_export_changed_without_change_set",
       "outcome": {
         "kind": "result",

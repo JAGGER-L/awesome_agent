@@ -12,6 +12,7 @@ from awesome_agent.application.command_results import (
     StatusCommandPayload,
     ToolCatalogCommandPayload,
     ToolCommandItem,
+    UnavailableToolCommandItem,
     UsageCommandPayload,
     WorkspaceCommandPayload,
     error,
@@ -50,6 +51,7 @@ class DiagnosticCommandService:
         registry: ToolRegistry,
         permission_session: PermissionSession,
         current_thread_id: CurrentThreadIdReader,
+        unavailable_tools: tuple[UnavailableToolCommandItem, ...],
         status_reader: StatusReader,
         usage_reader: UsageReader,
         credential_statuses: Callable[[], ProviderCredentialStatuses],
@@ -63,6 +65,7 @@ class DiagnosticCommandService:
         self._registry = registry
         self._permission_session = permission_session
         self._current_thread_id = current_thread_id
+        self._unavailable_tools = unavailable_tools
         self._status_reader = status_reader
         self._usage_reader = usage_reader
         self._credential_statuses = credential_statuses
@@ -112,6 +115,7 @@ class DiagnosticCommandService:
                     )
                     for spec in self._registry.specifications()
                 ),
+                unavailable_tools=self._unavailable_tools,
             )
         )
 

@@ -41,6 +41,16 @@ class WebFetchArguments(ToolArguments):
         return WebFetchRequest(url=value).url
 
 
+WEB_FETCH_SPEC = ToolSpec(
+    name="web_fetch",
+    description="Fetch readable content from one public HTTPS URL",
+    input_schema=WebFetchArguments.model_json_schema(),
+    capability="network.read",
+    read_only=True,
+    display_metadata={"verb": "Fetch"},
+)
+
+
 def create_web_fetch_handler(
     provider: WebFetchProvider,
     *,
@@ -100,14 +110,7 @@ def create_web_fetch_registration(
 ) -> RegisteredTool:
     canonical_domains = _canonical_domains(blocked_domains)
     return RegisteredTool(
-        spec=ToolSpec(
-            name="web_fetch",
-            description="Fetch readable content from one public HTTPS URL",
-            input_schema=WebFetchArguments.model_json_schema(),
-            capability="network.read",
-            read_only=True,
-            display_metadata={"verb": "Fetch"},
-        ),
+        spec=WEB_FETCH_SPEC,
         input_model=WebFetchArguments,
         handler=create_web_fetch_handler(
             provider,
@@ -260,6 +263,7 @@ def _canonical_hostname(url: str) -> str:
 __all__ = [
     "MAX_WEB_FETCH_CONTENT_CHARS",
     "MAX_WEB_FETCH_OUTPUT_CHARS",
+    "WEB_FETCH_SPEC",
     "WEB_FETCH_TOOL_TIMEOUT_SECONDS",
     "WebFetchArguments",
     "create_web_fetch_handler",

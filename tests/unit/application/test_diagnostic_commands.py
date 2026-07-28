@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from awesome_agent.application.command_results import (
     DoctorCommandPayload,
     ToolCatalogCommandPayload,
+    UnavailableToolCommandItem,
 )
 from awesome_agent.application.commands import CommandIntent, CommandName
 from awesome_agent.application.diagnostic_commands import DiagnosticCommandService
@@ -55,6 +56,7 @@ async def test_doctor_reports_runtime_readiness_without_assuming_success(
         registry=ToolRegistry(),
         permission_session=PermissionSession(),
         current_thread_id=lambda: None,
+        unavailable_tools=(),
         status_reader=absent,
         usage_reader=absent,
         credential_statuses=missing_provider_credential_statuses,
@@ -101,11 +103,20 @@ async def test_tools_reports_the_active_thread_network_grant(tmp_path: Path) -> 
     )
     permissions = PermissionSession()
     selected = {"thread_id": "thread_current"}
+    unavailable = UnavailableToolCommandItem(
+        name="web_search",
+        description="Search the public web",
+        read_only=True,
+        reason_code="web_disabled",
+        reason="Web access is turned off.",
+        hint="Run /web on.",
+    )
     service = DiagnosticCommandService(
         workspace_path=tmp_path,
         registry=registry,
         permission_session=permissions,
         current_thread_id=lambda: selected["thread_id"],
+        unavailable_tools=(unavailable,),
         status_reader=absent,
         usage_reader=absent,
         credential_statuses=missing_provider_credential_statuses,
@@ -121,6 +132,7 @@ async def test_tools_reports_the_active_thread_network_grant(tmp_path: Path) -> 
         assert outcome.kind == "result"
         assert isinstance(outcome.payload, ToolCatalogCommandPayload)
         assert len(outcome.payload.tools) == 1
+        assert outcome.payload.unavailable_tools == (unavailable,)
         return outcome.payload.tools[0].approval_required
 
     assert await approval_required() is True

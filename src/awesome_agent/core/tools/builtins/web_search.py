@@ -43,6 +43,16 @@ class WebSearchArguments(ToolArguments):
         return WebSearchRequest(query=value).query
 
 
+WEB_SEARCH_SPEC = ToolSpec(
+    name="web_search",
+    description="Search the public web for current information",
+    input_schema=WebSearchArguments.model_json_schema(),
+    capability="network.read",
+    read_only=True,
+    display_metadata={"verb": "Search"},
+)
+
+
 def create_web_search_handler(
     provider: WebSearchProvider,
     *,
@@ -109,14 +119,7 @@ def create_web_search_registration(
     blocked_domains: tuple[str, ...] = (),
 ) -> RegisteredTool:
     return RegisteredTool(
-        spec=ToolSpec(
-            name="web_search",
-            description="Search the public web for current information",
-            input_schema=WebSearchArguments.model_json_schema(),
-            capability="network.read",
-            read_only=True,
-            display_metadata={"verb": "Search"},
-        ),
+        spec=WEB_SEARCH_SPEC,
         input_model=WebSearchArguments,
         handler=create_web_search_handler(
             provider,
@@ -211,6 +214,7 @@ def _render_response(
 
 __all__ = [
     "MAX_WEB_SEARCH_OUTPUT_CHARS",
+    "WEB_SEARCH_SPEC",
     "WebSearchArguments",
     "create_web_search_handler",
     "create_web_search_registration",
