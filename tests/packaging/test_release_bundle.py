@@ -670,12 +670,22 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
         product_version="1.0.0",
     )
     commands: list[list[str]] = []
+    storage_diagnostic_flags: list[bool] = []
     handshakes: list[tuple[list[str], Path, Path, str, int]] = []
     monkeypatch.setattr(release_verifier, "resolve_executable", lambda _: "uv")
+
+    def record_core_check(
+        command: list[str],
+        *_: object,
+        report_storage_diagnostic: bool = False,
+    ) -> None:
+        commands.append(command)
+        storage_diagnostic_flags.append(report_storage_diagnostic)
+
     monkeypatch.setattr(
         release_verifier,
         "_run_core_check",
-        lambda command, *_, **__: commands.append(command),
+        record_core_check,
     )
     monkeypatch.setattr(
         release_verifier,
@@ -722,6 +732,7 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
         str(core / ".verification-environment"),
         str(core / ".storage-contract"),
     ]
+    assert storage_diagnostic_flags == [False, False, False, False, False, True]
     assert len(handshakes) == 1
     expected_scripts = release_verifier._environment_scripts_directory(
         core / ".verification-environment"
@@ -738,18 +749,21 @@ def test_core_install_verification_uses_hashes_isolation_and_dependency_check(
     )
 
 
-def test_core_check_reports_only_one_bounded_opted_in_failure_line(
+def test_core_check_reports_only_the_strict_storage_diagnostic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    detail = "StorageContractError: " + "x" * 1_024
+    detail = (
+        f"{release_storage_contract.STORAGE_DIAGNOSTIC_PREFIX}"
+        "migration_backup_error>os_error_22"
+    )
     monkeypatch.setattr(
         subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=1,
             stdout="untrusted stdout detail\n",
-            stderr=f"first traceback line\n{detail}\n",
+            stderr=f"private traceback detail\n{detail}\n",
         ),
     )
 
@@ -758,18 +772,59 @@ def test_core_check_reports_only_one_bounded_opted_in_failure_line(
             ["python", "storage_contract.py"],
             tmp_path,
             "installed Core storage contract failed",
-            report_failure_detail=True,
+            report_storage_diagnostic=True,
         )
 
-    message = str(raised.value)
-    assert message.startswith(
-        "installed Core storage contract failed: StorageContractError: "
+    assert str(raised.value) == (f"installed Core storage contract failed: {detail}")
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "",
+        "DEEPSEEK_API_KEY=private\n",
+        "AWESOME_STORAGE_CONTRACT_DIAGNOSTIC_V1:unexpected_error>private\n",
+        "AWESOME_STORAGE_CONTRACT_DIAGNOSTIC_V1:os_error_123456\n",
+        "AWESOME_STORAGE_CONTRACT_DIAGNOSTIC_V1:unexpected_error\x1b\n",
+        (
+            "AWESOME_STORAGE_CONTRACT_DIAGNOSTIC_V1:unexpected_error\n"
+            "private final line\n"
+        ),
+    ],
+    ids=(
+        "empty",
+        "secret-like",
+        "unknown-token",
+        "oversized-errno",
+        "control-character",
+        "non-protocol-final-line",
+    ),
+)
+def test_core_check_rejects_untrusted_storage_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: str,
+) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr=stderr,
+        ),
     )
-    assert "first traceback line" not in message
-    assert "untrusted stdout detail" not in message
-    assert message.endswith("...")
-    reported_detail = message.removeprefix("installed Core storage contract failed: ")
-    assert len(reported_detail) == (release_verifier._MAX_CORE_FAILURE_DETAIL_CHARS + 3)
+
+    with pytest.raises(
+        BundleVerificationError,
+        match=r"^installed Core storage contract failed$",
+    ):
+        release_verifier._run_core_check(
+            ["python", "storage_contract.py"],
+            tmp_path,
+            "installed Core storage contract failed",
+            report_storage_diagnostic=True,
+        )
 
 
 def test_core_check_keeps_failure_output_private_by_default(
@@ -798,27 +853,44 @@ def test_core_check_keeps_failure_output_private_by_default(
 
 
 def test_storage_contract_error_chain_reports_only_controlled_details() -> None:
-    try:
-        raise OSError(22, "private path C:/secret")
-    except OSError as cause:
-        try:
-            raise RuntimeError("private wrapper detail") from cause
-        except RuntimeError as error:
-            summary = release_storage_contract._safe_error_chain(error)
+    cause = OSError(22, "private path C:/secret")
+    error = application_migrations.ApplicationMigrationBackupError(
+        "private wrapper detail"
+    )
+    error.__cause__ = cause
+    summary = release_storage_contract._safe_error_chain(error)
 
-    assert summary == "RuntimeError <- OSError(errno=22)"
+    assert summary == "migration_backup_error>os_error_22"
     assert "private" not in summary
     assert "secret" not in summary
 
 
-def test_storage_contract_error_chain_keeps_fixed_contract_message() -> None:
+def test_storage_contract_error_chain_uses_allowlisted_contract_code() -> None:
     error = release_storage_contract.StorageContractError(
-        "fresh database schema is invalid\nsecond line"
+        "fresh database schema is invalid"
     )
 
     assert release_storage_contract._safe_error_chain(error) == (
-        "StorageContractError: fresh database schema is invalid?second line"
+        "contract_fresh_database_schema_is_invalid"
     )
+
+
+def test_storage_contract_error_chain_rejects_unknown_contract_message() -> None:
+    error = release_storage_contract.StorageContractError(
+        "private secret-shaped contract message"
+    )
+
+    assert release_storage_contract._safe_error_chain(error) == "contract_error"
+
+
+def test_parent_accepts_every_allowlisted_contract_diagnostic() -> None:
+    for message in release_storage_contract._CONTRACT_ERROR_MESSAGES:
+        token = release_storage_contract._contract_error_token(message)
+        detail = f"{release_storage_contract.STORAGE_DIAGNOSTIC_PREFIX}{token}"
+
+        assert release_verifier._storage_contract_failure_detail(f"{detail}\n") == (
+            detail
+        )
 
 
 def test_storage_contract_cli_reports_safe_cause_chain(
@@ -833,7 +905,7 @@ def test_storage_contract_cli_reports_safe_cause_chain(
         except OSError as cause:
             raise RuntimeError("private wrapper detail") from cause
 
-    monkeypatch.setattr(release_storage_contract, "verify_storage_contract", fail)
+    monkeypatch.setattr(release_storage_contract, "_run_contract", fail)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -849,7 +921,8 @@ def test_storage_contract_cli_reports_safe_cause_chain(
 
     assert release_storage_contract.main() == 1
     assert capsys.readouterr().err == (
-        "storage contract failed: RuntimeError <- OSError(errno=22)\n"
+        f"{release_storage_contract.STORAGE_DIAGNOSTIC_PREFIX}"
+        "unexpected_error>os_error_22\n"
     )
 
 

@@ -36,33 +36,137 @@ _MAX_INVENTORY_ENTRIES = 4_096
 _MAX_INVENTORY_FILE_BYTES = 16 * 1024 * 1024
 _MAX_INVENTORY_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_ERROR_CAUSES = 8
+STORAGE_DIAGNOSTIC_PREFIX = "AWESOME_STORAGE_CONTRACT_DIAGNOSTIC_V1:"
+STORAGE_DIAGNOSTIC_MAX_CAUSES = _MAX_ERROR_CAUSES + 1
+_KNOWN_ERROR_TOKENS = {
+    "ApplicationMigrationBackupError": "migration_backup_error",
+    "ApplicationMigrationBoundaryError": "migration_boundary_error",
+    "ApplicationMigrationError": "migration_error",
+    "ApplicationMigrationOutcomeUnknown": "migration_outcome_unknown",
+    "ApplicationMigrationStepError": "migration_step_error",
+    "ApplicationMigrationUnavailable": "migration_unavailable",
+    "ApplicationSchemaMismatch": "schema_mismatch",
+    "ApplicationStateUnavailable": "state_unavailable",
+    "ApplicationStateUnknown": "state_unknown",
+    "StateLeaseUnavailable": "state_lease_unavailable",
+    "StateResetError": "state_reset_error",
+}
+_CONTRACT_ERROR_MESSAGES = frozenset(
+    {
+        "current schema migration path is invalid",
+        "failed schema migration did not roll back",
+        "failed schema migration retained its DDL",
+        "failed schema migration was not rejected",
+        "fresh database indexes are incomplete",
+        "fresh database integrity check failed",
+        "fresh database schema is invalid",
+        "fresh database tables are incomplete",
+        "incompatible schema classification is invalid",
+        "incompatible schema diagnostic is invalid",
+        "incompatible schema was not rejected",
+        "incompatible state was mutated",
+        "installed wheel module escaped the clean environment",
+        "installed wheel module origin is unavailable",
+        "installed wheel product version is invalid",
+        "migration floor path is invalid",
+        "pre-floor schema unexpectedly has a migration path",
+        "reset did not create the current schema",
+        "reset mutated preserved user data",
+        "reset retained discarded state",
+        "schema migration backup identity is invalid",
+        "schema migration backup is invalid",
+        "schema migration backup was mutated",
+        "schema migration did not preserve Thread data",
+        "schema migration did not publish schema 8",
+        "schema migration lineage default is invalid",
+        "state inventory changed while opening",
+        "state inventory changed while reading",
+        "state inventory file is too large",
+        "state inventory file is unreadable",
+        "state inventory has too many entries",
+        "state inventory is too large",
+        "state inventory is unreadable",
+        "state inventory link is unreadable",
+        "unknown schema classification is invalid",
+        "unknown schema was not rejected",
+        "unknown state was mutated",
+        "wheel migration floor is invalid",
+        "wheel migration probe is unavailable",
+        "wheel migration registry contains a branch",
+        "wheel migration registry identity is invalid",
+        "wheel migration registry is not one linear chain",
+        "wheel schema probe is unavailable",
+        "wheel schema version is invalid",
+    }
+    | {
+        f"fresh {table} schema is incomplete"
+        for table in (
+            "change_sets",
+            "mcp_enablements",
+            "pending_mutations",
+            "thread_entries",
+            "thread_summaries",
+            "threads",
+            "tool_activities",
+            "trusted_workspaces",
+            "turns",
+        )
+    }
+)
+
+
+def _contract_error_token(message: str) -> str:
+    if message not in _CONTRACT_ERROR_MESSAGES:
+        return "contract_error"
+    words = message.casefold().replace("-", " ").split()
+    return f"contract_{'_'.join(words)}"
+
+
+STORAGE_DIAGNOSTIC_TOKENS = frozenset(
+    {
+        "contract_error",
+        "cycle",
+        "sqlite_error",
+        "truncated",
+        "unexpected_error",
+        *_KNOWN_ERROR_TOKENS.values(),
+        *(_contract_error_token(message) for message in _CONTRACT_ERROR_MESSAGES),
+    }
+)
 
 
 def _safe_error_chain(error: Exception) -> str:
-    summaries: list[str] = []
+    tokens: list[str] = []
     seen: set[int] = set()
     current: BaseException | None = error
-    while current is not None and len(summaries) < _MAX_ERROR_CAUSES:
+    while current is not None and len(tokens) < _MAX_ERROR_CAUSES:
         identity = id(current)
         if identity in seen:
-            summaries.append("cycle")
+            tokens.append("cycle")
             break
         seen.add(identity)
-        name = type(current).__name__
         if isinstance(current, StorageContractError):
-            message = "".join(
-                character if character.isprintable() else "?"
-                for character in str(current)
-            )
-            summaries.append(f"{name}: {message}")
+            tokens.append(_contract_error_token(str(current)))
+        elif isinstance(current, sqlite3.Error):
+            tokens.append("sqlite_error")
         elif isinstance(current, OSError):
-            summaries.append(f"{name}(errno={current.errno})")
+            errno = current.errno
+            tokens.append(
+                f"os_error_{errno}"
+                if isinstance(errno, int) and 0 <= errno <= 99_999
+                else "unexpected_error"
+            )
         else:
-            summaries.append(name)
-        current = current.__cause__ or current.__context__
-    if current is not None and len(summaries) >= _MAX_ERROR_CAUSES:
-        summaries.append("truncated")
-    return " <- ".join(summaries)
+            tokens.append(
+                _KNOWN_ERROR_TOKENS.get(type(current).__name__, "unexpected_error")
+            )
+        next_error = current.__cause__
+        if next_error is None and not current.__suppress_context__:
+            next_error = current.__context__
+        current = next_error
+    if current is not None and len(tokens) >= _MAX_ERROR_CAUSES:
+        tokens.append("truncated")
+    return ">".join(tokens)
 
 
 def _verify_schema_8(connection: sqlite3.Connection) -> None:
@@ -628,15 +732,7 @@ def _require_installed_module(module: ModuleType, environment: Path) -> None:
         ) from error
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("expected_version")
-    parser.add_argument("expected_schema_floor", type=int)
-    parser.add_argument("expected_schema_current", type=int)
-    parser.add_argument("environment", type=Path)
-    parser.add_argument("contract_root", type=Path)
-    arguments = parser.parse_args()
-
+def _run_contract(arguments: argparse.Namespace) -> None:
     import awesome_agent.paths as paths_module
     import awesome_agent.storage as storage_module
     import awesome_agent.storage.migrations as migrations_module
@@ -648,17 +744,32 @@ def main() -> int:
     version = cast(_VersionModule, version_module).PRODUCT_VERSION
     if version != arguments.expected_version:
         raise StorageContractError("installed wheel product version is invalid")
+    verify_storage_contract(
+        storage_module,
+        migrations_module,
+        paths_module,
+        arguments.contract_root,
+        expected_schema_floor=arguments.expected_schema_floor,
+        expected_schema_current=arguments.expected_schema_current,
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("expected_version")
+    parser.add_argument("expected_schema_floor", type=int)
+    parser.add_argument("expected_schema_current", type=int)
+    parser.add_argument("environment", type=Path)
+    parser.add_argument("contract_root", type=Path)
+    arguments = parser.parse_args()
+
     try:
-        verify_storage_contract(
-            storage_module,
-            migrations_module,
-            paths_module,
-            arguments.contract_root,
-            expected_schema_floor=arguments.expected_schema_floor,
-            expected_schema_current=arguments.expected_schema_current,
-        )
+        _run_contract(arguments)
     except Exception as error:
-        print(f"storage contract failed: {_safe_error_chain(error)}", file=sys.stderr)
+        print(
+            f"{STORAGE_DIAGNOSTIC_PREFIX}{_safe_error_chain(error)}",
+            file=sys.stderr,
+        )
         return 1
     return 0
 
