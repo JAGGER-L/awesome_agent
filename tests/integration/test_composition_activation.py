@@ -1647,12 +1647,10 @@ async def test_web_runtime_registers_both_tools_and_retires_managed_client(
         item.name: item for item in unavailable.value.payload.unavailable_tools
     }
     assert set(unavailable_web) == {"web_fetch", "web_search"}
-    assert {item.reason_code for item in unavailable_web.values()} == {
-        "web_disabled"
-    }
-    assert not {
-        item.name for item in unavailable.value.payload.tools
-    } & set(unavailable_web)
+    assert {item.reason_code for item in unavailable_web.values()} == {"web_disabled"}
+    assert not {item.name for item in unavailable.value.payload.tools} & set(
+        unavailable_web
+    )
     for _ in range(20):
         if closed:
             break
@@ -1710,8 +1708,7 @@ async def test_managed_tavily_credential_rebuilds_the_web_runtime(
     assert isinstance(missing.value, CommandResult)
     assert isinstance(missing.value.payload, ToolCatalogCommandPayload)
     assert {
-        item.name: item.reason_code
-        for item in missing.value.payload.unavailable_tools
+        item.name: item.reason_code for item in missing.value.payload.unavailable_tools
     } == {
         "web_fetch": "web_credential_missing",
         "web_search": "web_credential_missing",

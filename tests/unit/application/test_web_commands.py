@@ -175,9 +175,7 @@ def test_unavailable_web_tools_never_echo_an_unknown_diagnostic() -> None:
         "web_disabled",
         credential_configured=False,
     )
-    assert {tool.hint for tool in disabled} == {
-        "Run /auth tavily, then run /web on."
-    }
+    assert {tool.hint for tool in disabled} == {"Run /auth tavily, then run /web on."}
 
 
 @pytest.mark.asyncio

@@ -2743,9 +2743,7 @@ class _LocalApplicationBackend:
                 current_thread_id=lambda: commands.current_thread_id,
                 unavailable_tools=unavailable_web_tool_items(
                     web_diagnostic_code,
-                    credential_configured=(
-                        sources.secrets.tavily_api_key is not None
-                    ),
+                    credential_configured=(sources.secrets.tavily_api_key is not None),
                 ),
                 status_reader=self._command_status_snapshot,
                 usage_reader=self._command_usage,

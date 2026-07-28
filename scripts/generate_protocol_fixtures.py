@@ -1402,9 +1402,7 @@ def _invalid_command_results() -> dict[str, object]:
     )
     tools_payload = cast(dict[str, Any], tools_outcome["payload"])
     available_tools = cast(list[dict[str, Any]], tools_payload["tools"])
-    unavailable_tools = cast(
-        list[dict[str, Any]], tools_payload["unavailable_tools"]
-    )
+    unavailable_tools = cast(list[dict[str, Any]], tools_payload["unavailable_tools"])
     web_status = {
         "kind": "web_status",
         "enabled": False,
