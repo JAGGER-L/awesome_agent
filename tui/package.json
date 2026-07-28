@@ -28,7 +28,7 @@
   "dependencies": {
     "clipboardy": "^5.3.1",
     "ink": "^7.1.0",
-    "marked": "18.0.6",
+    "marked": "18.0.7",
     "react": "^19.2.7",
     "zod": "^4.4.3"
   },
