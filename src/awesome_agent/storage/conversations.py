@@ -1124,8 +1124,12 @@ class SQLiteTurnRepository(_SQLiteRepository):
         with self._connection(connection) as active:
             rows = active.execute(
                 """
-                SELECT * FROM turns
-                WHERE thread_id = ? ORDER BY created_at, turn_id
+                SELECT turns.* FROM turns
+                JOIN thread_entries AS user_entries
+                  ON user_entries.thread_id = turns.thread_id
+                 AND user_entries.entry_id = turns.user_entry_id
+                WHERE turns.thread_id = ?
+                ORDER BY user_entries.sequence, turns.turn_id
                 """,
                 (thread_id,),
             ).fetchall()
@@ -1144,11 +1148,14 @@ class SQLiteTurnRepository(_SQLiteRepository):
         with self._connection(connection) as active:
             rows = active.execute(
                 f"""
-                SELECT * FROM turns
-                WHERE thread_id = ?
-                  AND (user_entry_id IN ({placeholders})
-                       OR assistant_entry_id IN ({placeholders}))
-                ORDER BY created_at, turn_id
+                SELECT turns.* FROM turns
+                JOIN thread_entries AS user_entries
+                  ON user_entries.thread_id = turns.thread_id
+                 AND user_entries.entry_id = turns.user_entry_id
+                WHERE turns.thread_id = ?
+                  AND (turns.user_entry_id IN ({placeholders})
+                       OR turns.assistant_entry_id IN ({placeholders}))
+                ORDER BY user_entries.sequence, turns.turn_id
                 """,
                 (thread_id, *entry_ids, *entry_ids),
             ).fetchall()
